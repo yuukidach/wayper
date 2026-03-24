@@ -5,7 +5,7 @@
     Wayland-first wallpaper manager with <a href="https://wallhaven.cc">Wallhaven</a> integration and AI-native control.
   </p>
   <p align="center">
-    <a href="#install">Install</a> · <a href="#usage">Usage</a> · <a href="#mcp">MCP</a> · <a href="#config">Config</a>
+    <a href="#install">Install</a> · <a href="#usage">Usage</a> · <a href="#mcp">MCP</a> · <a href="#config">Config</a> · <a href="README.zh-CN.md">中文</a>
   </p>
 </p>
 
