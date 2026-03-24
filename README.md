@@ -1,15 +1,23 @@
-# wayper
+<p align="center">
+  <h1 align="center">wayper</h1>
+  <p align="center">
+    Wayland-first wallpaper manager with <a href="https://wallhaven.cc">Wallhaven</a> integration and AI-native control.
+  </p>
+  <p align="center">
+    <a href="#install">Install</a> · <a href="#usage">Usage</a> · <a href="#mcp">MCP</a> · <a href="#config">Config</a>
+  </p>
+</p>
 
-Wayland-first wallpaper manager with [Wallhaven](https://wallhaven.cc) integration and AI-native control.
+---
 
-## Features
+## Why wayper?
 
-- **Multi-monitor orientation matching** — portrait and landscape wallpapers go to the right screen
-- **Smart pool management** — auto-downloads, validates, resizes, and rotates wallpapers
-- **SFW/NSFW modes** — toggle on the fly, persistent across sessions
-- **Favorites & blacklist** — like/dislike with undo support
-- **JSON output** — `--json` flag on every command
-- **MCP server** — AI assistants can control your wallpapers natively
+- **Auto orientation matching** — portrait monitors get portrait wallpapers, landscape gets landscape. No manual sorting.
+- **Pool management** — downloads, validates (catches corrupt images), resizes to your exact resolution, and rotates automatically.
+- **SFW/NSFW toggle** — one key to switch. Persistent across sessions.
+- **Favorites & blacklist** — like/dislike with undo. Favorites stay in rotation.
+- **AI-native** — built-in MCP server lets AI assistants (Claude Code, etc.) control your wallpapers directly. Ask your AI to "delete this broken wallpaper" or "favorite this one" — it just works.
+- **JSON output** — `--json` flag on every command for scripting and automation.
 
 ## Install
 
@@ -17,14 +25,6 @@ Wayland-first wallpaper manager with [Wallhaven](https://wallhaven.cc) integrati
 git clone https://github.com/yuukidach/wayper.git
 cd wayper
 uv venv && uv pip install -e .
-```
-
-## Setup
-
-```bash
-mkdir -p ~/.config/wayper
-cp example-config.toml ~/.config/wayper/config.toml
-# Edit config with your API key, monitors, proxy, etc.
 ```
 
 ## Usage
@@ -41,9 +41,25 @@ wayper status               # show current state
 wayper --json status        # machine-readable output
 ```
 
+### Hyprland keybindings example
+
+```ini
+bind = $mod, F9,       exec, wayper dislike
+bind = $mod SHIFT, F9, exec, wayper undislike
+bind = $mod, F10,      exec, wayper fav
+bind = $mod SHIFT, F10,exec, wayper unfav
+bind = $mod CTRL, F10, exec, wayper fav --open
+bind = $mod, F11,      exec, wayper next
+bind = $mod, F12,      exec, wayper mode
+
+exec-once = swww-daemon & sleep 5 && wayper daemon
+```
+
 ## MCP
 
-wayper ships an MCP server for AI assistants (Claude Code, etc.):
+wayper ships an [MCP](https://modelcontextprotocol.io/) server so AI assistants can control your wallpapers natively.
+
+Add to your Claude Code config (`~/.claude/.mcp.json`):
 
 ```json
 {
@@ -55,15 +71,24 @@ wayper ships an MCP server for AI assistants (Claude Code, etc.):
 }
 ```
 
-Tools: `status`, `next_wallpaper`, `fav`, `unfav`, `dislike`, `undislike`, `set_mode`, `delete_wallpaper`
+Available tools: `status` · `next_wallpaper` · `fav` · `unfav` · `dislike` · `undislike` · `set_mode` · `delete_wallpaper`
+
+## Config
+
+```bash
+mkdir -p ~/.config/wayper
+cp example-config.toml ~/.config/wayper/config.toml
+```
+
+See [`example-config.toml`](example-config.toml) for all options — monitors, API key, proxy, intervals, quota, transitions, etc.
 
 ## Requirements
 
 - Python 3.12+
-- [swww](https://github.com/LGFae/swww) (Wayland wallpaper daemon)
-- Hyprland (for focused monitor detection)
-- Wallhaven API key ([get one here](https://wallhaven.cc/settings/account))
+- [swww](https://github.com/LGFae/swww) — Wayland wallpaper daemon
+- [Hyprland](https://hyprland.org/) — for focused monitor detection
+- [Wallhaven API key](https://wallhaven.cc/settings/account)
 
 ## License
 
-MIT
+[MIT](LICENSE)
