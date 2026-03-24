@@ -30,15 +30,15 @@ cp example-config.toml ~/.config/wayper/config.toml
 ## Usage
 
 ```
-wayper daemon              # start background rotation + downloads
-wayper next                # change wallpaper on focused monitor
-wayper fav [--open]        # favorite current wallpaper
-wayper unfav               # remove from favorites
-wayper dislike             # blacklist + switch
+wayper daemon               # start background rotation + downloads
+wayper next                 # change wallpaper on focused monitor
+wayper fav [--open]         # favorite current wallpaper
+wayper unfav                # remove from favorites
+wayper dislike              # blacklist + switch
 wayper undislike            # undo last dislike
-wayper mode [sfw|nsfw]     # toggle or set mode
-wayper status              # show current state
-wayper --json status       # machine-readable output
+wayper mode [sfw|nsfw]      # toggle or set mode
+wayper status               # show current state
+wayper --json status        # machine-readable output
 ```
 
 ## MCP
