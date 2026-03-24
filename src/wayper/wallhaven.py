@@ -1,0 +1,104 @@
+"""Wallhaven API client."""
+
+from __future__ import annotations
+
+import random
+from pathlib import Path
+
+import httpx
+
+from .config import WayperConfig
+from .image import resize_crop, validate_image
+from .pool import is_blacklisted, list_images, favorites_dir, pool_dir
+
+SEARCH_URL = "https://wallhaven.cc/api/v1/search"
+
+
+class WallhavenClient:
+    def __init__(self, config: WayperConfig):
+        self.config = config
+        self.client = httpx.AsyncClient(
+            proxy=config.proxy,
+            timeout=httpx.Timeout(connect=10, read=30),
+        )
+
+    async def close(self) -> None:
+        await self.client.aclose()
+
+    async def search(self, orientation: str, purity: str) -> list[str]:
+        """Return list of image URLs from wallhaven search."""
+        page = random.randint(1, self.config.wallhaven.max_page)
+        purity_code = "100" if purity == "sfw" else "001"
+        params = {
+            "categories": self.config.wallhaven.categories,
+            "purity": purity_code,
+            "topRange": self.config.wallhaven.top_range,
+            "sorting": self.config.wallhaven.sorting,
+            "order": "desc",
+            "ai_art_filter": self.config.wallhaven.ai_art_filter,
+            "ratios": orientation,
+            "page": page,
+            "apikey": self.config.api_key,
+        }
+        try:
+            resp = await self.client.get(SEARCH_URL, params=params)
+            resp.raise_for_status()
+            return [item["path"] for item in resp.json().get("data", [])]
+        except Exception:
+            return []
+
+    async def download_image(self, url: str, dest: Path) -> bool:
+        """Download a single image. Returns True on success."""
+        tmp = dest.with_name(f".dl_{dest.name}")
+        try:
+            async with self.client.stream("GET", url) as resp:
+                resp.raise_for_status()
+                with open(tmp, "wb") as f:
+                    async for chunk in resp.aiter_bytes(8192):
+                        f.write(chunk)
+            # Validate
+            if not validate_image(tmp):
+                tmp.unlink(missing_ok=True)
+                return False
+            tmp.rename(dest)
+            return True
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            return False
+
+    async def download_for(self, orientation: str, mode: str) -> None:
+        """Download a batch of wallpapers for given orientation and mode."""
+        config = self.config
+        target_dir = pool_dir(config, mode, orientation)
+        fav_dir = favorites_dir(config, mode, orientation)
+
+        urls = await self.search(orientation, mode)
+        if not urls:
+            return
+
+        # Find monitor config for resize dimensions
+        mon = None
+        for m in config.monitors:
+            if m.orientation == orientation:
+                mon = m
+                break
+
+        sample = random.sample(urls, min(config.wallhaven.batch_size, len(urls)))
+        for url in sample:
+            filename = url.rsplit("/", 1)[-1]
+            dest = target_dir / filename
+
+            if dest.exists():
+                continue
+            if (fav_dir / filename).exists():
+                continue
+            if is_blacklisted(config, filename):
+                continue
+
+            if not await self.download_image(url, dest):
+                continue
+
+            # Resize to monitor resolution
+            if mon:
+                if not resize_crop(dest, mon.width, mon.height):
+                    dest.unlink(missing_ok=True)
