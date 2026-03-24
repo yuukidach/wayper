@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import fcntl
 import os
 import signal
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .backend import find_monitor, get_focused_monitor, query_current, set_wallpaper
+from .backend import FileLock, get_context, get_focused_monitor, set_wallpaper
 from .config import TransitionConfig, load_config
 from .notify import notify
 from .pool import (
@@ -24,33 +23,9 @@ from .state import pop_undo, push_undo, read_mode, restore_from_trash, write_mod
 
 mcp = FastMCP("wayper")
 
-_LOCK_PATH = Path("/tmp/wayper.lock")
-
 
 def _config():
     return load_config()
-
-
-def _get_context(config):
-    monitor = get_focused_monitor()
-    mon_cfg = find_monitor(config, monitor)
-    current = query_current()
-    img = current.get(monitor) if monitor else None
-    return monitor, mon_cfg, img
-
-
-class _FileLock:
-    def __init__(self):
-        self._fd = None
-
-    def __enter__(self):
-        self._fd = os.open(str(_LOCK_PATH), os.O_WRONLY | os.O_CREAT)
-        fcntl.flock(self._fd, fcntl.LOCK_EX)
-        return self
-
-    def __exit__(self, *_):
-        if self._fd is not None:
-            os.close(self._fd)
 
 
 @mcp.tool()
@@ -127,8 +102,8 @@ def fav(open_url: bool = False) -> dict:
         open_url: If True, also open the wallpaper on Wallhaven in browser.
     """
     config = _config()
-    with _FileLock():
-        monitor, mon_cfg, img = _get_context(config)
+    with FileLock():
+        monitor, mon_cfg, img = get_context(config)
         if not img or not mon_cfg:
             return {"error": "No current wallpaper"}
 
@@ -158,8 +133,8 @@ def fav(open_url: bool = False) -> dict:
 def unfav() -> dict:
     """Remove the current wallpaper from favorites, moving it back to the pool."""
     config = _config()
-    with _FileLock():
-        monitor, mon_cfg, img = _get_context(config)
+    with FileLock():
+        monitor, mon_cfg, img = get_context(config)
         if not img or not mon_cfg:
             return {"error": "No current wallpaper"}
 
@@ -180,8 +155,8 @@ def unfav() -> dict:
 def dislike() -> dict:
     """Blacklist the current wallpaper and switch to a new one. Can be undone with undislike."""
     config = _config()
-    with _FileLock():
-        monitor, mon_cfg, img = _get_context(config)
+    with FileLock():
+        monitor, mon_cfg, img = get_context(config)
         if not img or not mon_cfg:
             return {"error": "No current wallpaper"}
 
@@ -203,7 +178,7 @@ def dislike() -> dict:
 def undislike() -> dict:
     """Undo the last dislike, restoring the wallpaper from trash."""
     config = _config()
-    with _FileLock():
+    with FileLock():
         entry = pop_undo(config)
         if not entry:
             return {"status": "nothing_to_undo"}

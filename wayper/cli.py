@@ -13,13 +13,12 @@ from pathlib import Path
 
 import click
 
-from .backend import find_monitor, get_focused_monitor, query_current, set_wallpaper
+from .backend import FileLock, get_context, get_focused_monitor, set_wallpaper
 from .config import TransitionConfig, load_config
 from .notify import notify
 from .pool import (
     add_to_blacklist,
     count_images,
-    ensure_directories,
     favorites_dir,
     pick_random,
     pool_dir,
@@ -28,39 +27,6 @@ from .pool import (
 from .state import pop_undo, push_undo, read_mode, restore_from_trash, write_mode
 
 
-def _lock_path() -> Path:
-    return Path("/tmp/wayper.lock")
-
-
-class _FileLock:
-    """Simple flock-based file lock for state-modifying commands."""
-
-    def __init__(self) -> None:
-        self._fd: int | None = None
-
-    def __enter__(self) -> "_FileLock":
-        import fcntl
-        self._fd = os.open(str(_lock_path()), os.O_WRONLY | os.O_CREAT)
-        try:
-            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            os.close(self._fd)
-            self._fd = None
-            raise SystemExit(0)
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        if self._fd is not None:
-            os.close(self._fd)
-
-
-def _get_context(config):
-    """Get focused monitor, its config, and current image."""
-    monitor = get_focused_monitor()
-    mon_cfg = find_monitor(config, monitor)
-    current = query_current()
-    img = current.get(monitor) if monitor else None
-    return monitor, mon_cfg, img
 
 
 @click.group()
@@ -93,7 +59,7 @@ def daemon(ctx):
 def next_cmd(ctx):
     """Change wallpaper on the focused monitor."""
     config = ctx.obj["config"]
-    monitor, mon_cfg, _ = _get_context(config)
+    monitor, mon_cfg, _ = get_context(config)
     if not mon_cfg:
         click.echo("No monitor config found", err=True)
         raise SystemExit(1)
@@ -114,8 +80,8 @@ def next_cmd(ctx):
 def fav(ctx, open_url):
     """Favorite the current wallpaper."""
     config = ctx.obj["config"]
-    with _FileLock():
-        monitor, mon_cfg, img = _get_context(config)
+    with FileLock(blocking=False):
+        monitor, mon_cfg, img = get_context(config)
         if not img or not mon_cfg:
             click.echo("No current wallpaper", err=True)
             raise SystemExit(1)
@@ -155,8 +121,8 @@ def fav(ctx, open_url):
 def unfav(ctx):
     """Remove current wallpaper from favorites."""
     config = ctx.obj["config"]
-    with _FileLock():
-        monitor, mon_cfg, img = _get_context(config)
+    with FileLock(blocking=False):
+        monitor, mon_cfg, img = get_context(config)
         if not img or not mon_cfg:
             click.echo("No current wallpaper", err=True)
             raise SystemExit(1)
@@ -185,8 +151,8 @@ def unfav(ctx):
 def dislike(ctx):
     """Blacklist current wallpaper and switch to a new one."""
     config = ctx.obj["config"]
-    with _FileLock():
-        monitor, mon_cfg, img = _get_context(config)
+    with FileLock(blocking=False):
+        monitor, mon_cfg, img = get_context(config)
         if not img or not mon_cfg:
             click.echo("No current wallpaper", err=True)
             raise SystemExit(1)
@@ -219,7 +185,7 @@ def dislike(ctx):
 def undislike(ctx):
     """Undo the last dislike."""
     config = ctx.obj["config"]
-    with _FileLock():
+    with FileLock(blocking=False):
         entry = pop_undo(config)
         if not entry:
             if ctx.obj["json"]:

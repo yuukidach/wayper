@@ -7,7 +7,6 @@ import logging
 import os
 import signal
 import subprocess
-import sys
 
 from .config import WayperConfig
 from .backend import set_wallpaper

@@ -26,6 +26,7 @@
 - **Pool management** — downloads, validates (catches corrupt images), resizes to your exact resolution, and rotates automatically.
 - **SFW/NSFW toggle** — one key to switch. Persistent across sessions.
 - **Favorites & blacklist** — like/dislike with undo. Favorites stay in rotation.
+- **GTK4 browser** — browse, preview, and manage your wallpaper collection with keyboard shortcuts. Launch from rofi or any app launcher.
 - **AI-native** — built-in MCP server lets AI assistants (Claude Code, etc.) control your wallpapers directly. Ask your AI to "delete this broken wallpaper" or "favorite this one" — it just works.
 - **JSON output** — `--json` flag on every command for scripting and automation.
 
