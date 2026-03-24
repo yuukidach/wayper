@@ -32,16 +32,18 @@
 
 ## 安装
 
+### Arch Linux (AUR)
+
+```bash
+paru -S wayper     # 或: yay -S wayper
+```
+
+### 从源码安装
+
 ```bash
 git clone https://github.com/yuukidach/wayper.git
 cd wayper
 uv venv && uv pip install -e .
-```
-
-AUR 用户：
-
-```bash
-yay -S wayper
 ```
 
 ## 使用

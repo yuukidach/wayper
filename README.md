@@ -32,6 +32,14 @@
 
 ## Install
 
+### Arch Linux (AUR)
+
+```bash
+paru -S wayper     # or: yay -S wayper
+```
+
+### From source
+
 ```bash
 git clone https://github.com/yuukidach/wayper.git
 cd wayper
