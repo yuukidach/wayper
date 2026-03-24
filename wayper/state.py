@@ -21,12 +21,25 @@ def write_mode(config: WayperConfig, mode: str) -> None:
     config.state_file.write_text(mode)
 
 
+def _trash_for_dir(config: WayperConfig, original_dir: Path) -> Path:
+    """Determine mode-specific trash dir from an original pool directory."""
+    try:
+        rel = original_dir.relative_to(config.download_dir)
+        mode = rel.parts[0]  # "sfw" or "nsfw"
+        if mode in ("sfw", "nsfw"):
+            return config.trash_dir / mode
+    except (ValueError, IndexError):
+        pass
+    return config.trash_dir
+
+
 def push_undo(config: WayperConfig, filename: str, original_dir: Path) -> None:
     """Move file to trash and record in undo log. Trim to MAX_UNDO entries."""
-    config.trash_dir.mkdir(parents=True, exist_ok=True)
+    trash = _trash_for_dir(config, original_dir)
+    trash.mkdir(parents=True, exist_ok=True)
     src = original_dir / filename
     if src.exists():
-        src.rename(config.trash_dir / filename)
+        src.rename(trash / filename)
 
     with open(config.undo_file, "a") as f:
         f.write(f"{filename} {original_dir}\n")
@@ -36,8 +49,12 @@ def push_undo(config: WayperConfig, filename: str, original_dir: Path) -> None:
     if len(lines) > MAX_UNDO:
         for old_line in lines[:-MAX_UNDO]:
             old_name = old_line.split(maxsplit=1)[0]
-            old_trash = config.trash_dir / old_name
-            old_trash.unlink(missing_ok=True)
+            # Check both mode-specific and legacy trash
+            for d in (config.trash_dir / "sfw", config.trash_dir / "nsfw", config.trash_dir):
+                f = d / old_name
+                if f.is_file():
+                    f.unlink()
+                    break
         config.undo_file.write_text("\n".join(lines[-MAX_UNDO:]) + "\n")
 
 
@@ -61,7 +78,11 @@ def pop_undo(config: WayperConfig) -> tuple[str, Path] | None:
 
 def restore_from_trash(config: WayperConfig, filename: str, dest_dir: Path) -> Path | None:
     """Move file from trash back to dest_dir. Returns final path or None."""
-    trashed = config.trash_dir / filename
+    # Check mode-specific trash first, then legacy flat trash
+    trash = _trash_for_dir(config, dest_dir)
+    trashed = trash / filename
+    if not trashed.exists():
+        trashed = config.trash_dir / filename  # legacy fallback
     if not trashed.exists():
         return None
     dest = dest_dir / filename

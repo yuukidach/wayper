@@ -329,3 +329,36 @@ def status(ctx):
         for m in monitors_info:
             click.echo(f"  {m['name']} ({m['orientation']}): {m['image'] or 'none'}")
             click.echo(f"    Pool: {m['pool_count']}, Favorites: {m['favorites_count']}")
+
+
+@cli.command()
+@click.option("--favorites", "category", flag_value="favorites", default=True,
+              help="Browse favorite wallpapers.")
+@click.option("--disliked", "category", flag_value="disliked",
+              help="Browse disliked/trashed wallpapers.")
+@click.option("--pool", "category", flag_value="pool",
+              help="Browse the current wallpaper pool.")
+@click.pass_context
+def browse(ctx, category):
+    """Browse wallpapers in a GTK4 image browser."""
+    from .browse import run
+    run(ctx.obj["config"], category)
+
+
+@cli.command()
+def setup():
+    """Install desktop entry for application launchers (rofi, etc.)."""
+    import shutil
+
+    wayper_bin = shutil.which("wayper") or sys.executable.replace("python", "wayper")
+    desktop = Path.home() / ".local/share/applications/wayper-browse.desktop"
+    desktop.parent.mkdir(parents=True, exist_ok=True)
+    desktop.write_text(
+        "[Desktop Entry]\n"
+        "Name=Wayper Browse\n"
+        f"Exec={wayper_bin} browse\n"
+        "Icon=preferences-desktop-wallpaper\n"
+        "Type=Application\n"
+        "Categories=Utility;\n"
+    )
+    click.echo(f"Installed {desktop}")

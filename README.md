@@ -48,8 +48,28 @@ wayper dislike              # blacklist + switch
 wayper undislike            # undo last dislike
 wayper mode [sfw|nsfw]      # toggle or set mode
 wayper status               # show current state
+wayper browse               # GTK4 wallpaper browser
+wayper setup                # install desktop entry for rofi/launchers
 wayper --json status        # machine-readable output
 ```
+
+### Browse
+
+GTK4 wallpaper browser with thumbnail grid, full-size preview, and keyboard shortcuts.
+
+<p align="center">
+  <img src="assets/browse.png" alt="browse window" width="540">
+</p>
+
+```
+Arrow keys    navigate grid          1/2/3    switch category
+Enter         set as wallpaper       m        toggle SFW/NSFW
+f             favorite               x        remove/trash/restore
+o             open on Wallhaven      d        delete
+q/Esc         close
+```
+
+Run `wayper setup` once to add a desktop entry — then launch from rofi or any application launcher.
 
 ### Hyprland keybindings example
 
@@ -61,6 +81,7 @@ bind = $mod SHIFT, F10,exec, wayper unfav
 bind = $mod CTRL, F10, exec, wayper fav --open
 bind = $mod, F11,      exec, wayper next
 bind = $mod, F12,      exec, wayper mode
+bind = $mod, W,        exec, wayper browse
 
 exec-once = swww-daemon & sleep 5 && wayper daemon
 ```
@@ -98,6 +119,7 @@ See [`example-config.toml`](example-config.toml) for all options — monitors, A
 - [swww](https://github.com/LGFae/swww) — Wayland wallpaper daemon
 - [Hyprland](https://hyprland.org/) — for focused monitor detection
 - [Wallhaven API key](https://wallhaven.cc/settings/account)
+- [GTK4](https://gtk.org/) + [PyGObject](https://pygobject.gnome.org/) — for `wayper browse` (install: `sudo pacman -S python-gobject gtk4`)
 
 ## License
 

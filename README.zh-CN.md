@@ -54,8 +54,28 @@ wayper dislike              # 拉黑 + 切换
 wayper undislike            # 撤销上次拉黑
 wayper mode [sfw|nsfw]      # 切换模式
 wayper status               # 查看当前状态
+wayper browse               # GTK4 壁纸浏览器
+wayper setup                # 安装桌面入口（rofi 等启动器）
 wayper --json status        # JSON 格式输出
 ```
+
+### 浏览器
+
+GTK4 壁纸浏览器，支持缩略图网格、全尺寸预览和键盘快捷键。
+
+<p align="center">
+  <img src="assets/browse.png" alt="浏览器窗口" width="540">
+</p>
+
+```
+方向键     导航网格               1/2/3    切换分类
+Enter      设为壁纸               m        切换 SFW/NSFW
+f          收藏                   x        移除/丢弃/恢复
+o          在 Wallhaven 打开      d        删除
+q/Esc      关闭
+```
+
+运行 `wayper setup` 安装桌面入口，之后可通过 rofi 等启动器打开。
 
 ### Hyprland 快捷键示例
 
@@ -67,6 +87,7 @@ bind = $mod SHIFT, F10,exec, wayper unfav
 bind = $mod CTRL, F10, exec, wayper fav --open
 bind = $mod, F11,      exec, wayper next
 bind = $mod, F12,      exec, wayper mode
+bind = $mod, W,        exec, wayper browse
 
 exec-once = swww-daemon & sleep 5 && wayper daemon
 ```
@@ -104,6 +125,7 @@ cp example-config.toml ~/.config/wayper/config.toml
 - [swww](https://github.com/LGFae/swww) — Wayland 壁纸引擎
 - [Hyprland](https://hyprland.org/) — 用于检测当前聚焦的显示器
 - [Wallhaven API key](https://wallhaven.cc/settings/account)
+- [GTK4](https://gtk.org/) + [PyGObject](https://pygobject.gnome.org/) — 用于 `wayper browse`（安装：`sudo pacman -S python-gobject gtk4`）
 
 ## 许可
 
