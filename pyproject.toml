@@ -7,10 +7,12 @@ dependencies = [
     "click>=8.0",
     "httpx>=0.27",
     "Pillow>=10.0",
+    "mcp>=1.0",
 ]
 
 [project.scripts]
 wayper = "wayper.cli:cli"
+wayper-mcp = "wayper.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]
