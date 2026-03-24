@@ -40,7 +40,11 @@ def is_blacklisted(config: WayperConfig, filename: str) -> bool:
     bf = config.blacklist_file
     if not bf.exists():
         return False
-    return any(filename in line for line in bf.read_text().splitlines())
+    for line in bf.read_text().splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) == 2 and parts[1] == filename:
+            return True
+    return False
 
 
 def add_to_blacklist(config: WayperConfig, filename: str) -> None:
@@ -53,7 +57,8 @@ def remove_from_blacklist(config: WayperConfig, filename: str) -> None:
     bf = config.blacklist_file
     if not bf.exists():
         return
-    lines = [l for l in bf.read_text().splitlines() if filename not in l]
+    lines = [l for l in bf.read_text().splitlines()
+             if not (len(l.split(maxsplit=1)) == 2 and l.split(maxsplit=1)[1] == filename)]
     bf.write_text("\n".join(lines) + "\n" if lines else "")
 
 

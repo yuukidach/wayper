@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
 import signal
 from pathlib import Path
@@ -23,6 +24,8 @@ from .state import pop_undo, push_undo, read_mode, restore_from_trash, write_mod
 
 mcp = FastMCP("wayper")
 
+_LOCK_PATH = Path("/tmp/wayper.lock")
+
 
 def _config():
     return load_config()
@@ -34,6 +37,20 @@ def _get_context(config):
     current = query_current()
     img = current.get(monitor) if monitor else None
     return monitor, mon_cfg, img
+
+
+class _FileLock:
+    def __init__(self):
+        self._fd = None
+
+    def __enter__(self):
+        self._fd = os.open(str(_LOCK_PATH), os.O_WRONLY | os.O_CREAT)
+        fcntl.flock(self._fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *_):
+        if self._fd is not None:
+            os.close(self._fd)
 
 
 @mcp.tool()
@@ -110,93 +127,98 @@ def fav(open_url: bool = False) -> dict:
         open_url: If True, also open the wallpaper on Wallhaven in browser.
     """
     config = _config()
-    monitor, mon_cfg, img = _get_context(config)
-    if not img or not mon_cfg:
-        return {"error": "No current wallpaper"}
+    with _FileLock():
+        monitor, mon_cfg, img = _get_context(config)
+        if not img or not mon_cfg:
+            return {"error": "No current wallpaper"}
 
-    if "favorites" in str(img):
-        return {"status": "already_favorite"}
+        if "favorites" in str(img):
+            return {"status": "already_favorite"}
 
-    mode = read_mode(config)
-    dest_dir = favorites_dir(config, mode, mon_cfg.orientation)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / img.name
-    img.rename(dest)
-    set_wallpaper(monitor, dest, TransitionConfig(type="none", duration=0, fps=60))
+        mode = read_mode(config)
+        dest_dir = favorites_dir(config, mode, mon_cfg.orientation)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / img.name
+        img.rename(dest)
+        set_wallpaper(monitor, dest, TransitionConfig(type="none", duration=0, fps=60))
 
-    if open_url:
-        import subprocess
-        wall_id = img.stem.replace("wallhaven-", "")
-        subprocess.Popen(
-            ["xdg-open", f"https://wallhaven.cc/w/{wall_id}"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        if open_url:
+            import subprocess
+            wall_id = img.stem.replace("wallhaven-", "")
+            subprocess.Popen(
+                ["xdg-open", f"https://wallhaven.cc/w/{wall_id}"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
 
-    notify("Wallpaper", "Saved to favorites")
-    return {"action": "fav", "image": str(dest), "opened": open_url}
+        notify("Wallpaper", "Saved to favorites")
+        return {"action": "fav", "image": str(dest), "opened": open_url}
 
 
 @mcp.tool()
 def unfav() -> dict:
     """Remove the current wallpaper from favorites, moving it back to the pool."""
     config = _config()
-    monitor, mon_cfg, img = _get_context(config)
-    if not img or not mon_cfg:
-        return {"error": "No current wallpaper"}
+    with _FileLock():
+        monitor, mon_cfg, img = _get_context(config)
+        if not img or not mon_cfg:
+            return {"error": "No current wallpaper"}
 
-    if "favorites" not in str(img):
-        return {"status": "not_favorite"}
+        if "favorites" not in str(img):
+            return {"status": "not_favorite"}
 
-    mode = read_mode(config)
-    dest_dir = pool_dir(config, mode, mon_cfg.orientation)
-    dest = dest_dir / img.name
-    img.rename(dest)
-    set_wallpaper(monitor, dest, TransitionConfig(type="none", duration=0, fps=60))
-    notify("Wallpaper", "Removed from favorites")
-    return {"action": "unfav", "image": str(dest)}
+        mode = read_mode(config)
+        dest_dir = pool_dir(config, mode, mon_cfg.orientation)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / img.name
+        img.rename(dest)
+        set_wallpaper(monitor, dest, TransitionConfig(type="none", duration=0, fps=60))
+        notify("Wallpaper", "Removed from favorites")
+        return {"action": "unfav", "image": str(dest)}
 
 
 @mcp.tool()
 def dislike() -> dict:
     """Blacklist the current wallpaper and switch to a new one. Can be undone with undislike."""
     config = _config()
-    monitor, mon_cfg, img = _get_context(config)
-    if not img or not mon_cfg:
-        return {"error": "No current wallpaper"}
+    with _FileLock():
+        monitor, mon_cfg, img = _get_context(config)
+        if not img or not mon_cfg:
+            return {"error": "No current wallpaper"}
 
-    if "favorites" in str(img):
-        return {"error": "Can't dislike a favorite"}
+        if "favorites" in str(img):
+            return {"error": "Can't dislike a favorite"}
 
-    mode = read_mode(config)
-    next_img = pick_random(config, mode, mon_cfg.orientation)
-    if next_img:
-        set_wallpaper(monitor, next_img, config.transition)
+        mode = read_mode(config)
+        next_img = pick_random(config, mode, mon_cfg.orientation)
+        if next_img:
+            set_wallpaper(monitor, next_img, config.transition)
 
-    add_to_blacklist(config, img.name)
-    push_undo(config, img.name, img.parent)
-    notify("Wallpaper", "Disliked")
-    return {"action": "dislike", "image": str(img)}
+        add_to_blacklist(config, img.name)
+        push_undo(config, img.name, img.parent)
+        notify("Wallpaper", "Disliked")
+        return {"action": "dislike", "image": str(img)}
 
 
 @mcp.tool()
 def undislike() -> dict:
     """Undo the last dislike, restoring the wallpaper from trash."""
     config = _config()
-    entry = pop_undo(config)
-    if not entry:
-        return {"status": "nothing_to_undo"}
+    with _FileLock():
+        entry = pop_undo(config)
+        if not entry:
+            return {"status": "nothing_to_undo"}
 
-    filename, orig_dir = entry
-    restored = restore_from_trash(config, filename, orig_dir)
-    remove_from_blacklist(config, filename)
+        filename, orig_dir = entry
+        restored = restore_from_trash(config, filename, orig_dir)
+        remove_from_blacklist(config, filename)
 
-    if restored:
-        monitor = get_focused_monitor()
-        if monitor:
-            set_wallpaper(monitor, restored, config.transition)
-        notify("Wallpaper", f"Restored: {filename}")
-        return {"action": "undislike", "image": str(restored)}
-    return {"status": "file_missing"}
+        if restored:
+            monitor = get_focused_monitor()
+            if monitor:
+                set_wallpaper(monitor, restored, config.transition)
+            notify("Wallpaper", f"Restored: {filename}")
+            return {"action": "undislike", "image": str(restored)}
+        return {"status": "file_missing"}
 
 
 @mcp.tool()
@@ -236,7 +258,14 @@ def delete_wallpaper(image_path: str, add_to_blacklist_flag: bool = False) -> di
         add_to_blacklist_flag: If True, also add to blacklist to prevent re-download.
     """
     config = _config()
-    path = Path(image_path)
+    path = Path(image_path).resolve()
+
+    # Validate path is within the wallpaper directory
+    try:
+        path.relative_to(config.download_dir.resolve())
+    except ValueError:
+        return {"error": f"Path is not within wallpaper directory: {image_path}"}
+
     if not path.exists():
         return {"error": f"File not found: {image_path}"}
 
