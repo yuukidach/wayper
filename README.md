@@ -1,4 +1,5 @@
 <p align="center">
+  <img src="assets/icon.svg" width="100" alt="wayper logo">
   <h1 align="center">wayper</h1>
   <p align="center">
     Wayland-first wallpaper manager with <a href="https://wallhaven.cc">Wallhaven</a> integration and AI-native control.
@@ -8,7 +9,16 @@
   </p>
 </p>
 
----
+<p align="center">
+  <img src="assets/demo-desktop.gif" alt="wallpaper transitions" width="720">
+</p>
+
+<details>
+<summary>CLI demo</summary>
+<p align="center">
+  <img src="assets/demo-cli.gif" alt="CLI usage" width="720">
+</p>
+</details>
 
 ## Why wayper?
 

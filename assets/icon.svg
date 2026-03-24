@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- H1: Gradient W on dark — Hyprland style -->
+  <defs>
+    <linearGradient id="hypr1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0ea5e9"/>
+      <stop offset="100%" stop-color="#00e5d0"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="24" fill="#1a1b2e"/>
+  <polyline points="28,40 44,92 64,50 84,92 100,40"
+            stroke="url(#hypr1)" stroke-width="7" fill="none"
+            stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
