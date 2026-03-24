@@ -19,7 +19,7 @@ class WallhavenClient:
         self.config = config
         self.client = httpx.AsyncClient(
             proxy=config.proxy,
-            timeout=httpx.Timeout(connect=10, read=30),
+            timeout=httpx.Timeout(30, connect=10),
         )
 
     async def close(self) -> None:
