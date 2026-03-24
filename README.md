@@ -22,8 +22,9 @@
 
 ## Why wayper?
 
+- **Wallhaven integration** — auto-downloads wallpapers from [Wallhaven](https://wallhaven.cc) based on your search preferences. No manual sourcing.
 - **Auto orientation matching** — portrait monitors get portrait wallpapers, landscape gets landscape. No manual sorting.
-- **Pool management** — downloads, validates (catches corrupt images), resizes to your exact resolution, and rotates automatically.
+- **Pool management** — validates (catches corrupt images), resizes to your exact resolution, and rotates automatically.
 - **SFW/NSFW toggle** — one key to switch. Persistent across sessions.
 - **Favorites & blacklist** — like/dislike with undo. Favorites stay in rotation.
 - **GTK4 browser** — browse, preview, and manage your wallpaper collection with keyboard shortcuts. Launch from rofi or any app launcher.
