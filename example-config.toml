@@ -1,0 +1,38 @@
+api_key = ""  # https://wallhaven.cc/settings/account
+# proxy = "http://127.0.0.1:7897"
+download_dir = "~/Pictures/wallpaper"
+default_mode = "sfw"
+interval = 300         # seconds between rotations
+pool_target = 30       # images per orientation before slowing downloads
+quota_mb = 4000        # max disk usage
+blacklist_ttl_days = 30
+
+# [greeter]
+# image = "/usr/share/backgrounds/greeter.jpg"
+# interval = 12
+# sudo_password = ""
+
+[[monitors]]
+name = "DP-1"
+width = 3840
+height = 2160
+orientation = "landscape"
+
+# [[monitors]]
+# name = "DP-2"
+# width = 1440
+# height = 2560
+# orientation = "portrait"
+
+[wallhaven]
+categories = "111"     # 1=general, 1=anime, 1=people
+top_range = "1M"
+sorting = "toplist"
+ai_art_filter = 0      # 0=off, 1=on
+max_page = 15
+batch_size = 5
+
+[transition]
+type = "grow"
+duration = 0.5
+fps = 60
