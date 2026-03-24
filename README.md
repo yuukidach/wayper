@@ -64,7 +64,7 @@ GTK4 wallpaper browser with thumbnail grid, full-size preview, and keyboard shor
 ```
 Arrow keys    navigate grid          1/2/3    switch category
 Enter         set as wallpaper       m        toggle SFW/NSFW
-f             favorite               x        remove/trash/restore
+f             favorite               x        remove/reject/restore
 o             open on Wallhaven      d        delete
 q/Esc         close
 ```

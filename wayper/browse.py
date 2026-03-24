@@ -32,7 +32,7 @@ LABELS = {"favorites": "Favorites [1]", "pool": "Pool [2]", "disliked": "Dislike
 # Context action label and keyboard hint per category
 ACTION_CONFIG = {
     "favorites": "Remove",
-    "pool": "Trash",
+    "pool": "Reject",
     "disliked": "Restore",
 }
 
