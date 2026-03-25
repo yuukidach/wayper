@@ -26,6 +26,7 @@
 - **Auto orientation matching** — portrait monitors get portrait wallpapers, landscape gets landscape. No manual sorting.
 - **Pool management** — validates (catches corrupt images), resizes to your exact resolution, and rotates automatically.
 - **SFW/NSFW toggle** — one key to switch. Persistent across sessions.
+- **History navigation** — prev/next through your wallpaper history. Browser-style back/forward per monitor.
 - **Favorites & blacklist** — like/dislike with undo. Favorites stay in rotation.
 - **GTK4 browser** — browse, preview, and manage your wallpaper collection with keyboard shortcuts. Launch from rofi or any app launcher.
 - **AI-native** — built-in MCP server lets AI assistants (Claude Code, etc.) control your wallpapers directly. Ask your AI to "delete this broken wallpaper" or "favorite this one" — it just works.
@@ -51,7 +52,8 @@ uv venv && uv pip install -e .
 
 ```
 wayper daemon               # start background rotation + downloads
-wayper next                 # change wallpaper on focused monitor
+wayper next                 # next wallpaper (forward history or new random)
+wayper prev                 # previous wallpaper from history
 wayper fav [--open]         # favorite current wallpaper
 wayper unfav                # remove from favorites
 wayper dislike              # blacklist + switch
@@ -90,6 +92,7 @@ bind = $mod, F10,      exec, wayper fav
 bind = $mod SHIFT, F10,exec, wayper unfav
 bind = $mod CTRL, F10, exec, wayper fav --open
 bind = $mod, F11,      exec, wayper next
+bind = $mod SHIFT, F11,exec, wayper prev
 bind = $mod, F12,      exec, wayper mode
 bind = $mod, W,        exec, wayper browse
 
@@ -112,7 +115,7 @@ Add to your Claude Code config (`~/.claude/.mcp.json`):
 }
 ```
 
-Available tools: `status` · `next_wallpaper` · `fav` · `unfav` · `dislike` · `undislike` · `set_mode` · `delete_wallpaper`
+Available tools: `status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `unfav` · `dislike` · `undislike` · `set_mode` · `delete_wallpaper`
 
 ## Config
 
