@@ -15,6 +15,7 @@ from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
 
 from .backend import find_monitor, get_focused_monitor, set_wallpaper
 from .config import WayperConfig
+from .history import push as push_history
 from .pool import (
     IMAGE_EXTENSIONS,
     add_to_blacklist,
@@ -429,6 +430,7 @@ class BrowseWindow(Gtk.ApplicationWindow):
         mon_cfg = find_monitor(self.config, monitor)
         if mon_cfg:
             set_wallpaper(monitor, self.selected_path, self.config.transition)
+            push_history(self.config, monitor, self.selected_path)
 
     def _open_url(self):
         if self.selected_path:

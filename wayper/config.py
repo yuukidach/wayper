@@ -74,6 +74,10 @@ class WayperConfig:
         return self.download_dir / ".trash"
 
     @property
+    def history_file(self) -> Path:
+        return self.download_dir / ".history"
+
+    @property
     def pid_file(self) -> Path:
         return CONFIG_DIR / "wayper.pid"
 

@@ -15,6 +15,7 @@ import click
 
 from .backend import FileLock, get_context, get_focused_monitor, set_wallpaper
 from .config import TransitionConfig, load_config
+from .history import go_prev, pick_next, push as push_history
 from .notify import notify
 from .pool import (
     add_to_blacklist,
@@ -64,14 +65,37 @@ def next_cmd(ctx):
         click.echo("No monitor config found", err=True)
         raise SystemExit(1)
 
-    mode = read_mode(config)
-    img = pick_random(config, mode, mon_cfg.orientation)
+    img = pick_next(config, monitor, mon_cfg.orientation)
     if img:
         set_wallpaper(monitor, img, config.transition)
         if ctx.obj["json"]:
             click.echo(json_mod.dumps({"action": "next", "monitor": monitor, "image": str(img)}))
         else:
             notify("Wallpaper", "Next wallpaper")
+
+
+@cli.command("prev")
+@click.pass_context
+def prev_cmd(ctx):
+    """Go back to the previous wallpaper."""
+    config = ctx.obj["config"]
+    monitor, mon_cfg, _ = get_context(config)
+    if not mon_cfg:
+        click.echo("No monitor config found", err=True)
+        raise SystemExit(1)
+
+    img = go_prev(config, monitor)
+    if img:
+        set_wallpaper(monitor, img, config.transition)
+        if ctx.obj["json"]:
+            click.echo(json_mod.dumps({"action": "prev", "monitor": monitor, "image": str(img)}))
+        else:
+            notify("Wallpaper", "Previous wallpaper")
+    else:
+        if ctx.obj["json"]:
+            click.echo(json_mod.dumps({"action": "prev", "status": "at_oldest"}))
+        else:
+            notify("Wallpaper", "Already at oldest")
 
 
 @cli.command()
@@ -169,6 +193,7 @@ def dislike(ctx):
         next_img = pick_random(config, mode, mon_cfg.orientation)
         if next_img:
             set_wallpaper(monitor, next_img, config.transition)
+            push_history(config, monitor, next_img)
 
         # Bookkeeping
         add_to_blacklist(config, img.name)

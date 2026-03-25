@@ -7,9 +7,11 @@ import logging
 import os
 import signal
 import subprocess
+from pathlib import Path
 
 from .config import WayperConfig
 from .backend import set_wallpaper
+from .history import push_many
 from .pool import (
     count_images,
     enforce_quota,
@@ -49,10 +51,13 @@ def remove_pid_file(config: WayperConfig) -> None:
 
 def set_all_wallpapers(config: WayperConfig, mode: str) -> None:
     """Set wallpaper on all configured monitors."""
+    history_items: list[tuple[str, Path]] = []
     for mon in config.monitors:
         img = pick_random(config, mode, mon.orientation)
         if img:
             set_wallpaper(mon.name, img, config.transition)
+            history_items.append((mon.name, img))
+    push_many(config, history_items)
 
 
 def update_greeter(config: WayperConfig) -> None:

@@ -10,6 +10,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .backend import FileLock, get_context, get_focused_monitor, set_wallpaper
 from .config import TransitionConfig, load_config
+from .history import go_prev, pick_next, push as push_history
 from .notify import notify
 from .pool import (
     add_to_blacklist,
@@ -84,14 +85,33 @@ def next_wallpaper(monitor: str | None = None) -> dict:
     if not mon_cfg:
         return {"error": f"No config for monitor {monitor}"}
 
-    mode = read_mode(config)
-    img = pick_random(config, mode, mon_cfg.orientation)
+    img = pick_next(config, monitor, mon_cfg.orientation)
     if not img:
         return {"error": "No images available"}
 
     set_wallpaper(monitor, img, config.transition)
     notify("Wallpaper", "Next wallpaper")
     return {"action": "next", "monitor": monitor, "image": str(img)}
+
+
+@mcp.tool()
+def prev_wallpaper(monitor: str | None = None) -> dict:
+    """Go back to the previous wallpaper.
+
+    Args:
+        monitor: Monitor name (e.g. "DP-1"). If None, uses focused monitor.
+    """
+    config = _config()
+    if monitor is None:
+        monitor = get_focused_monitor()
+
+    img = go_prev(config, monitor)
+    if not img:
+        return {"status": "at_oldest"}
+
+    set_wallpaper(monitor, img, config.transition)
+    notify("Wallpaper", "Previous wallpaper")
+    return {"action": "prev", "monitor": monitor, "image": str(img)}
 
 
 @mcp.tool()
@@ -167,6 +187,7 @@ def dislike() -> dict:
         next_img = pick_random(config, mode, mon_cfg.orientation)
         if next_img:
             set_wallpaper(monitor, next_img, config.transition)
+            push_history(config, monitor, next_img)
 
         add_to_blacklist(config, img.name)
         push_undo(config, img.name, img.parent)
