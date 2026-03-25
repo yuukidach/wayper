@@ -36,6 +36,20 @@ def pick_random(config: WayperConfig, mode: str, orientation: str) -> Path | Non
     return random.choice(images) if images else None
 
 
+def list_blacklist(config: WayperConfig) -> list[tuple[int, str]]:
+    """Return all blacklist entries as (timestamp, filename) sorted newest-first."""
+    bf = config.blacklist_file
+    if not bf.exists():
+        return []
+    entries = []
+    for line in bf.read_text().splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) == 2 and parts[0].isdigit():
+            entries.append((int(parts[0]), parts[1]))
+    entries.sort(key=lambda e: e[0], reverse=True)
+    return entries
+
+
 def is_blacklisted(config: WayperConfig, filename: str) -> bool:
     bf = config.blacklist_file
     if not bf.exists():

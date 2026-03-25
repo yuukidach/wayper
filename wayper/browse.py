@@ -19,6 +19,7 @@ from .pool import (
     IMAGE_EXTENSIONS,
     add_to_blacklist,
     favorites_dir,
+    list_blacklist,
     list_images,
     pool_dir,
     remove_from_blacklist,
@@ -101,6 +102,12 @@ headerbar {
     color: #6c7086;
     font-size: 12px;
 }
+.blocklist-placeholder {
+    background: #313244;
+    border-radius: 10px;
+    color: #6c7086;
+    font-size: 11px;
+}
 flowboxchild {
     background: transparent;
     border-radius: 10px;
@@ -155,7 +162,9 @@ class BrowseWindow(Gtk.ApplicationWindow):
         self.category = category
         self.mode = read_mode(config)
         self.selected_path: Path | None = None
+        self._selected_name: str | None = None  # for blocklist-only entries
         self.images: list[Path] = []
+        self._blocklist_only: list[str] = []  # names without trash files
         self._thumb_pool = ThreadPoolExecutor(max_workers=4)
 
         self.set_title("wayper")
@@ -277,10 +286,20 @@ class BrowseWindow(Gtk.ApplicationWindow):
 
     def _reload_images(self):
         self.images = _get_images(self.category, self.mode, self.config)
+        # Build blocklist-only entries (no trash file)
+        if self.category == "disliked":
+            trash_names = {p.name for p in self.images}
+            self._blocklist_only = [
+                name for _ts, name in list_blacklist(self.config)
+                if name not in trash_names
+            ]
+        else:
+            self._blocklist_only = []
         self._populate_grid()
         self._update_status()
         self._update_buttons()
         self.selected_path = None
+        self._selected_name = None
         self.preview.set_filename(None)
 
     def _populate_grid(self):
@@ -290,6 +309,7 @@ class BrowseWindow(Gtk.ApplicationWindow):
         for img_path in self.images:
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             box._image_path = img_path
+            box._blocklist_name = None
 
             picture = Gtk.Picture()
             picture.set_size_request(THUMB_SIZE, THUMB_SIZE)
@@ -303,6 +323,25 @@ class BrowseWindow(Gtk.ApplicationWindow):
             box.append(label)
 
             self._load_thumb_async(str(img_path), picture)
+            self.flowbox.append(box)
+
+        # Blocklist-only entries (no file on disk)
+        for name in self._blocklist_only:
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            box._image_path = None
+            box._blocklist_name = name
+
+            placeholder = Gtk.Label(label="No file")
+            placeholder.set_size_request(THUMB_SIZE, THUMB_SIZE)
+            placeholder.add_css_class("blocklist-placeholder")
+            box.append(placeholder)
+
+            stem = Path(name).stem
+            label = Gtk.Label(label=stem[-8:])
+            label.set_ellipsize(3)
+            label.set_max_width_chars(12)
+            box.append(label)
+
             self.flowbox.append(box)
 
     def _load_thumb_async(self, path: str, picture: Gtk.Picture):
@@ -346,15 +385,19 @@ class BrowseWindow(Gtk.ApplicationWindow):
         selected = flowbox.get_selected_children()
         if not selected:
             self.selected_path = None
+            self._selected_name = None
             self.preview.set_filename(None)
             self._update_buttons()
             return
 
         box = selected[0].get_child()
-        if hasattr(box, "_image_path"):
-            self.selected_path = box._image_path
+        self.selected_path = getattr(box, "_image_path", None)
+        self._selected_name = getattr(box, "_blocklist_name", None)
+        if self.selected_path:
             self.preview.set_filename(str(self.selected_path))
-            self._update_buttons()
+        else:
+            self.preview.set_filename(None)
+        self._update_buttons()
 
     def _on_key(self, ctrl, keyval, keycode, state):
         actions = {
@@ -388,10 +431,14 @@ class BrowseWindow(Gtk.ApplicationWindow):
             set_wallpaper(monitor, self.selected_path, self.config.transition)
 
     def _open_url(self):
-        if not self.selected_path:
+        if self.selected_path:
+            url = _wallhaven_url(self.selected_path)
+        elif self._selected_name:
+            url = _wallhaven_url(Path(self._selected_name))
+        else:
             return
         subprocess.Popen(
-            ["xdg-open", _wallhaven_url(self.selected_path)],
+            ["xdg-open", url],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
 
@@ -408,6 +455,12 @@ class BrowseWindow(Gtk.ApplicationWindow):
 
     def _context_action(self):
         """Remove (favorites), Dislike (pool), or Restore (disliked)."""
+        if self.category == "disliked" and self._selected_name and not self.selected_path:
+            # Blocklist-only entry: just remove from blacklist
+            remove_from_blacklist(self.config, self._selected_name)
+            self._reload_images()
+            return
+
         if not self.selected_path or not self.selected_path.exists():
             return
         path = self.selected_path
@@ -429,6 +482,11 @@ class BrowseWindow(Gtk.ApplicationWindow):
         self._reload_images()
 
     def _delete(self):
+        if self._selected_name and not self.selected_path:
+            # Blocklist-only: remove from blacklist
+            remove_from_blacklist(self.config, self._selected_name)
+            self._reload_images()
+            return
         if not self.selected_path or not self.selected_path.exists():
             return
         self.selected_path.unlink()
@@ -437,23 +495,27 @@ class BrowseWindow(Gtk.ApplicationWindow):
     # ── Helpers ─────────────────────────────────────────
 
     def _update_status(self):
-        n = len(self.images)
+        n = len(self.images) + len(self._blocklist_only)
         self.status_label.set_text(
             f"{n} image{'s' if n != 1 else ''} · {self.mode.upper()}"
         )
 
     def _update_buttons(self):
-        has_sel = self.selected_path is not None
-        self.btn_set.set_sensitive(has_sel)
+        has_file = self.selected_path is not None
+        has_sel = has_file or self._selected_name is not None
+        self.btn_set.set_sensitive(has_file)
         self.btn_open.set_sensitive(has_sel)
         self.btn_delete.set_sensitive(has_sel)
 
-        # Favorite button: visible in pool and disliked
-        self.btn_fav.set_sensitive(has_sel)
+        # Favorite button: visible in pool and disliked, only for file entries
+        self.btn_fav.set_sensitive(has_file)
         self.btn_fav.set_visible(self.category in ("pool", "disliked"))
 
-        # Context action button: Remove/Dislike/Restore
-        label = ACTION_CONFIG.get(self.category)
+        # Context action button: Remove/Dislike/Restore/Unblock
+        if self.category == "disliked" and self._selected_name and not has_file:
+            label = "Unblock"
+        else:
+            label = ACTION_CONFIG.get(self.category)
         if label:
             self.btn_action.set_label(f"{label} [X]")
             self.btn_action.set_sensitive(has_sel)
