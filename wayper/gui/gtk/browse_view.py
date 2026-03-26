@@ -251,7 +251,7 @@ class BrowsePanel:
             self._monitor_combo = None
 
         # Action buttons
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         btn_box.set_halign(Gtk.Align.CENTER)
 
         def _btn(label, handler, *css_classes):
