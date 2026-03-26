@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -439,10 +438,8 @@ class BrowseWindow(Gtk.ApplicationWindow):
             url = _wallhaven_url(Path(self._selected_name))
         else:
             return
-        subprocess.Popen(
-            ["xdg-open", url],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        import webbrowser
+        webbrowser.open(url)
 
     def _favorite(self):
         """Move selected image to favorites."""

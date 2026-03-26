@@ -7,16 +7,14 @@ import json as json_mod
 import logging
 import os
 import signal
-import subprocess
 import sys
 from pathlib import Path
 
 import click
 
-from .backend import FileLock, get_context, get_focused_monitor, set_wallpaper
+from .backend import FileLock, get_context, get_focused_monitor, notify, query_current, set_wallpaper
 from .config import TransitionConfig, load_config
 from .history import go_prev, pick_next, push as push_history
-from .notify import notify
 from .pool import (
     add_to_blacklist,
     count_images,
@@ -127,11 +125,9 @@ def fav(ctx, open_url):
         set_wallpaper(monitor, dest, TransitionConfig(type="none", duration=0, fps=60))
 
         if open_url:
+            import webbrowser
             wall_id = img.stem.replace("wallhaven-", "")
-            subprocess.Popen(
-                ["xdg-open", f"https://wallhaven.cc/w/{wall_id}"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            webbrowser.open(f"https://wallhaven.cc/w/{wall_id}")
 
         if ctx.obj["json"]:
             click.echo(json_mod.dumps({"action": "fav", "image": str(dest), "opened": open_url}))

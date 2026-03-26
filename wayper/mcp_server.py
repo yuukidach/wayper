@@ -8,10 +8,17 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .backend import FileLock, get_context, get_focused_monitor, set_wallpaper
+from .backend import (
+    FileLock,
+    find_monitor,
+    get_context,
+    get_focused_monitor,
+    notify,
+    query_current,
+    set_wallpaper,
+)
 from .config import TransitionConfig, load_config
 from .history import go_prev, pick_next, push as push_history
-from .notify import notify
 from .pool import (
     add_to_blacklist,
     count_images,
@@ -138,12 +145,9 @@ def fav(open_url: bool = False) -> dict:
         set_wallpaper(monitor, dest, TransitionConfig(type="none", duration=0, fps=60))
 
         if open_url:
-            import subprocess
+            import webbrowser
             wall_id = img.stem.replace("wallhaven-", "")
-            subprocess.Popen(
-                ["xdg-open", f"https://wallhaven.cc/w/{wall_id}"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            webbrowser.open(f"https://wallhaven.cc/w/{wall_id}")
 
         notify("Wallpaper", "Saved to favorites")
         return {"action": "fav", "image": str(dest), "opened": open_url}
