@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 from pathlib import Path
 
@@ -141,6 +142,36 @@ def should_download(config: WayperConfig, mode: str) -> bool:
         if count_images(pool_dir(config, mode, orient)) < config.pool_target:
             return True
     return random.random() < 0.2
+
+
+def save_metadata(config: WayperConfig, filename: str, item: dict) -> None:
+    """Persist Wallhaven metadata for a downloaded image."""
+    import time
+
+    mf = config.metadata_file
+    data: dict = json.loads(mf.read_text()) if mf.exists() else {}
+    tags = item.get("tags") or []
+    data[filename] = {
+        "id": item.get("id", ""),
+        "tags": [t["name"] for t in tags] if tags and isinstance(tags[0], dict) else tags,
+        "category": item.get("category", ""),
+        "purity": item.get("purity", ""),
+        "resolution": item.get("resolution", ""),
+        "views": item.get("views", 0),
+        "favorites": item.get("favorites", 0),
+        "url": item.get("url", ""),
+        "colors": item.get("colors", []),
+        "downloaded_at": int(time.time()),
+    }
+    mf.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+
+def load_metadata(config: WayperConfig) -> dict:
+    """Load all saved metadata."""
+    mf = config.metadata_file
+    if not mf.exists():
+        return {}
+    return json.loads(mf.read_text())
 
 
 def ensure_directories(config: WayperConfig) -> None:

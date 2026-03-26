@@ -9,7 +9,7 @@ import httpx
 
 from .config import WayperConfig
 from .image import resize_crop, validate_image
-from .pool import favorites_dir, is_blacklisted, pool_dir
+from .pool import favorites_dir, is_blacklisted, pool_dir, save_metadata
 
 SEARCH_URL = "https://wallhaven.cc/api/v1/search"
 
@@ -27,8 +27,8 @@ class WallhavenClient:
     async def close(self) -> None:
         await self.client.aclose()
 
-    async def search(self, orientation: str, purity: str) -> list[str]:
-        """Return list of image URLs from wallhaven search."""
+    async def search(self, orientation: str, purity: str) -> list[dict]:
+        """Return list of wallpaper data dicts from wallhaven search."""
         page = random.randint(1, self.config.wallhaven.max_page)
         purity_code = _PURITY_CODES.get(purity, "001")
         params = {
@@ -45,7 +45,7 @@ class WallhavenClient:
         try:
             resp = await self.client.get(SEARCH_URL, params=params)
             resp.raise_for_status()
-            return [item["path"] for item in resp.json().get("data", [])]
+            return resp.json().get("data", [])
         except Exception:
             return []
 
@@ -103,8 +103,8 @@ class WallhavenClient:
         target_dir = pool_dir(config, mode, orientation)
         fav_dir = favorites_dir(config, mode, orientation)
 
-        urls = await self.search(orientation, mode)
-        if not urls:
+        items = await self.search(orientation, mode)
+        if not items:
             return
 
         # Find monitor config for resize dimensions
@@ -114,8 +114,11 @@ class WallhavenClient:
                 mon = m
                 break
 
-        sample = random.sample(urls, min(config.wallhaven.batch_size, len(urls)))
-        for url in sample:
+        sample = random.sample(items, min(config.wallhaven.batch_size, len(items)))
+        for item in sample:
+            url = item.get("path", "")
+            if not url:
+                continue
             filename = url.rsplit("/", 1)[-1]
             dest = target_dir / filename
 
@@ -128,6 +131,8 @@ class WallhavenClient:
 
             if not await self.download_image(url, dest):
                 continue
+
+            save_metadata(config, filename, item)
 
             # Resize to monitor resolution
             if mon:

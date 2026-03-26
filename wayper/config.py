@@ -81,6 +81,10 @@ class WayperConfig:
         return self.download_dir / ".history"
 
     @property
+    def metadata_file(self) -> Path:
+        return self.download_dir / ".metadata.json"
+
+    @property
     def pid_file(self) -> Path:
         return CONFIG_DIR / "wayper.pid"
 
