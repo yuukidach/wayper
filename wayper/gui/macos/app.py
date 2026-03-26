@@ -19,7 +19,6 @@ from .settings_window import SettingsWindowController
 
 
 class AppDelegate(NSObject):
-
     def initWithController_config_(self, controller, config):
         self = objc.super(AppDelegate, self).init()
         if self is None:
@@ -41,7 +40,6 @@ class AppDelegate(NSObject):
 
 
 class WayperApp:
-
     @staticmethod
     def launch(config: WayperConfig) -> None:
         # Set process name so menu bar shows "Wayper" instead of "Python"
@@ -70,9 +68,13 @@ def _build_menu(app: NSApplication, controller: MainWindowController) -> None:
 
     # App menu
     app_menu = NSMenu.alloc().initWithTitle_("Wayper")
-    app_menu.addItemWithTitle_action_keyEquivalent_("About Wayper", "orderFrontStandardAboutPanel:", "")
+    app_menu.addItemWithTitle_action_keyEquivalent_(
+        "About Wayper", "orderFrontStandardAboutPanel:", ""
+    )
     app_menu.addItem_(NSMenuItem.separatorItem())
-    prefs_item = app_menu.addItemWithTitle_action_keyEquivalent_("Settings\u2026", "showSettings:", ",")
+    prefs_item = app_menu.addItemWithTitle_action_keyEquivalent_(
+        "Settings\u2026", "showSettings:", ","
+    )
     prefs_item.setTarget_(app.delegate())
     app_menu.addItem_(NSMenuItem.separatorItem())
     app_menu.addItemWithTitle_action_keyEquivalent_("Quit Wayper", "terminate:", "q")
@@ -98,7 +100,9 @@ def _build_menu(app: NSApplication, controller: MainWindowController) -> None:
     browse_item = view_menu.addItemWithTitle_action_keyEquivalent_("Browse", "showBrowse:", "1")
     browse_item.setTarget_(controller)
 
-    actions_item = view_menu.addItemWithTitle_action_keyEquivalent_("Quick Actions", "showActions:", "2")
+    actions_item = view_menu.addItemWithTitle_action_keyEquivalent_(
+        "Quick Actions", "showActions:", "2"
+    )
     actions_item.setTarget_(controller)
 
     view_mi = NSMenuItem.alloc().init()

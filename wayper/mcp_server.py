@@ -18,7 +18,8 @@ from .backend import (
 )
 from .config import NO_TRANSITION, load_config
 from .daemon import is_daemon_running, signal_daemon
-from .history import go_prev, pick_next, push as push_history
+from .history import go_prev, pick_next
+from .history import push as push_history
 from .pool import (
     add_to_blacklist,
     count_images,
@@ -49,13 +50,15 @@ def status() -> dict:
         img = current.get(mon.name)
         pc = count_images(pool_dir(config, current_mode, mon.orientation))
         fc = count_images(favorites_dir(config, current_mode, mon.orientation))
-        monitors_info.append({
-            "name": mon.name,
-            "orientation": mon.orientation,
-            "image": str(img) if img else None,
-            "pool_count": pc,
-            "favorites_count": fc,
-        })
+        monitors_info.append(
+            {
+                "name": mon.name,
+                "orientation": mon.orientation,
+                "image": str(img) if img else None,
+                "pool_count": pc,
+                "favorites_count": fc,
+            }
+        )
 
     daemon_running, _ = is_daemon_running(config)
 
@@ -136,7 +139,9 @@ def fav(open_url: bool = False) -> dict:
 
         if open_url:
             import webbrowser
+
             from .browse._common import wallhaven_url
+
             webbrowser.open(wallhaven_url(img))
 
         notify("Wallpaper", "Saved to favorites")

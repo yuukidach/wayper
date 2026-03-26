@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import webbrowser
 from pathlib import Path
 
 import gi
@@ -11,13 +10,17 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk
 
-from ...backend import get_context, get_focused_monitor, query_current, set_wallpaper
-from ...browse._common import wallhaven_url
-from ...config import NO_TRANSITION, WayperConfig
-from ...history import go_prev, pick_next
-from ...history import push as push_history
-from ...pool import add_to_blacklist, favorites_dir, pick_random, pool_dir, remove_from_blacklist
-from ...state import pop_undo, push_undo, read_mode, restore_from_trash
+from ...backend import get_focused_monitor, query_current
+from ...config import WayperConfig
+from ..actions import (
+    do_dislike,
+    do_favorite,
+    do_next,
+    do_open_wallhaven,
+    do_prev,
+    do_undislike,
+    do_unfavorite,
+)
 
 
 class ActionsPanel:
@@ -162,87 +165,37 @@ class ActionsPanel:
     # ── Actions ──
 
     def _do_next(self):
-        monitor, mon_cfg, _ = get_context(self.config)
-        if not mon_cfg:
-            return
-        img = pick_next(self.config, monitor, mon_cfg.orientation)
-        if img:
-            set_wallpaper(monitor, img, self.config.transition)
+        do_next(self.config)
         self._current_path = None
         self._refresh()
 
     def _do_prev(self):
-        monitor, mon_cfg, _ = get_context(self.config)
-        if not mon_cfg:
-            return
-        img = go_prev(self.config, monitor)
-        if img:
-            set_wallpaper(monitor, img, self.config.transition)
+        do_prev(self.config)
         self._current_path = None
         self._refresh()
 
     def _do_fav(self):
-        monitor, mon_cfg, img = get_context(self.config)
-        if not img or not mon_cfg:
-            return
-        if "favorites" in str(img):
-            return
-        mode = read_mode(self.config)
-        dest_dir = favorites_dir(self.config, mode, mon_cfg.orientation)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / img.name
-        img.rename(dest)
-        set_wallpaper(monitor, dest, NO_TRANSITION)
+        do_favorite(self.config)
         self._current_path = None
         self._refresh()
 
     def _do_unfav(self):
-        monitor, mon_cfg, img = get_context(self.config)
-        if not img or not mon_cfg:
-            return
-        if "favorites" not in str(img):
-            return
-        mode = read_mode(self.config)
-        dest_dir = pool_dir(self.config, mode, mon_cfg.orientation)
-        dest = dest_dir / img.name
-        img.rename(dest)
-        set_wallpaper(monitor, dest, NO_TRANSITION)
+        do_unfavorite(self.config)
         self._current_path = None
         self._refresh()
 
     def _do_dislike(self):
-        monitor, mon_cfg, img = get_context(self.config)
-        if not img or not mon_cfg:
-            return
-        if "favorites" in str(img):
-            return
-        mode = read_mode(self.config)
-        next_img = pick_random(self.config, mode, mon_cfg.orientation)
-        if next_img:
-            set_wallpaper(monitor, next_img, self.config.transition)
-            push_history(self.config, monitor, next_img)
-        add_to_blacklist(self.config, img.name)
-        push_undo(self.config, img.name, img.parent)
+        do_dislike(self.config)
         self._current_path = None
         self._refresh()
 
     def _do_undislike(self):
-        entry = pop_undo(self.config)
-        if not entry:
-            return
-        filename, orig_dir = entry
-        restored = restore_from_trash(self.config, filename, orig_dir)
-        remove_from_blacklist(self.config, filename)
-        if restored:
-            monitor = get_focused_monitor()
-            if monitor:
-                set_wallpaper(monitor, restored, self.config.transition)
+        do_undislike(self.config)
         self._current_path = None
         self._refresh()
 
     def _do_open(self):
-        if self._current_path:
-            webbrowser.open(wallhaven_url(self._current_path))
+        do_open_wallhaven(self._current_path)
 
     # ── Keyboard ──
 

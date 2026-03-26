@@ -26,7 +26,8 @@ class WayperGtkApp(Gtk.Application):
             css = Gtk.CssProvider()
             css.load_from_data(CSS)
             Gtk.StyleContext.add_provider_for_display(
-                Gdk.Display.get_default(), css,
+                Gdk.Display.get_default(),
+                css,
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
             )
             WayperGtkApp._css_applied = True

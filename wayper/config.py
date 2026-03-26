@@ -89,7 +89,7 @@ def compact_home(path: Path | str) -> str:
     """Replace home dir prefix with ~ for display/serialization."""
     s = str(path)
     home = str(Path.home())
-    return "~" + s[len(home):] if s.startswith(home) else s
+    return "~" + s[len(home) :] if s.startswith(home) else s
 
 
 def _esc(s: str) -> str:
@@ -160,9 +160,7 @@ def load_config(path: Path | None = None) -> WayperConfig:
     if path.exists():
         raw = tomllib.loads(path.read_text())
 
-    monitors = [
-        MonitorConfig(**m) for m in raw.get("monitors", [])
-    ]
+    monitors = [MonitorConfig(**m) for m in raw.get("monitors", [])]
 
     wallhaven_raw = raw.get("wallhaven", {})
     wallhaven = WallhavenConfig(
@@ -188,8 +186,10 @@ def load_config(path: Path | None = None) -> WayperConfig:
         sudo_password=greeter_raw.get("sudo_password"),
     )
 
-    download_dir = Path(raw["download_dir"]).expanduser() if "download_dir" in raw else (
-        Path.home() / "Pictures" / "wallpaper"
+    download_dir = (
+        Path(raw["download_dir"]).expanduser()
+        if "download_dir" in raw
+        else (Path.home() / "Pictures" / "wallpaper")
     )
 
     return WayperConfig(

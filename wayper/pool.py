@@ -25,7 +25,9 @@ def disk_usage_mb(config: WayperConfig) -> float:
     """Total disk usage of download_dir in MB."""
     if not config.download_dir.exists():
         return 0.0
-    return sum(f.stat().st_size for f in config.download_dir.rglob("*") if f.is_file()) / 1024 / 1024
+    return (
+        sum(f.stat().st_size for f in config.download_dir.rglob("*") if f.is_file()) / 1024 / 1024
+    )
 
 
 def pool_dir(config: WayperConfig, mode: str, orientation: str) -> Path:
@@ -70,6 +72,7 @@ def is_blacklisted(config: WayperConfig, filename: str) -> bool:
 
 def add_to_blacklist(config: WayperConfig, filename: str) -> None:
     import time
+
     with open(config.blacklist_file, "a") as f:
         f.write(f"{int(time.time())} {filename}\n")
 
@@ -89,6 +92,7 @@ def remove_from_blacklist(config: WayperConfig, filename: str) -> None:
 def prune_blacklist(config: WayperConfig) -> None:
     """Remove blacklist entries older than TTL."""
     import time
+
     bf = config.blacklist_file
     if not bf.exists():
         return

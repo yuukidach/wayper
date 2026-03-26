@@ -14,11 +14,17 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
 
 from ...backend import find_monitor, get_focused_monitor, set_wallpaper
-from ...browse._common import get_blocklist_only, get_images, get_orient, wallhaven_url
+from ...browse._common import (
+    get_blocklist_only,
+    get_images,
+    perform_context_action,
+    perform_delete,
+    perform_favorite,
+    wallhaven_url,
+)
 from ...config import WayperConfig
 from ...history import push as push_history
-from ...pool import add_to_blacklist, favorites_dir, pool_dir, remove_from_blacklist
-from ...state import push_undo, read_mode, write_mode
+from ...state import read_mode, write_mode
 
 THUMB_SIZE = 200
 CATEGORIES = ("pool", "favorites", "disliked")
@@ -118,8 +124,7 @@ class BrowsePanel:
     def _reload_images(self):
         self.images = get_images(self.category, self.mode, self.config)
         self._blocklist_only = (
-            get_blocklist_only(self.images, self.config)
-            if self.category == "disliked" else []
+            get_blocklist_only(self.images, self.config) if self.category == "disliked" else []
         )
         self._populate_grid()
         self._update_status()
@@ -173,13 +178,18 @@ class BrowsePanel:
         def worker():
             try:
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                    path, THUMB_SIZE * 2, THUMB_SIZE * 2, True,
+                    path,
+                    THUMB_SIZE * 2,
+                    THUMB_SIZE * 2,
+                    True,
                 )
                 w, h = pixbuf.get_width(), pixbuf.get_height()
                 side = min(w, h)
                 cropped = pixbuf.new_subpixbuf((w - side) // 2, (h - side) // 2, side, side)
                 scaled = cropped.scale_simple(
-                    THUMB_SIZE, THUMB_SIZE, GdkPixbuf.InterpType.BILINEAR,
+                    THUMB_SIZE,
+                    THUMB_SIZE,
+                    GdkPixbuf.InterpType.BILINEAR,
                 )
                 GLib.idle_add(_set, scaled)
             except Exception:
@@ -237,47 +247,21 @@ class BrowsePanel:
     def _favorite(self):
         if not self.selected_path or not self.selected_path.exists():
             return
-        path = self.selected_path
-        orient = get_orient(path)
-        dest = favorites_dir(self.config, self.mode, orient) / path.name
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        path.rename(dest)
+        perform_favorite(self.config, self.selected_path, self.mode)
         self._remove_selected()
 
     def _context_action(self):
-        if self.category == "disliked" and self._selected_name and not self.selected_path:
-            remove_from_blacklist(self.config, self._selected_name)
-            self._remove_selected()
-            return
-
-        if not self.selected_path or not self.selected_path.exists():
-            return
-        path = self.selected_path
-        orient = get_orient(path)
-
-        if self.category == "favorites":
-            dest = pool_dir(self.config, self.mode, orient) / path.name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            path.rename(dest)
-        elif self.category == "pool":
-            add_to_blacklist(self.config, path.name)
-            push_undo(self.config, path.name, path.parent)
-        elif self.category == "disliked":
-            dest = pool_dir(self.config, self.mode, orient) / path.name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            path.rename(dest)
-            remove_from_blacklist(self.config, path.name)
-
+        perform_context_action(
+            self.config,
+            self.selected_path,
+            self.category,
+            self.mode,
+            self._selected_name,
+        )
         self._remove_selected()
 
     def _delete(self):
-        if self._selected_name and not self.selected_path:
-            remove_from_blacklist(self.config, self._selected_name)
-            self._remove_selected()
-            return
-        if not self.selected_path or not self.selected_path.exists():
-            return
-        self.selected_path.unlink()
+        perform_delete(self.config, self.selected_path, self._selected_name)
         self._remove_selected()
 
     def _remove_selected(self):
@@ -317,9 +301,7 @@ class BrowsePanel:
 
     def _update_status(self):
         n = len(self.images) + len(self._blocklist_only)
-        self.status_label.set_text(
-            f"{n} image{'s' if n != 1 else ''} \u00b7 {self.mode.upper()}"
-        )
+        self.status_label.set_text(f"{n} image{'s' if n != 1 else ''} \u00b7 {self.mode.upper()}")
 
     def _update_buttons(self):
         has_file = self.selected_path is not None

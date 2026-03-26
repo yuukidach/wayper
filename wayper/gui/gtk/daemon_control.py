@@ -14,9 +14,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gtk
 
 from ...config import WayperConfig
-from ...daemon import is_daemon_running
-from ...pool import count_images, disk_usage_mb, favorites_dir, pool_dir
-from ...state import read_mode
+from ...daemon import compute_daemon_state, is_daemon_running
 
 
 def _find_wayper_cli() -> str:
@@ -72,26 +70,11 @@ class DaemonControlBar:
         self._refresh()
 
     def _refresh(self):
-        running, _ = is_daemon_running(self.config)
-        mode = read_mode(self.config)
-
-        if self._last_state and self._last_state[:2] == (running, mode):
-            return
-
-        pool_count = sum(
-            count_images(pool_dir(self.config, mode, o))
-            for o in ("landscape", "portrait")
-        )
-        fav_count = sum(
-            count_images(favorites_dir(self.config, mode, o))
-            for o in ("landscape", "portrait")
-        )
-        disk_mb = disk_usage_mb(self.config)
-
-        state = (running, mode, pool_count, fav_count, round(disk_mb))
+        state = compute_daemon_state(self.config)
         if state == self._last_state:
             return
         self._last_state = state
+        running, mode, pool_count, fav_count, disk_mb = state
 
         if running:
             self._status_dot.remove_css_class("status-dot-stopped")
@@ -146,4 +129,3 @@ class DaemonControlBar:
         self._last_state = None
         self._refresh()
         return False  # one-shot
-
