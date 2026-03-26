@@ -20,6 +20,13 @@
 </p>
 </details>
 
+<details>
+<summary>GUI 截图</summary>
+<p align="center">
+  <img src="assets/browse.png" alt="GTK4 GUI 浏览界面" width="720">
+</p>
+</details>
+
 ## 为什么选 wayper？
 
 - **Wallhaven 集成** — 根据搜索偏好自动从 [Wallhaven](https://wallhaven.cc) 下载壁纸，无需手动找图。

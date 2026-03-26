@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import subprocess
+import time
 from pathlib import Path
 
 from .backend import ensure_ready, set_wallpaper
@@ -82,6 +83,15 @@ def signal_daemon(config: WayperConfig, sig: int) -> bool:
     return False
 
 
+def read_last_rotation(config: WayperConfig) -> float | None:
+    """Read the timestamp of the last wallpaper rotation. Returns None if missing/invalid."""
+    path = config.download_dir / ".last_rotation"
+    try:
+        return float(path.read_text().strip())
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+
+
 def set_all_wallpapers(config: WayperConfig, mode: str) -> None:
     """Set wallpaper on all configured monitors."""
     history_items: list[tuple[str, Path]] = []
@@ -151,6 +161,7 @@ async def run_daemon(config: WayperConfig) -> None:
 
             # Set wallpapers immediately
             set_all_wallpapers(config, mode)
+            (config.download_dir / ".last_rotation").write_text(str(time.time()))
 
             # Download if needed
             if should_download(config, mode):

@@ -22,12 +22,20 @@ def count_images(directory: Path) -> int:
 
 
 def disk_usage_mb(config: WayperConfig) -> float:
-    """Total disk usage of download_dir in MB."""
-    if not config.download_dir.exists():
-        return 0.0
-    return (
-        sum(f.stat().st_size for f in config.download_dir.rglob("*") if f.is_file()) / 1024 / 1024
-    )
+    """Disk usage of pool + favorites images in MB (excludes trash, cache, state files)."""
+    total = 0
+    for purity in ("sfw", "nsfw"):
+        # Pool dirs
+        for orient in ("landscape", "portrait"):
+            d = config.download_dir / purity / orient
+            if d.is_dir():
+                total += sum(f.stat().st_size for f in d.iterdir() if f.is_file())
+        # Favorites dirs
+        for orient in ("landscape", "portrait"):
+            d = config.download_dir / "favorites" / purity / orient
+            if d.is_dir():
+                total += sum(f.stat().st_size for f in d.iterdir() if f.is_file())
+    return total / 1024 / 1024
 
 
 def pool_dir(config: WayperConfig, mode: str, orientation: str) -> Path:

@@ -24,12 +24,13 @@ class MainWindow(Gtk.ApplicationWindow):
     def __init__(self, config: WayperConfig, **kwargs):
         super().__init__(**kwargs)
         self.config = config
-        self._active_view = 0  # 0=Browse, 1=Quick Actions
+        self._active_view = 0  # 0=Browse, 1=Quick Actions, 2=Wallhaven
         self._mode = read_mode(config)
 
         self._browse = BrowsePanel(config, category="pool")
         self._actions = ActionsPanel(config)
         self._daemon = DaemonControlBar(config)
+        self._wallhaven = None  # Lazy init
 
         self.set_title("Wayper")
         self.set_default_size(1200, 750)
@@ -75,10 +76,15 @@ class MainWindow(Gtk.ApplicationWindow):
         self._view_actions_btn = Gtk.ToggleButton(label="Quick Actions")
         self._view_actions_btn.add_css_class("view-btn")
         self._view_actions_btn.set_group(self._view_browse_btn)
+        self._view_wallhaven_btn = Gtk.ToggleButton(label="Wallhaven")
+        self._view_wallhaven_btn.add_css_class("view-btn")
+        self._view_wallhaven_btn.set_group(self._view_browse_btn)
         self._view_browse_btn.connect("toggled", self._on_view_toggled, 0)
         self._view_actions_btn.connect("toggled", self._on_view_toggled, 1)
+        self._view_wallhaven_btn.connect("toggled", self._on_view_toggled, 2)
         view_box.append(self._view_browse_btn)
         view_box.append(self._view_actions_btn)
+        view_box.append(self._view_wallhaven_btn)
         header.set_title_widget(view_box)
 
         # Right: settings gear + mode toggle
@@ -96,7 +102,7 @@ class MainWindow(Gtk.ApplicationWindow):
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_child(vbox)
 
-        # Stack for browse / actions
+        # Stack for browse / actions / wallhaven
         self._stack = Gtk.Stack()
         self._stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self._stack.set_vexpand(True)
@@ -115,6 +121,15 @@ class MainWindow(Gtk.ApplicationWindow):
         self._daemon.widget.set_margin_bottom(6)
         vbox.append(self._daemon.widget)
 
+    def _ensure_wallhaven_view(self):
+        """Lazy-init the Wallhaven panel."""
+        if self._wallhaven is not None:
+            return
+        from .wallhaven_view import WallhavenPanel
+
+        self._wallhaven = WallhavenPanel(self.config)
+        self._stack.add_named(self._wallhaven.widget, "wallhaven")
+
     # ── View switching ──
 
     def _show_view(self, idx: int):
@@ -122,9 +137,13 @@ class MainWindow(Gtk.ApplicationWindow):
         if idx == 0:
             self._stack.set_visible_child_name("browse")
             self._actions.stop_polling()
-        else:
+        elif idx == 1:
             self._stack.set_visible_child_name("actions")
             self._actions.start_polling()
+        elif idx == 2:
+            self._ensure_wallhaven_view()
+            self._stack.set_visible_child_name("wallhaven")
+            self._actions.stop_polling()
         self._cat_box.set_visible(idx == 0)
 
     # ── Callbacks ──
@@ -159,8 +178,10 @@ class MainWindow(Gtk.ApplicationWindow):
 
         # Delegate to active panel
         if self._active_view == 0:
-            return self._browse.handle_key(keyval)
-        return self._actions.handle_key(keyval)
+            return self._browse.handle_key(keyval, state)
+        if self._active_view == 1:
+            return self._actions.handle_key(keyval)
+        return False
 
     def _open_settings(self):
         SettingsWindow.show_for(self.config, parent=self, on_save=self._on_settings_saved)
@@ -181,4 +202,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self._actions.stop_polling()
         self._daemon.stop_polling()
         self._browse.shutdown()
+        if self._wallhaven:
+            self._wallhaven.shutdown()
         return False

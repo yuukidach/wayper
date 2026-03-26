@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from ..config import WayperConfig
@@ -31,6 +32,34 @@ def get_orient(img_path: Path) -> str:
         return "landscape"
 
 
+def format_size(size_bytes: int) -> str:
+    """Format byte count as human-readable string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.0f} KB"
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def sort_images(images: list[Path], key: str = "newest") -> list[Path]:
+    """Sort images by the given key."""
+    if key == "newest":
+        stats = {p: os.stat(p).st_mtime for p in images}
+        return sorted(images, key=lambda p: stats[p], reverse=True)
+    if key == "oldest":
+        stats = {p: os.stat(p).st_mtime for p in images}
+        return sorted(images, key=lambda p: stats[p])
+    if key == "largest":
+        stats = {p: os.stat(p).st_size for p in images}
+        return sorted(images, key=lambda p: stats[p], reverse=True)
+    if key == "smallest":
+        stats = {p: os.stat(p).st_size for p in images}
+        return sorted(images, key=lambda p: stats[p])
+    if key == "name":
+        return sorted(images, key=lambda p: p.name.lower())
+    return images
+
+
 def get_images(category: str, mode: str, config: WayperConfig) -> list[Path]:
     """Collect images for category and mode."""
     images: list[Path] = []
@@ -42,7 +71,8 @@ def get_images(category: str, mode: str, config: WayperConfig) -> list[Path]:
     else:
         for orient in ("landscape", "portrait"):
             images.extend(list_images(pool_dir(config, mode, orient)))
-    return sorted(images, key=lambda p: p.stat().st_mtime, reverse=True)
+    stats = {p: os.stat(p).st_mtime for p in images}
+    return sorted(images, key=lambda p: stats[p], reverse=True)
 
 
 def get_blocklist_only(images: list[Path], config: WayperConfig) -> list[str]:

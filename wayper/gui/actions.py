@@ -3,39 +3,58 @@
 from __future__ import annotations
 
 import webbrowser
+from pathlib import Path
 
-from ..backend import get_context, get_focused_monitor, set_wallpaper
+from ..backend import (
+    find_monitor,
+    get_context,
+    get_focused_monitor,
+    query_current,
+    set_wallpaper,
+)
 from ..browse._common import wallhaven_url
-from ..config import NO_TRANSITION, WayperConfig
+from ..config import NO_TRANSITION, MonitorConfig, WayperConfig
 from ..history import go_prev, pick_next
 from ..history import push as push_history
 from ..pool import add_to_blacklist, favorites_dir, pick_random, pool_dir, remove_from_blacklist
 from ..state import pop_undo, push_undo, read_mode, restore_from_trash
 
 
-def do_next(config: WayperConfig) -> None:
+def _resolve_context(
+    config: WayperConfig, monitor: str | None = None
+) -> tuple[str | None, MonitorConfig | None, Path | None]:
+    """Resolve monitor context, optionally overriding the focused monitor."""
+    if monitor:
+        mon_cfg = find_monitor(config, monitor)
+        current = query_current()
+        img = current.get(monitor)
+        return monitor, mon_cfg, img
+    return get_context(config)
+
+
+def do_next(config: WayperConfig, monitor: str | None = None) -> None:
     """Pick next wallpaper from history/pool and apply it."""
-    monitor, mon_cfg, _ = get_context(config)
+    mon, mon_cfg, _ = _resolve_context(config, monitor)
     if not mon_cfg:
         return
-    img = pick_next(config, monitor, mon_cfg.orientation)
+    img = pick_next(config, mon, mon_cfg.orientation)
     if img:
-        set_wallpaper(monitor, img, config.transition)
+        set_wallpaper(mon, img, config.transition)
 
 
-def do_prev(config: WayperConfig) -> None:
+def do_prev(config: WayperConfig, monitor: str | None = None) -> None:
     """Go back to previous wallpaper in history."""
-    monitor, mon_cfg, _ = get_context(config)
+    mon, mon_cfg, _ = _resolve_context(config, monitor)
     if not mon_cfg:
         return
-    img = go_prev(config, monitor)
+    img = go_prev(config, mon)
     if img:
-        set_wallpaper(monitor, img, config.transition)
+        set_wallpaper(mon, img, config.transition)
 
 
-def do_favorite(config: WayperConfig) -> None:
+def do_favorite(config: WayperConfig, monitor: str | None = None) -> None:
     """Move current wallpaper to favorites."""
-    monitor, mon_cfg, img = get_context(config)
+    mon, mon_cfg, img = _resolve_context(config, monitor)
     if not img or not mon_cfg:
         return
     if "favorites" in str(img):
@@ -45,12 +64,12 @@ def do_favorite(config: WayperConfig) -> None:
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / img.name
     img.rename(dest)
-    set_wallpaper(monitor, dest, NO_TRANSITION)
+    set_wallpaper(mon, dest, NO_TRANSITION)
 
 
-def do_unfavorite(config: WayperConfig) -> None:
+def do_unfavorite(config: WayperConfig, monitor: str | None = None) -> None:
     """Move current wallpaper back to pool from favorites."""
-    monitor, mon_cfg, img = get_context(config)
+    mon, mon_cfg, img = _resolve_context(config, monitor)
     if not img or not mon_cfg:
         return
     if "favorites" not in str(img):
@@ -59,12 +78,12 @@ def do_unfavorite(config: WayperConfig) -> None:
     dest_dir = pool_dir(config, mode, mon_cfg.orientation)
     dest = dest_dir / img.name
     img.rename(dest)
-    set_wallpaper(monitor, dest, NO_TRANSITION)
+    set_wallpaper(mon, dest, NO_TRANSITION)
 
 
-def do_dislike(config: WayperConfig) -> None:
+def do_dislike(config: WayperConfig, monitor: str | None = None) -> None:
     """Blacklist current wallpaper and show a random replacement."""
-    monitor, mon_cfg, img = get_context(config)
+    mon, mon_cfg, img = _resolve_context(config, monitor)
     if not img or not mon_cfg:
         return
     if "favorites" in str(img):
@@ -72,13 +91,13 @@ def do_dislike(config: WayperConfig) -> None:
     mode = read_mode(config)
     next_img = pick_random(config, mode, mon_cfg.orientation)
     if next_img:
-        set_wallpaper(monitor, next_img, config.transition)
-        push_history(config, monitor, next_img)
+        set_wallpaper(mon, next_img, config.transition)
+        push_history(config, mon, next_img)
     add_to_blacklist(config, img.name)
     push_undo(config, img.name, img.parent)
 
 
-def do_undislike(config: WayperConfig) -> None:
+def do_undislike(config: WayperConfig, monitor: str | None = None) -> None:
     """Undo last dislike: restore from trash and remove from blacklist."""
     entry = pop_undo(config)
     if not entry:
@@ -87,9 +106,9 @@ def do_undislike(config: WayperConfig) -> None:
     restored = restore_from_trash(config, filename, orig_dir)
     remove_from_blacklist(config, filename)
     if restored:
-        monitor = get_focused_monitor()
-        if monitor:
-            set_wallpaper(monitor, restored, config.transition)
+        target = monitor or get_focused_monitor()
+        if target:
+            set_wallpaper(target, restored, config.transition)
 
 
 def do_open_wallhaven(current_path) -> None:

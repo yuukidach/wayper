@@ -20,6 +20,13 @@
 </p>
 </details>
 
+<details>
+<summary>GUI screenshot</summary>
+<p align="center">
+  <img src="assets/browse.png" alt="GTK4 GUI browse view" width="720">
+</p>
+</details>
+
 ## Why wayper?
 
 - **Wallhaven integration** — auto-downloads wallpapers from [Wallhaven](https://wallhaven.cc) based on your search preferences. No manual sourcing.
