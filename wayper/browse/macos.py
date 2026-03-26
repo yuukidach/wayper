@@ -514,7 +514,11 @@ class BrowseWindow(NSWindow):
 # ── Entry point ───────────────────────────────────────────
 
 def run(config: WayperConfig, category: str = "favorites") -> None:
+    from AppKit import NSApplicationActivationPolicyRegular
+
     app = NSApplication.sharedApplication()
+    app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
     controller = BrowseController.alloc().initWithConfig_category_(config, category)
     controller.window.makeKeyAndOrderFront_(None)
+    app.activateIgnoringOtherApps_(True)
     app.run()
