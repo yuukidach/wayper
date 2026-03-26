@@ -1,27 +1,63 @@
-"""Linux backend: swww + hyprctl."""
+"""Linux backend: awww + hyprctl."""
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from ..config import TransitionConfig
 from .base import WallpaperBackend
 
+log = logging.getLogger("wayper")
+
 
 class LinuxBackend(WallpaperBackend):
-    """Wayland backend using swww and hyprctl."""
+    """Wayland backend using awww and hyprctl."""
+
+    def ensure_ready(self) -> None:
+        """Start awww-daemon if it is not already running."""
+        if self._daemon_running():
+            return
+        log.info("Starting awww-daemon...")
+        subprocess.Popen(
+            ["awww-daemon"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        for _ in range(10):
+            time.sleep(0.5)
+            if self._daemon_running():
+                log.info("awww-daemon is ready")
+                return
+        log.warning("awww-daemon may not be ready yet")
+
+    def _daemon_running(self) -> bool:
+        result = subprocess.run(
+            ["awww", "query"],
+            capture_output=True,
+            check=False,
+        )
+        return result.returncode == 0
 
     def set_wallpaper(self, monitor: str, image: Path, transition: TransitionConfig) -> None:
         subprocess.run(
             [
-                "swww", "img", str(image),
-                "--outputs", monitor,
-                "--transition-type", transition.type,
-                "--transition-duration", str(transition.duration),
-                "--transition-fps", str(transition.fps),
+                "awww",
+                "img",
+                str(image),
+                "--outputs",
+                monitor,
+                "--transition-type",
+                transition.type,
+                "--transition-duration",
+                str(transition.duration),
+                "--transition-fps",
+                str(transition.fps),
             ],
             check=False,
             stdout=subprocess.DEVNULL,
@@ -32,7 +68,9 @@ class LinuxBackend(WallpaperBackend):
         try:
             result = subprocess.run(
                 ["hyprctl", "activeworkspace", "-j"],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             )
             data = json.loads(result.stdout)
             return data.get("monitor")
@@ -41,7 +79,10 @@ class LinuxBackend(WallpaperBackend):
 
     def query_current(self) -> dict[str, Path | None]:
         result = subprocess.run(
-            ["swww", "query"], capture_output=True, text=True, check=False,
+            ["awww", "query"],
+            capture_output=True,
+            text=True,
+            check=False,
         )
         current: dict[str, Path | None] = {}
         for line in result.stdout.strip().splitlines():

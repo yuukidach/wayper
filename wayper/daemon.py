@@ -9,13 +9,15 @@ import signal
 import subprocess
 from pathlib import Path
 
+from .backend import ensure_ready, set_wallpaper
 from .config import WayperConfig
-from .backend import set_wallpaper
 from .history import push_many
 from .pool import (
     count_images,
+    disk_usage_mb,
     enforce_quota,
     ensure_directories,
+    favorites_dir,
     pick_random,
     pool_dir,
     prune_blacklist,
@@ -61,6 +63,16 @@ def is_daemon_running(config: WayperConfig) -> tuple[bool, int | None]:
         return False, None
 
 
+def compute_daemon_state(config: WayperConfig) -> tuple[bool, str, int, int, int]:
+    """Compute daemon state tuple: (running, mode, pool_count, fav_count, disk_mb_rounded)."""
+    running, _ = is_daemon_running(config)
+    mode = read_mode(config)
+    pool_count = sum(count_images(pool_dir(config, mode, o)) for o in ("landscape", "portrait"))
+    fav_count = sum(count_images(favorites_dir(config, mode, o)) for o in ("landscape", "portrait"))
+    disk_mb = disk_usage_mb(config)
+    return running, mode, pool_count, fav_count, round(disk_mb)
+
+
 def signal_daemon(config: WayperConfig, sig: int) -> bool:
     """Send a signal to the running daemon. Returns True if sent."""
     running, pid = is_daemon_running(config)
@@ -86,8 +98,9 @@ def update_greeter(config: WayperConfig) -> None:
     if not config.greeter.image:
         return
 
-    from .pool import list_images
     import random
+
+    from .pool import list_images
 
     sfw_landscape = pool_dir(config, "sfw", "landscape")
     images = list_images(sfw_landscape)
@@ -99,11 +112,15 @@ def update_greeter(config: WayperConfig) -> None:
         cmd = ["sudo", "-S", "cp", str(img), str(config.greeter.image)]
         pwd = config.greeter.sudo_password
         if pwd:
-            subprocess.run(cmd, input=pwd.encode(), check=False,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(
+                cmd,
+                input=pwd.encode(),
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         else:
-            subprocess.run(cmd, check=False,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
@@ -112,6 +129,7 @@ async def run_daemon(config: WayperConfig) -> None:
     global _change_now, _reload_mode
 
     ensure_directories(config)
+    ensure_ready()
     write_pid_file(config)
 
     signal.signal(signal.SIGUSR1, _on_usr1)

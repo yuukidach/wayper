@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 
 from ..config import MonitorConfig, TransitionConfig, WayperConfig
-from .base import WallpaperBackend, find_monitor, get_context as _get_context
+from .base import WallpaperBackend, find_monitor
+from .base import get_context as _get_context
 
 LOCK_PATH = Path("/tmp/wayper.lock")
 
@@ -20,7 +21,7 @@ class FileLock:
         self._fd: int | None = None
         self._blocking = blocking
 
-    def __enter__(self) -> "FileLock":
+    def __enter__(self) -> FileLock:
         self._fd = os.open(str(LOCK_PATH), os.O_WRONLY | os.O_CREAT)
         try:
             flags = fcntl.LOCK_EX if self._blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
@@ -39,9 +40,11 @@ class FileLock:
 def _create_backend() -> WallpaperBackend:
     if sys.platform == "darwin":
         from .macos import MacOSBackend
+
         return MacOSBackend()
     else:
         from .linux import LinuxBackend
+
         return LinuxBackend()
 
 
@@ -71,7 +74,12 @@ def notify(title: str, message: str, timeout_ms: int = 2000) -> None:
     _backend.notify(title, message, timeout_ms)
 
 
+def ensure_ready() -> None:
+    _backend.ensure_ready()
+
+
 __all__ = [
+    "ensure_ready",
     "FileLock",
     "WallpaperBackend",
     "find_monitor",

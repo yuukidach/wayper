@@ -97,7 +97,7 @@ bind = $mod CTRL, F10, exec, wayper fav --open
 bind = $mod, F11,      exec, wayper next
 bind = $mod SHIFT, F11,exec, wayper prev
 bind = $mod, F12,      exec, wayper mode
-exec-once = swww-daemon & sleep 5 && wayper daemon
+exec-once = wayper daemon
 ```
 </details>
 
@@ -143,7 +143,7 @@ See [`example-config.toml`](example-config.toml) for all options — monitors, A
 - Python 3.12+
 - [Wallhaven API key](https://wallhaven.cc/settings/account)
 
-**Linux:** [swww](https://github.com/LGFae/swww), [Hyprland](https://hyprland.org/), GTK4 + PyGObject (`sudo pacman -S python-gobject gtk4`)
+**Linux:** [awww](https://codeberg.org/LGFae/awww), [Hyprland](https://hyprland.org/), GTK4 + PyGObject (`sudo pacman -S python-gobject gtk4`)
 
 **macOS:** `pip install 'wayper[macos]'` (installs PyObjC)
 
