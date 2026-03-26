@@ -1,0 +1,4 @@
+theme: jekyll-theme-cayman
+title: wayper
+description: Cross-platform wallpaper manager with Wallhaven integration and AI-native control.
+baseurl: /wayper
