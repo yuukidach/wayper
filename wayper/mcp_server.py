@@ -146,8 +146,8 @@ def fav(open_url: bool = False) -> dict:
 
         if open_url:
             import webbrowser
-            wall_id = img.stem.replace("wallhaven-", "")
-            webbrowser.open(f"https://wallhaven.cc/w/{wall_id}")
+            from .browse._common import wallhaven_url
+            webbrowser.open(wallhaven_url(img))
 
         notify("Wallpaper", "Saved to favorites")
         return {"action": "fav", "image": str(dest), "opened": open_url}

@@ -29,12 +29,15 @@ class WallpaperBackend(ABC):
 
 
 def find_monitor(config: WayperConfig, name: str | None) -> MonitorConfig | None:
-    """Find monitor config by name."""
+    """Find monitor config by name, falling back to first config if only one exists."""
     if name is None:
         return None
     for m in config.monitors:
         if m.name == name:
             return m
+    # macOS display IDs change on plug/unplug; fall back if there's only one config
+    if len(config.monitors) == 1:
+        return config.monitors[0]
     return None
 
 

@@ -126,8 +126,8 @@ def fav(ctx, open_url):
 
         if open_url:
             import webbrowser
-            wall_id = img.stem.replace("wallhaven-", "")
-            webbrowser.open(f"https://wallhaven.cc/w/{wall_id}")
+            from .browse._common import wallhaven_url
+            webbrowser.open(wallhaven_url(img))
 
         if ctx.obj["json"]:
             click.echo(json_mod.dumps({"action": "fav", "image": str(dest), "opened": open_url}))
@@ -327,7 +327,7 @@ def status(ctx):
               help="Browse the current wallpaper pool.")
 @click.pass_context
 def browse(ctx, category):
-    """Browse wallpapers in a GTK4 image browser."""
+    """Browse wallpapers in a native image browser."""
     from .browse import run
     run(ctx.obj["config"], category)
 

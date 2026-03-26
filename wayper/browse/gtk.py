@@ -12,19 +12,12 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
 
-from .backend import find_monitor, get_focused_monitor, set_wallpaper
-from .config import WayperConfig
-from .history import push as push_history
-from .pool import (
-    IMAGE_EXTENSIONS,
-    add_to_blacklist,
-    favorites_dir,
-    list_blacklist,
-    list_images,
-    pool_dir,
-    remove_from_blacklist,
-)
-from .state import push_undo, read_mode, write_mode
+from ..backend import find_monitor, get_focused_monitor, set_wallpaper
+from ..config import WayperConfig
+from ..history import push as push_history
+from ..pool import add_to_blacklist, favorites_dir, pool_dir, remove_from_blacklist
+from ..state import push_undo, read_mode, write_mode
+from ._common import get_blocklist_only, get_images, get_orient, wallhaven_url
 
 THUMB_SIZE = 200
 CATEGORIES = ("favorites", "pool", "disliked")
@@ -119,40 +112,6 @@ flowboxchild:selected {
     border-color: #89b4fa;
 }
 """
-
-
-def _get_orient(img_path: Path) -> str:
-    """Detect orientation from parent directory name or image dimensions."""
-    if "portrait" in str(img_path.parent):
-        return "portrait"
-    if "landscape" in str(img_path.parent):
-        return "landscape"
-    try:
-        from PIL import Image
-
-        img = Image.open(img_path)
-        return "portrait" if img.height > img.width else "landscape"
-    except Exception:
-        return "landscape"
-
-
-def _get_images(category: str, mode: str, config: WayperConfig) -> list[Path]:
-    """Collect images for category and mode."""
-    images: list[Path] = []
-    if category == "favorites":
-        for orient in ("landscape", "portrait"):
-            images.extend(list_images(favorites_dir(config, mode, orient)))
-    elif category == "disliked":
-        images.extend(list_images(config.trash_dir / mode))
-    else:
-        for orient in ("landscape", "portrait"):
-            images.extend(list_images(pool_dir(config, mode, orient)))
-    return sorted(images, key=lambda p: p.stat().st_mtime, reverse=True)
-
-
-def _wallhaven_url(img_path: Path) -> str:
-    wall_id = img_path.stem.replace("wallhaven-", "")
-    return f"https://wallhaven.cc/w/{wall_id}"
 
 
 class BrowseWindow(Gtk.ApplicationWindow):
@@ -285,16 +244,11 @@ class BrowseWindow(Gtk.ApplicationWindow):
     # ── Data loading ────────────────────────────────────
 
     def _reload_images(self):
-        self.images = _get_images(self.category, self.mode, self.config)
-        # Build blocklist-only entries (no trash file)
-        if self.category == "disliked":
-            trash_names = {p.name for p in self.images}
-            self._blocklist_only = [
-                name for _ts, name in list_blacklist(self.config)
-                if name not in trash_names
-            ]
-        else:
-            self._blocklist_only = []
+        self.images = get_images(self.category, self.mode, self.config)
+        self._blocklist_only = (
+            get_blocklist_only(self.images, self.config)
+            if self.category == "disliked" else []
+        )
         self._populate_grid()
         self._update_status()
         self._update_buttons()
@@ -433,9 +387,9 @@ class BrowseWindow(Gtk.ApplicationWindow):
 
     def _open_url(self):
         if self.selected_path:
-            url = _wallhaven_url(self.selected_path)
+            url = wallhaven_url(self.selected_path)
         elif self._selected_name:
-            url = _wallhaven_url(Path(self._selected_name))
+            url = wallhaven_url(Path(self._selected_name))
         else:
             return
         import webbrowser
@@ -446,7 +400,7 @@ class BrowseWindow(Gtk.ApplicationWindow):
         if not self.selected_path or not self.selected_path.exists():
             return
         path = self.selected_path
-        orient = _get_orient(path)
+        orient = get_orient(path)
         dest = favorites_dir(self.config, self.mode, orient) / path.name
         dest.parent.mkdir(parents=True, exist_ok=True)
         path.rename(dest)
@@ -463,7 +417,7 @@ class BrowseWindow(Gtk.ApplicationWindow):
         if not self.selected_path or not self.selected_path.exists():
             return
         path = self.selected_path
-        orient = _get_orient(path)
+        orient = get_orient(path)
 
         if self.category == "favorites":
             dest = pool_dir(self.config, self.mode, orient) / path.name
