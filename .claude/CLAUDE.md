@@ -1,6 +1,6 @@
 # Wayper
 
-Cross-platform wallpaper manager with Wallhaven integration. Supports macOS (AppKit) and Linux (swww/dbus + GTK4).
+Cross-platform wallpaper manager with Wallhaven integration. Supports macOS (AppKit) and Linux (awww/dbus + GTK4).
 
 ## Quick Reference
 
@@ -46,7 +46,7 @@ wayper/
 ├── backend/         # Platform abstraction layer
 │   ├── base.py      #   WallpaperBackend protocol
 │   ├── macos.py     #   macOS (AppKit/osascript)
-│   └── linux.py     #   Linux (swww/dbus)
+│   └── linux.py     #   Linux (awww/dbus)
 ├── browse/          # Shared browse helpers
 │   └── _common.py   #   get_images, wallhaven_url, etc.
 └── gui/             # GUI app (platform-dispatched)

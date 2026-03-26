@@ -27,6 +27,9 @@ class WallpaperBackend(ABC):
     def notify(self, title: str, message: str, timeout_ms: int = 2000) -> None:
         """Send a desktop notification."""
 
+    def ensure_ready(self) -> None:
+        """Ensure the backend is ready (e.g. start required daemons). No-op by default."""
+
 
 def find_monitor(config: WayperConfig, name: str | None) -> MonitorConfig | None:
     """Find monitor config by name, falling back to first config if only one exists."""
@@ -42,7 +45,8 @@ def find_monitor(config: WayperConfig, name: str | None) -> MonitorConfig | None
 
 
 def get_context(
-    backend: WallpaperBackend, config: WayperConfig,
+    backend: WallpaperBackend,
+    config: WayperConfig,
 ) -> tuple[str | None, MonitorConfig | None, Path | None]:
     monitor = backend.get_focused_monitor()
     mon_cfg = find_monitor(config, monitor)
