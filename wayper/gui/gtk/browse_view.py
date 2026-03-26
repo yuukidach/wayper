@@ -1,7 +1,8 @@
-"""GTK4 wallpaper browser."""
+"""GTK4 browse panel: thumbnail grid + preview + action buttons."""
 
 from __future__ import annotations
 
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -12,178 +13,49 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
 
-from ..backend import find_monitor, get_focused_monitor, set_wallpaper
-from ..config import WayperConfig
-from ..history import push as push_history
-from ..pool import add_to_blacklist, favorites_dir, pool_dir, remove_from_blacklist
-from ..state import push_undo, read_mode, write_mode
-from ._common import get_blocklist_only, get_images, get_orient, wallhaven_url
+from ...backend import find_monitor, get_focused_monitor, set_wallpaper
+from ...browse._common import get_blocklist_only, get_images, get_orient, wallhaven_url
+from ...config import WayperConfig
+from ...history import push as push_history
+from ...pool import add_to_blacklist, favorites_dir, pool_dir, remove_from_blacklist
+from ...state import push_undo, read_mode, write_mode
 
 THUMB_SIZE = 200
-CATEGORIES = ("favorites", "pool", "disliked")
-LABELS = {"favorites": "Favorites [1]", "pool": "Pool [2]", "disliked": "Disliked [3]"}
-
-# Context action label and keyboard hint per category
+CATEGORIES = ("pool", "favorites", "disliked")
 ACTION_CONFIG = {
     "favorites": "Remove",
     "pool": "Reject",
     "disliked": "Restore",
 }
 
-CSS = b"""
-window {
-    background-color: #1e1e2e;
-    color: #cdd6f4;
-}
-headerbar {
-    background-color: #181825;
-    color: #cdd6f4;
-    border-bottom: 1px solid #313244;
-}
-.category-btn {
-    background: #313244;
-    color: #cdd6f4;
-    border-radius: 8px;
-    padding: 4px 14px;
-    min-height: 28px;
-    border: none;
-    box-shadow: none;
-}
-.category-btn:hover {
-    background: #45475a;
-}
-.category-btn:checked {
-    background: #89b4fa;
-    color: #1e1e2e;
-}
-.mode-btn {
-    background: #313244;
-    color: #cdd6f4;
-    border-radius: 8px;
-    padding: 4px 12px;
-    min-height: 28px;
-    border: none;
-}
-.mode-btn:checked {
-    background: #f38ba8;
-    color: #1e1e2e;
-}
-.preview-area {
-    background-color: #181825;
-    border-radius: 12px;
-}
-.action-btn {
-    background: #313244;
-    color: #cdd6f4;
-    border-radius: 8px;
-    padding: 6px 16px;
-    border: none;
-    min-height: 32px;
-}
-.action-btn:hover {
-    background: #45475a;
-}
-.action-btn.destructive {
-    background: #45475a;
-    color: #f38ba8;
-}
-.action-btn.destructive:hover {
-    background: #f38ba8;
-    color: #1e1e2e;
-}
-.status-label {
-    color: #6c7086;
-    font-size: 12px;
-}
-.blocklist-placeholder {
-    background: #313244;
-    border-radius: 10px;
-    color: #6c7086;
-    font-size: 11px;
-}
-flowboxchild {
-    background: transparent;
-    border-radius: 10px;
-    padding: 0;
-    border: 2px solid transparent;
-}
-flowboxchild:selected {
-    background: #313244;
-    border-color: #89b4fa;
-}
-"""
 
+class BrowsePanel:
+    """Embeddable browse panel with thumbnail grid, preview, and action buttons."""
 
-class BrowseWindow(Gtk.ApplicationWindow):
-    def __init__(self, config: WayperConfig, category: str, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, config: WayperConfig, category: str = "pool"):
         self.config = config
         self.category = category
         self.mode = read_mode(config)
         self.selected_path: Path | None = None
-        self._selected_name: str | None = None  # for blocklist-only entries
+        self._selected_name: str | None = None
         self.images: list[Path] = []
-        self._blocklist_only: list[str] = []  # names without trash files
+        self._blocklist_only: list[str] = []
         self._thumb_pool = ThreadPoolExecutor(max_workers=4)
+        self.widget = self._build()
+        self._reload_images()
 
-        self.set_title("wayper")
-        self.set_default_size(1200, 750)
-
-        key_ctrl = Gtk.EventControllerKey.new()
-        key_ctrl.connect("key-pressed", self._on_key)
-        self.add_controller(key_ctrl)
-
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.set_child(vbox)
-
-        self._build_header()
-
+    def _build(self) -> Gtk.Box:
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
         hbox.set_margin_start(16)
         hbox.set_margin_end(16)
         hbox.set_margin_bottom(16)
+        hbox.set_margin_top(8)
         hbox.set_vexpand(True)
-        vbox.append(hbox)
+        hbox.set_hexpand(True)
 
         self._build_grid(hbox)
         self._build_preview(hbox)
-        self._reload_images()
-
-    def do_close_request(self):
-        self._thumb_pool.shutdown(wait=False)
-        return False
-
-    # ── Header ──────────────────────────────────────────
-
-    def _build_header(self):
-        header = Gtk.HeaderBar()
-        header.set_show_title_buttons(True)
-        self.set_titlebar(header)
-
-        cat_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        self._cat_buttons: dict[str, Gtk.ToggleButton] = {}
-        group = None
-        for cat in CATEGORIES:
-            btn = Gtk.ToggleButton(label=LABELS[cat])
-            btn.add_css_class("category-btn")
-            if group:
-                btn.set_group(group)
-            else:
-                group = btn
-            if cat == self.category:
-                btn.set_active(True)
-            btn.connect("toggled", self._on_category_toggled, cat)
-            cat_box.append(btn)
-            self._cat_buttons[cat] = btn
-        header.pack_start(cat_box)
-
-        self._mode_btn = Gtk.ToggleButton(label=f"{self.mode.upper()} [M]")
-        self._mode_btn.add_css_class("mode-btn")
-        self._mode_btn.set_active(self.mode == "nsfw")
-        self._mode_btn.connect("toggled", self._on_mode_toggled)
-        header.pack_end(self._mode_btn)
-
-    # ── Grid ────────────────────────────────────────────
+        return hbox
 
     def _build_grid(self, parent: Gtk.Box):
         scroll = Gtk.ScrolledWindow()
@@ -241,7 +113,7 @@ class BrowseWindow(Gtk.ApplicationWindow):
         parent.append(right)
         self._update_buttons()
 
-    # ── Data loading ────────────────────────────────────
+    # ── Data loading ──
 
     def _reload_images(self):
         self.images = get_images(self.category, self.mode, self.config)
@@ -272,14 +144,13 @@ class BrowseWindow(Gtk.ApplicationWindow):
             box.append(picture)
 
             label = Gtk.Label(label=img_path.stem[-8:])
-            label.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
+            label.set_ellipsize(3)
             label.set_max_width_chars(12)
             box.append(label)
 
             self._load_thumb_async(str(img_path), picture)
             self.flowbox.append(box)
 
-        # Blocklist-only entries (no file on disk)
         for name in self._blocklist_only:
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             box._image_path = None
@@ -301,7 +172,6 @@ class BrowseWindow(Gtk.ApplicationWindow):
     def _load_thumb_async(self, path: str, picture: Gtk.Picture):
         def worker():
             try:
-                # Load at 2x then center-crop to square for uniform grid
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
                     path, THUMB_SIZE * 2, THUMB_SIZE * 2, True,
                 )
@@ -322,18 +192,7 @@ class BrowseWindow(Gtk.ApplicationWindow):
 
         self._thumb_pool.submit(worker)
 
-    # ── Callbacks ───────────────────────────────────────
-
-    def _on_category_toggled(self, btn: Gtk.ToggleButton, cat: str):
-        if btn.get_active():
-            self.category = cat
-            self._reload_images()
-
-    def _on_mode_toggled(self, btn: Gtk.ToggleButton):
-        self.mode = "nsfw" if btn.get_active() else "sfw"
-        btn.set_label(f"{self.mode.upper()} [M]")
-        write_mode(self.config, self.mode)
-        self._reload_images()
+    # ── Callbacks ──
 
     def _on_selected(self, flowbox: Gtk.FlowBox):
         selected = flowbox.get_selected_children()
@@ -353,26 +212,7 @@ class BrowseWindow(Gtk.ApplicationWindow):
             self.preview.set_filename(None)
         self._update_buttons()
 
-    def _on_key(self, ctrl, keyval, keycode, state):
-        actions = {
-            Gdk.KEY_q: self.close,
-            Gdk.KEY_Escape: self.close,
-            Gdk.KEY_Return: self._set_wallpaper,
-            Gdk.KEY_f: self._favorite,
-            Gdk.KEY_x: self._context_action,
-            Gdk.KEY_d: self._delete,
-            Gdk.KEY_o: self._open_url,
-            Gdk.KEY_m: lambda: self._mode_btn.set_active(not self._mode_btn.get_active()),
-            Gdk.KEY_1: lambda: self._cat_buttons["favorites"].set_active(True),
-            Gdk.KEY_2: lambda: self._cat_buttons["pool"].set_active(True),
-            Gdk.KEY_3: lambda: self._cat_buttons["disliked"].set_active(True),
-        }
-        if action := actions.get(keyval):
-            action()
-            return True
-        return False
-
-    # ── Actions ─────────────────────────────────────────
+    # ── Actions ──
 
     def _set_wallpaper(self):
         if not self.selected_path or not self.selected_path.exists():
@@ -392,11 +232,9 @@ class BrowseWindow(Gtk.ApplicationWindow):
             url = wallhaven_url(Path(self._selected_name))
         else:
             return
-        import webbrowser
         webbrowser.open(url)
 
     def _favorite(self):
-        """Move selected image to favorites."""
         if not self.selected_path or not self.selected_path.exists():
             return
         path = self.selected_path
@@ -404,14 +242,12 @@ class BrowseWindow(Gtk.ApplicationWindow):
         dest = favorites_dir(self.config, self.mode, orient) / path.name
         dest.parent.mkdir(parents=True, exist_ok=True)
         path.rename(dest)
-        self._reload_images()
+        self._remove_selected()
 
     def _context_action(self):
-        """Remove (favorites), Dislike (pool), or Restore (disliked)."""
         if self.category == "disliked" and self._selected_name and not self.selected_path:
-            # Blocklist-only entry: just remove from blacklist
             remove_from_blacklist(self.config, self._selected_name)
-            self._reload_images()
+            self._remove_selected()
             return
 
         if not self.selected_path or not self.selected_path.exists():
@@ -432,25 +268,57 @@ class BrowseWindow(Gtk.ApplicationWindow):
             path.rename(dest)
             remove_from_blacklist(self.config, path.name)
 
-        self._reload_images()
+        self._remove_selected()
 
     def _delete(self):
         if self._selected_name and not self.selected_path:
-            # Blocklist-only: remove from blacklist
             remove_from_blacklist(self.config, self._selected_name)
-            self._reload_images()
+            self._remove_selected()
             return
         if not self.selected_path or not self.selected_path.exists():
             return
         self.selected_path.unlink()
-        self._reload_images()
+        self._remove_selected()
 
-    # ── Helpers ─────────────────────────────────────────
+    def _remove_selected(self):
+        """Remove current selection from grid and select the next item."""
+        selected = self.flowbox.get_selected_children()
+        if not selected:
+            return
+        child = selected[0]
+        idx = child.get_index()
+
+        # Remove from internal lists
+        box = child.get_child()
+        img_path = getattr(box, "_image_path", None)
+        bl_name = getattr(box, "_blocklist_name", None)
+        if img_path and img_path in self.images:
+            self.images.remove(img_path)
+        elif bl_name and bl_name in self._blocklist_only:
+            self._blocklist_only.remove(bl_name)
+
+        self.flowbox.remove(child)
+        self._update_status()
+
+        # Select next (or previous if was last)
+        total = len(self.images) + len(self._blocklist_only)
+        if total > 0:
+            next_idx = min(idx, total - 1)
+            next_child = self.flowbox.get_child_at_index(next_idx)
+            if next_child:
+                self.flowbox.select_child(next_child)
+        else:
+            self.selected_path = None
+            self._selected_name = None
+            self.preview.set_filename(None)
+            self._update_buttons()
+
+    # ── Helpers ──
 
     def _update_status(self):
         n = len(self.images) + len(self._blocklist_only)
         self.status_label.set_text(
-            f"{n} image{'s' if n != 1 else ''} · {self.mode.upper()}"
+            f"{n} image{'s' if n != 1 else ''} \u00b7 {self.mode.upper()}"
         )
 
     def _update_buttons(self):
@@ -460,11 +328,9 @@ class BrowseWindow(Gtk.ApplicationWindow):
         self.btn_open.set_sensitive(has_sel)
         self.btn_delete.set_sensitive(has_sel)
 
-        # Favorite button: visible in pool and disliked, only for file entries
         self.btn_fav.set_sensitive(has_file)
         self.btn_fav.set_visible(self.category in ("pool", "disliked"))
 
-        # Context action button: Remove/Dislike/Restore/Unblock
         if self.category == "disliked" and self._selected_name and not has_file:
             label = "Unblock"
         else:
@@ -476,33 +342,31 @@ class BrowseWindow(Gtk.ApplicationWindow):
         else:
             self.btn_action.set_visible(False)
 
+    # ── Public API ──
 
-class BrowseApp(Gtk.Application):
-    _css_applied = False
+    def set_category(self, cat: str):
+        if cat != self.category:
+            self.category = cat
+            self._reload_images()
 
-    def __init__(self, config: WayperConfig, category: str):
-        super().__init__(application_id="io.github.yuukidach.wayper.browse")
-        self._config = config
-        self._category = category
+    def set_mode(self, mode: str):
+        if mode != self.mode:
+            self.mode = mode
+            write_mode(self.config, mode)
+            self._reload_images()
 
-    def do_activate(self):
-        if not BrowseApp._css_applied:
-            css = Gtk.CssProvider()
-            css.load_from_data(CSS)
-            Gtk.StyleContext.add_provider_for_display(
-                Gdk.Display.get_default(), css,
-                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
-            )
-            BrowseApp._css_applied = True
+    def handle_key(self, keyval: int) -> bool:
+        actions = {
+            Gdk.KEY_Return: self._set_wallpaper,
+            Gdk.KEY_f: self._favorite,
+            Gdk.KEY_x: self._context_action,
+            Gdk.KEY_d: self._delete,
+            Gdk.KEY_o: self._open_url,
+        }
+        if action := actions.get(keyval):
+            action()
+            return True
+        return False
 
-        win = BrowseWindow(
-            config=self._config,
-            category=self._category,
-            application=self,
-        )
-        win.present()
-
-
-def run(config: WayperConfig, category: str = "favorites"):
-    app = BrowseApp(config=config, category=category)
-    app.run()
+    def shutdown(self):
+        self._thumb_pool.shutdown(wait=False)

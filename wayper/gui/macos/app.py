@@ -13,7 +13,7 @@ from AppKit import (
 )
 from Foundation import NSBundle, NSObject
 
-from ..config import WayperConfig
+from ...config import WayperConfig
 from .main_window import MainWindowController
 from .settings_window import SettingsWindowController
 
@@ -36,7 +36,8 @@ class AppDelegate(NSObject):
 
     @objc.typedSelector(b"v@:@")
     def showSettings_(self, sender):
-        SettingsWindowController.sharedWithConfig_(self._config).showWindow()
+        on_save = self._controller._on_settings_saved
+        SettingsWindowController.sharedWithConfig_onSave_(self._config, on_save).showWindow()
 
 
 class WayperApp:

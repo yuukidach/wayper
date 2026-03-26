@@ -28,7 +28,7 @@
 - **SFW/NSFW 切换** — 一键切换，跨会话持久化。
 - **历史导航** — 前进/后退浏览壁纸历史，按显示器独立记录。
 - **收藏与黑名单** — 喜欢/不喜欢，支持撤销。收藏的壁纸继续参与轮换。
-- **原生浏览器** — 浏览、预览和管理壁纸集合，支持键盘快捷键。Linux 使用 GTK4，macOS 使用 AppKit。
+- **原生 GUI** — 浏览、预览和管理壁纸集合，集成 daemon 控制和设置。Linux 使用 GTK4，macOS 使用 AppKit。
 - **AI 原生** — 内置 MCP 服务器，AI 助手（Claude Code 等）可以直接控制壁纸。对 AI 说"删掉这张坏壁纸"或"收藏这张"就能执行。
 - **JSON 输出** — 所有命令支持 `--json`，方便脚本和自动化。
 
@@ -65,31 +65,23 @@ wayper dislike              # 拉黑 + 切换
 wayper undislike            # 撤销上次拉黑
 wayper mode [sfw|nsfw]      # 切换模式
 wayper status               # 查看当前状态
-wayper browse               # 原生壁纸浏览器
-wayper-gui                  # 独立 GUI 应用（macOS）
+wayper-gui                  # GUI 应用（浏览、操作、daemon、设置）
 wayper setup                # 安装 .app（macOS）或 .desktop（Linux）
 wayper --json status        # JSON 格式输出
 ```
 
-### 浏览器
+### GUI 应用
 
-原生壁纸浏览器，支持缩略图网格、全尺寸预览和键盘快捷键。Linux 使用 GTK4，macOS 使用 AppKit。
-
-<p align="center">
-  <img src="assets/browse.png" alt="浏览器窗口" width="540">
-</p>
+`wayper-gui` 启动独立应用，集成浏览、快捷操作（下一张/上一张/收藏/拉黑）、daemon 控制和设置。Linux 使用 GTK4，macOS 使用 AppKit。
 
 ```
-方向键     导航网格               1/2/3    切换分类
-Enter      设为壁纸               m        切换 SFW/NSFW
+1/2/3      切换分类               Enter    设为壁纸
 f          收藏                   x        移除/拒绝/恢复
 o          在 Wallhaven 打开      d        删除
-q/Esc      关闭
+n/p        下一张/上一张          m        切换 SFW/NSFW
 ```
 
-### GUI 应用（macOS）
-
-`wayper-gui` 启动独立应用，集成浏览、快捷操作（下一张/上一张/收藏/拉黑）和 daemon 控制。运行 `wayper setup` 将 `Wayper.app` 安装到 `~/Applications`，即可通过 Spotlight/Alfred 启动。
+macOS 上运行 `wayper setup` 将 `Wayper.app` 安装到 `~/Applications`，即可通过 Spotlight/Alfred 启动。
 
 ### Hyprland 快捷键示例
 
@@ -102,8 +94,6 @@ bind = $mod CTRL, F10, exec, wayper fav --open
 bind = $mod, F11,      exec, wayper next
 bind = $mod SHIFT, F11,exec, wayper prev
 bind = $mod, F12,      exec, wayper mode
-bind = $mod, W,        exec, wayper browse
-
 exec-once = swww-daemon & sleep 5 && wayper daemon
 ```
 

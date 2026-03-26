@@ -10,11 +10,12 @@ gui_a = Analysis(
     binaries=[],
     datas=[('assets/icon.icns', 'assets')],
     hiddenimports=[
-        'wayper', 'wayper.gui', 'wayper.gui.app', 'wayper.gui.main_window',
-        'wayper.gui.browse_view', 'wayper.gui.actions_view',
-        'wayper.gui.daemon_control', 'wayper.gui.settings_window', 'wayper.gui.colors',
+        'wayper', 'wayper.gui', 'wayper.gui.macos', 'wayper.gui.macos.app',
+        'wayper.gui.macos.main_window', 'wayper.gui.macos.browse_view',
+        'wayper.gui.macos.actions_view', 'wayper.gui.macos.daemon_control',
+        'wayper.gui.macos.settings_window', 'wayper.gui.macos.colors',
         'wayper.backend', 'wayper.backend.macos',
-        'wayper.browse', 'wayper.browse._common', 'wayper.browse.macos',
+        'wayper.browse', 'wayper.browse._common',
         'wayper.config', 'wayper.daemon', 'wayper.history',
         'wayper.pool', 'wayper.state', 'wayper.image',
         'objc', 'AppKit', 'Foundation', 'Quartz',
@@ -24,7 +25,7 @@ gui_a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['gtk', 'gi', 'wayper.browse.gtk', 'wayper.backend.linux'],
+    excludes=['gtk', 'gi', 'wayper.backend.linux'],
     noarchive=False,
     cipher=block_cipher,
 )
@@ -52,7 +53,7 @@ cli_a = Analysis(
     datas=[],
     hiddenimports=[
         'wayper', 'wayper.backend', 'wayper.backend.macos',
-        'wayper.browse', 'wayper.browse._common', 'wayper.browse.macos',
+        'wayper.browse', 'wayper.browse._common',
         'wayper.config', 'wayper.daemon', 'wayper.history',
         'wayper.pool', 'wayper.state', 'wayper.image',
         'objc', 'AppKit', 'Foundation', 'Quartz',
@@ -62,7 +63,7 @@ cli_a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['gtk', 'gi', 'wayper.browse.gtk', 'wayper.backend.linux'],
+    excludes=['gtk', 'gi', 'wayper.backend.linux'],
     noarchive=False,
     cipher=block_cipher,
 )

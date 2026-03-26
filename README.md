@@ -28,7 +28,7 @@
 - **SFW/NSFW toggle** — one key to switch. Persistent across sessions.
 - **History navigation** — prev/next through your wallpaper history. Browser-style back/forward per monitor.
 - **Favorites & blacklist** — like/dislike with undo. Favorites stay in rotation.
-- **Native browser** — browse, preview, and manage your collection. GTK4 on Linux, AppKit on macOS. Keyboard-driven.
+- **Native GUI** — browse, preview, and manage your collection with daemon control and settings. GTK4 on Linux, AppKit on macOS. Keyboard-driven.
 - **AI-native** — built-in MCP server lets AI assistants (Claude Code, etc.) control your wallpapers directly. Ask your AI to "delete this broken wallpaper" or "favorite this one" — it just works.
 - **JSON output** — `--json` flag on every command for scripting and automation.
 
@@ -65,26 +65,23 @@ wayper dislike              # blacklist + switch
 wayper undislike            # undo last dislike
 wayper mode [sfw|nsfw]      # toggle or set mode
 wayper status               # show current state
-wayper browse               # native wallpaper browser
-wayper-gui                  # standalone GUI app (macOS)
+wayper-gui                  # GUI app (browse, actions, daemon, settings)
 wayper setup                # install .app bundle (macOS) or .desktop entry (Linux)
 wayper --json status        # machine-readable output
 ```
 
-### Browse
+### GUI App
 
-Native wallpaper browser with thumbnail grid, full-size preview, and keyboard shortcuts. Uses GTK4 on Linux, AppKit on macOS.
+`wayper-gui` launches a standalone app with browse, quick actions (next/prev/fav/dislike), daemon control, and settings — all in one window. Uses GTK4 on Linux, AppKit on macOS.
 
 ```
 1/2/3    switch category        Enter    set as wallpaper
 f        favorite               x        remove/reject/restore
 o        open on Wallhaven      d        delete
-m        toggle SFW/NSFW        q/Esc    close
+n/p      next/prev wallpaper    m        toggle SFW/NSFW
 ```
 
-### GUI App (macOS)
-
-`wayper-gui` launches a standalone app with browse, quick actions (next/prev/fav/dislike), and daemon control — all in one window. Run `wayper setup` to install `Wayper.app` in `~/Applications` for Spotlight/Alfred access.
+On macOS, run `wayper setup` to install `Wayper.app` in `~/Applications` for Spotlight/Alfred access.
 
 ### Keybindings
 
@@ -100,8 +97,6 @@ bind = $mod CTRL, F10, exec, wayper fav --open
 bind = $mod, F11,      exec, wayper next
 bind = $mod SHIFT, F11,exec, wayper prev
 bind = $mod, F12,      exec, wayper mode
-bind = $mod, W,        exec, wayper browse
-
 exec-once = swww-daemon & sleep 5 && wayper daemon
 ```
 </details>

@@ -301,34 +301,20 @@ def status(ctx):
 
 
 @cli.command()
-@click.option("--favorites", "category", flag_value="favorites", default=True,
-              help="Browse favorite wallpapers.")
-@click.option("--disliked", "category", flag_value="disliked",
-              help="Browse disliked/trashed wallpapers.")
-@click.option("--pool", "category", flag_value="pool",
-              help="Browse the current wallpaper pool.")
-@click.pass_context
-def browse(ctx, category):
-    """Browse wallpapers in a native image browser."""
-    from .browse import run
-    run(ctx.obj["config"], category)
-
-
-@cli.command()
 def setup():
-    """Install desktop entry (Linux) or .app bundle (macOS)."""
+    """Install .app bundle (macOS) or .desktop entry (Linux)."""
     import shutil
 
     if sys.platform == "darwin":
         _setup_macos_app()
     else:
-        wayper_bin = shutil.which("wayper") or sys.executable.replace("python", "wayper")
-        desktop = Path.home() / ".local/share/applications/wayper-browse.desktop"
+        gui_bin = shutil.which("wayper-gui") or str(Path(sys.executable).parent / "wayper-gui")
+        desktop = Path.home() / ".local/share/applications/wayper.desktop"
         desktop.parent.mkdir(parents=True, exist_ok=True)
         desktop.write_text(
             "[Desktop Entry]\n"
-            "Name=Wayper Browse\n"
-            f"Exec={wayper_bin} browse\n"
+            "Name=Wayper\n"
+            f"Exec={gui_bin}\n"
             "Icon=preferences-desktop-wallpaper\n"
             "Type=Application\n"
             "Categories=Utility;\n"

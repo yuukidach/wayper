@@ -24,8 +24,8 @@ from AppKit import (
 )
 from Foundation import NSObject
 
-from ..config import WayperConfig
-from ..state import read_mode
+from ...config import WayperConfig
+from ...state import read_mode
 from .actions_view import ActionsPanelController
 from .browse_view import CATEGORIES, LABELS, BrowsePanelController
 from .colors import C_BASE
@@ -253,6 +253,19 @@ class MainWindowController(NSObject):
     @objc.typedSelector(b"v@:@")
     def modeToggled_(self, sender):
         self._toggle_mode()
+
+    # ── Settings ──
+
+    def _on_settings_saved(self):
+        """Reload views after settings change."""
+        self._mode = read_mode(self.config)
+        if hasattr(self, "_mode_btn"):
+            self._mode_btn.setTitle_("NSFW" if self._mode == "nsfw" else "SFW")
+        self._browse.setMode_(self._mode)
+        self._browse.setCategory_(self._browse.category)
+        self._actions._current_path = None
+        self._actions._refresh()
+        self._daemon.forceRefresh()
 
     # ── Cleanup ──
 

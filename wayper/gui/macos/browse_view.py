@@ -1,4 +1,4 @@
-"""macOS native wallpaper browser using AppKit."""
+"""Embeddable browse panel for the GUI app."""
 
 from __future__ import annotations
 
@@ -7,16 +7,13 @@ from pathlib import Path
 
 import objc
 from AppKit import (
-    NSApplication,
-    NSBackingStoreBuffered,
-    NSBezelStyleAccessoryBarAction,
+    NSBezelStyleRounded,
     NSButton,
     NSCenterTextAlignment,
     NSCollectionView,
     NSCollectionViewFlowLayout,
     NSCollectionViewItem,
     NSCompositingOperationSourceOver,
-    NSEventTypeKeyDown,
     NSFont,
     NSImage,
     NSImageScaleProportionallyUpOrDown,
@@ -25,7 +22,6 @@ from AppKit import (
     NSMakeRect,
     NSMakeSize,
     NSScrollView,
-    NSSegmentedControl,
     NSStackView,
     NSStackViewGravityCenter,
     NSStackViewGravityLeading,
@@ -34,33 +30,22 @@ from AppKit import (
     NSUserInterfaceLayoutOrientationHorizontal,
     NSUserInterfaceLayoutOrientationVertical,
     NSView,
-    NSWindow,
-    NSWindowStyleMaskClosable,
-    NSWindowStyleMaskMiniaturizable,
-    NSWindowStyleMaskResizable,
-    NSWindowStyleMaskTitled,
 )
-from Foundation import NSObject
+from Foundation import NSIndexPath, NSIndexSet, NSObject
 
-from Quartz import CGColorCreateGenericRGB
+from ...backend import find_monitor, get_focused_monitor, set_wallpaper
+from ...browse._common import get_blocklist_only, get_images, get_orient, wallhaven_url
+from ...history import push as push_history
+from ...pool import add_to_blacklist, favorites_dir, pool_dir, remove_from_blacklist
+from ...state import push_undo, read_mode, write_mode
+from .colors import C_BASE, C_BLUE, C_OVERLAY, C_SURFACE_CG, C_TEXT
 
-from ..backend import find_monitor, get_focused_monitor, set_wallpaper
-from ..config import WayperConfig
-from ..gui.colors import C_BASE, C_BLUE, C_OVERLAY, C_TEXT
-from ..history import push as push_history
-from ..pool import add_to_blacklist, favorites_dir, pool_dir, remove_from_blacklist
-from ..state import push_undo, read_mode, write_mode
-from ._common import get_blocklist_only, get_images, get_orient, wallhaven_url
-
-THUMB_SIZE = 140
-ITEM_IDENTIFIER = "thumb"
-CATEGORIES = ("favorites", "pool", "disliked")
-LABELS = ("Favorites", "Pool", "Disliked")
+THUMB_SIZE = 200
+ITEM_IDENTIFIER = "gui_thumb"
+CATEGORIES = ("pool", "favorites", "disliked")
+LABELS = ("Pool", "Favorites", "Disliked")
 ACTION_LABELS = {"favorites": "Remove", "pool": "Reject", "disliked": "Restore"}
 
-
-
-# ── Thumbnail NSCollectionViewItem ────────────────────────
 
 class ThumbnailItem(NSCollectionViewItem):
 
@@ -79,7 +64,7 @@ class ThumbnailItem(NSCollectionViewItem):
         label = NSTextField.labelWithString_("")
         label.setFrame_(NSMakeRect(0, 2, THUMB_SIZE, 18))
         label.setAlignment_(NSCenterTextAlignment)
-        label.setFont_(NSFont.systemFontOfSize_(10))
+        label.setFont_(NSFont.systemFontOfSize_(11))
         label.setTextColor_(C_TEXT)
         label.setLineBreakMode_(NSLineBreakByTruncatingTail)
         container.addSubview_(label)
@@ -102,12 +87,11 @@ class ThumbnailItem(NSCollectionViewItem):
         self._label.setStringValue_(name)
 
 
-# ── Main window controller ────────────────────────────────
-
-class BrowseController(NSObject):
+class BrowsePanelController(NSObject):
+    """Browse panel that returns an embeddable NSView (no window management)."""
 
     def initWithConfig_category_(self, config, category):
-        self = objc.super(BrowseController, self).init()
+        self = objc.super(BrowsePanelController, self).init()
         if self is None:
             return None
         self.config = config
@@ -117,47 +101,22 @@ class BrowseController(NSObject):
         self._blocklist_only: list[str] = []
         self.selected_index = -1
         self._thumb_cache: dict[str, NSImage] = {}
-        self._build_window()
+        self.view = self._build_ui()
         self._reload_images()
         return self
 
-    # ── Window setup ──
+    def setCategory_(self, category: str):
+        self.category = category
+        self._reload_images()
 
-    def _build_window(self):
-        style = (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
-                 NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
-        self.window = BrowseWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(200, 200, 1200, 750), style, NSBackingStoreBuffered, False,
-        )
-        self.window._controller = self
-        self.window.setTitle_("wayper")
-        self.window.setBackgroundColor_(C_BASE)
-        self.window.setMinSize_(NSMakeSize(800, 500))
+    def setMode_(self, mode: str):
+        self.mode = mode
+        write_mode(self.config, self.mode)
+        self._reload_images()
 
-        content = self.window.contentView()
-        content.setWantsLayer_(True)
-
-        # ── Top bar ──
-        topbar = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 100, 36))
-        topbar.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
-        topbar.setSpacing_(8)
-        topbar.setTranslatesAutoresizingMaskIntoConstraints_(False)
-
-        # Category segment
-        self._seg = NSSegmentedControl.segmentedControlWithLabels_trackingMode_target_action_(
-            LABELS, 0, self, "categoryChanged:",
-        )
-        idx = CATEGORIES.index(self.category)
-        self._seg.setSelectedSegment_(idx)
-        topbar.addView_inGravity_(self._seg, NSStackViewGravityLeading)
-
-        # Mode toggle
-        mode_label = "NSFW" if self.mode == "nsfw" else "SFW"
-        self._mode_btn = NSButton.buttonWithTitle_target_action_(mode_label, self, "modeToggled:")
-        self._mode_btn.setBezelStyle_(NSBezelStyleAccessoryBarAction)
-        topbar.addView_inGravity_(self._mode_btn, NSStackViewGravityTrailing)
-
-        content.addSubview_(topbar)
+    def _build_ui(self) -> NSView:
+        root = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 1100, 650))
+        root.setWantsLayer_(True)
 
         # ── Collection view (left) ──
         layout = NSCollectionViewFlowLayout.alloc().init()
@@ -188,19 +147,26 @@ class BrowseController(NSObject):
         self._preview.setImageScaling_(NSImageScaleProportionallyUpOrDown)
         self._preview.setWantsLayer_(True)
         self._preview.layer().setCornerRadius_(12)
-        self._preview.layer().setBackgroundColor_(CGColorCreateGenericRGB(0, 0, 0, 1))
-        self._preview.setContentHuggingPriority_forOrientation_(1, 1)  # low priority, vertical
-        self._preview.setContentHuggingPriority_forOrientation_(1, 0)  # low priority, horizontal
-        self._preview.setContentCompressionResistancePriority_forOrientation_(1, 1)  # allow shrink vertically
-        self._preview.setContentCompressionResistancePriority_forOrientation_(1, 0)  # allow shrink horizontally
+        self._preview.layer().setBackgroundColor_(C_SURFACE_CG)
+        self._preview.setContentHuggingPriority_forOrientation_(1, 1)
+        self._preview.setContentHuggingPriority_forOrientation_(1, 0)
+        self._preview.setContentCompressionResistancePriority_forOrientation_(1, 1)
+        self._preview.setContentCompressionResistancePriority_forOrientation_(1, 0)
         self._preview.setTranslatesAutoresizingMaskIntoConstraints_(False)
+
+        self._placeholder = NSTextField.labelWithString_("Select an image to preview")
+        self._placeholder.setTextColor_(C_OVERLAY)
+        self._placeholder.setFont_(NSFont.systemFontOfSize_(13))
+        self._placeholder.setAlignment_(NSCenterTextAlignment)
+        self._placeholder.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        self._preview.addSubview_(self._placeholder)
+
         right.addView_inGravity_(self._preview, NSStackViewGravityLeading)
 
-        # Action buttons
         btn_bar = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 400, 32))
         btn_bar.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
         btn_bar.setSpacing_(8)
-        btn_bar.setContentHuggingPriority_forOrientation_(999, 1)  # stay compact vertically
+        btn_bar.setContentHuggingPriority_forOrientation_(999, 1)
 
         self._btn_set = self._make_btn("Set [Enter]", "doSet:")
         self._btn_open = self._make_btn("Open [O]", "doOpen:")
@@ -212,46 +178,46 @@ class BrowseController(NSObject):
 
         right.addView_inGravity_(btn_bar, NSStackViewGravityTrailing)
 
-        # Status
         self._status = NSTextField.labelWithString_("")
         self._status.setTextColor_(C_OVERLAY)
         self._status.setFont_(NSFont.systemFontOfSize_(11))
         self._status.setContentHuggingPriority_forOrientation_(999, 1)
         right.addView_inGravity_(self._status, NSStackViewGravityTrailing)
 
-        # ── Layout with constraints ──
-        content.addSubview_(scroll)
-        content.addSubview_(right)
+        # ── Layout ──
+        root.addSubview_(scroll)
+        root.addSubview_(right)
 
-        topbar.setTranslatesAutoresizingMaskIntoConstraints_(False)
         scroll.setTranslatesAutoresizingMaskIntoConstraints_(False)
         right.setTranslatesAutoresizingMaskIntoConstraints_(False)
 
-        content.addConstraints_([
-            topbar.topAnchor().constraintEqualToAnchor_constant_(content.topAnchor(), 8),
-            topbar.leadingAnchor().constraintEqualToAnchor_constant_(content.leadingAnchor(), 12),
-            topbar.trailingAnchor().constraintEqualToAnchor_constant_(content.trailingAnchor(), -12),
+        root.addConstraints_([
+            scroll.topAnchor().constraintEqualToAnchor_constant_(root.topAnchor(), 8),
+            scroll.leadingAnchor().constraintEqualToAnchor_constant_(root.leadingAnchor(), 8),
+            scroll.widthAnchor().constraintEqualToAnchor_multiplier_(root.widthAnchor(), 0.4),
+            scroll.widthAnchor().constraintGreaterThanOrEqualToConstant_(300),
+            scroll.bottomAnchor().constraintEqualToAnchor_constant_(root.bottomAnchor(), -8),
 
-            scroll.topAnchor().constraintEqualToAnchor_constant_(topbar.bottomAnchor(), 8),
-            scroll.leadingAnchor().constraintEqualToAnchor_constant_(content.leadingAnchor(), 8),
-            scroll.widthAnchor().constraintEqualToConstant_(480),
-            scroll.bottomAnchor().constraintEqualToAnchor_constant_(content.bottomAnchor(), -8),
-
-            right.topAnchor().constraintEqualToAnchor_constant_(topbar.bottomAnchor(), 8),
+            right.topAnchor().constraintEqualToAnchor_constant_(root.topAnchor(), 8),
             right.leadingAnchor().constraintEqualToAnchor_constant_(scroll.trailingAnchor(), 12),
-            right.trailingAnchor().constraintEqualToAnchor_constant_(content.trailingAnchor(), -12),
-            right.bottomAnchor().constraintEqualToAnchor_constant_(content.bottomAnchor(), -8),
+            right.trailingAnchor().constraintEqualToAnchor_constant_(root.trailingAnchor(), -12),
+            right.bottomAnchor().constraintEqualToAnchor_constant_(root.bottomAnchor(), -8),
 
-            # Preview fills the right panel width
             self._preview.leadingAnchor().constraintEqualToAnchor_(right.leadingAnchor()),
             self._preview.trailingAnchor().constraintEqualToAnchor_(right.trailingAnchor()),
+
+            self._placeholder.centerXAnchor().constraintEqualToAnchor_(
+                self._preview.centerXAnchor()),
+            self._placeholder.centerYAnchor().constraintEqualToAnchor_(
+                self._preview.centerYAnchor()),
         ])
 
         self._update_buttons()
+        return root
 
     def _make_btn(self, title, action):
         btn = NSButton.buttonWithTitle_target_action_(title, self, action)
-        btn.setBezelStyle_(NSBezelStyleAccessoryBarAction)
+        btn.setBezelStyle_(NSBezelStyleRounded)
         return btn
 
     # ── Data loading ──
@@ -264,8 +230,37 @@ class BrowseController(NSObject):
         )
         self._thumb_cache.clear()
         self.selected_index = -1
-        self._preview.setImage_(None)
+        self._update_preview()
         self._cv.reloadData()
+        self._update_status()
+        self._update_buttons()
+
+    def _remove_at(self, idx: int):
+        """Remove item at idx without full reload — keeps thumb cache intact."""
+        is_file = idx < len(self.images)
+        if is_file:
+            self._thumb_cache.pop(str(self.images[idx]), None)
+            del self.images[idx]
+        else:
+            bl_idx = idx - len(self.images)
+            if bl_idx < len(self._blocklist_only):
+                del self._blocklist_only[bl_idx]
+
+        index_set = NSIndexSet.indexSetWithIndex_(idx)
+        ip_set = set()
+        ip_set.add(NSIndexPath.indexPathForItem_inSection_(idx, 0))
+        self._cv.deleteItemsAtIndexPaths_(ip_set)
+
+        # Select next item
+        total = len(self.images) + len(self._blocklist_only)
+        if total == 0:
+            self.selected_index = -1
+            self._update_preview()
+        else:
+            self.selected_index = min(idx, total - 1)
+            ip = NSIndexPath.indexPathForItem_inSection_(self.selected_index, 0)
+            self._cv.selectItemsAtIndexPaths_(set([ip]), scrollPosition=0)
+            self._update_preview()
         self._update_status()
         self._update_buttons()
 
@@ -326,7 +321,7 @@ class BrowseController(NSObject):
     def collectionView_didDeselectItemsAtIndexPaths_(self, cv, indexPaths):
         if not cv.selectionIndexPaths():
             self.selected_index = -1
-            self._preview.setImage_(None)
+            self._update_preview()
             self._update_buttons()
 
     # ── Preview ──
@@ -336,8 +331,10 @@ class BrowseController(NSObject):
         if path and path.exists():
             img = NSImage.alloc().initByReferencingFile_(str(path))
             self._preview.setImage_(img)
+            self._placeholder.setHidden_(True)
         else:
             self._preview.setImage_(None)
+            self._placeholder.setHidden_(False)
 
     def _selected_path(self) -> Path | None:
         if 0 <= self.selected_index < len(self.images):
@@ -353,19 +350,6 @@ class BrowseController(NSObject):
         return None
 
     # ── Actions ──
-
-    @objc.typedSelector(b"v@:@")
-    def categoryChanged_(self, sender):
-        idx = sender.selectedSegment()
-        self.category = CATEGORIES[idx]
-        self._reload_images()
-
-    @objc.typedSelector(b"v@:@")
-    def modeToggled_(self, sender):
-        self.mode = "sfw" if self.mode == "nsfw" else "nsfw"
-        sender.setTitle_("NSFW" if self.mode == "nsfw" else "SFW")
-        write_mode(self.config, self.mode)
-        self._reload_images()
 
     @objc.typedSelector(b"v@:@")
     def doSet_(self, sender):
@@ -391,6 +375,7 @@ class BrowseController(NSObject):
 
     @objc.typedSelector(b"v@:@")
     def doFav_(self, sender):
+        idx = self.selected_index
         path = self._selected_path()
         if not path or not path.exists():
             return
@@ -398,16 +383,17 @@ class BrowseController(NSObject):
         dest = favorites_dir(self.config, self.mode, orient) / path.name
         dest.parent.mkdir(parents=True, exist_ok=True)
         path.rename(dest)
-        self._reload_images()
+        self._remove_at(idx)
 
     @objc.typedSelector(b"v@:@")
     def doAction_(self, sender):
+        idx = self.selected_index
         name = self._selected_blocklist_name()
         path = self._selected_path()
 
         if self.category == "disliked" and name and not path:
             remove_from_blacklist(self.config, name)
-            self._reload_images()
+            self._remove_at(idx)
             return
 
         if not path or not path.exists():
@@ -427,36 +413,34 @@ class BrowseController(NSObject):
             path.rename(dest)
             remove_from_blacklist(self.config, path.name)
 
-        self._reload_images()
+        self._remove_at(idx)
 
     @objc.typedSelector(b"v@:@")
     def doDelete_(self, sender):
+        idx = self.selected_index
         name = self._selected_blocklist_name()
         path = self._selected_path()
+        if not name and not path:
+            return
         if name and not path:
             remove_from_blacklist(self.config, name)
         elif path and path.exists():
             path.unlink()
-        self._reload_images()
+        self._remove_at(idx)
 
-    # ── Keyboard shortcuts ──
+    # ── Keyboard ──
 
-    def handleKeyDown_(self, event):
+    def handleKeyDown_(self, event) -> bool:
         chars = event.charactersIgnoringModifiers()
         if not chars:
             return False
         key = chars[0]
         actions = {
-            "1": lambda: self._seg.setSelectedSegment_(0) or self.categoryChanged_(self._seg),
-            "2": lambda: self._seg.setSelectedSegment_(1) or self.categoryChanged_(self._seg),
-            "3": lambda: self._seg.setSelectedSegment_(2) or self.categoryChanged_(self._seg),
             "\r": lambda: self.doSet_(None),
             "f": lambda: self.doFav_(None),
             "x": lambda: self.doAction_(None),
             "d": lambda: self.doDelete_(None),
             "o": lambda: self.doOpen_(None),
-            "m": lambda: self.modeToggled_(self._mode_btn),
-            "q": lambda: self.window.close(),
         }
         if key in actions:
             actions[key]()
@@ -467,9 +451,7 @@ class BrowseController(NSObject):
 
     def _update_status(self):
         n = len(self.images) + len(self._blocklist_only)
-        self._status.setStringValue_(
-            f"{n} image{'s' if n != 1 else ''} \u00b7 {self.mode.upper()}"
-        )
+        self._status.setStringValue_(f"{n} image{'s' if n != 1 else ''}")
 
     def _update_buttons(self):
         has_file = self._selected_path() is not None
@@ -487,29 +469,3 @@ class BrowseController(NSObject):
             label = f"{ACTION_LABELS.get(self.category, 'Action')} [X]"
         self._btn_action.setTitle_(label)
         self._btn_action.setEnabled_(has_sel)
-
-
-# ── Keyboard event subclass ───────────────────────────────
-
-class BrowseWindow(NSWindow):
-    _controller = None
-
-    def sendEvent_(self, event):
-        # Intercept key-down events before they reach the responder chain
-        if event.type() == NSEventTypeKeyDown and self._controller:
-            if self._controller.handleKeyDown_(event):
-                return
-        objc.super(BrowseWindow, self).sendEvent_(event)
-
-
-# ── Entry point ───────────────────────────────────────────
-
-def run(config: WayperConfig, category: str = "favorites") -> None:
-    from AppKit import NSApplicationActivationPolicyRegular
-
-    app = NSApplication.sharedApplication()
-    app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
-    controller = BrowseController.alloc().initWithConfig_category_(config, category)
-    controller.window.makeKeyAndOrderFront_(None)
-    app.activateIgnoringOtherApps_(True)
-    app.run()

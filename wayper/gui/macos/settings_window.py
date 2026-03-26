@@ -33,7 +33,7 @@ from AppKit import (
 )
 from Foundation import NSEdgeInsets, NSObject
 
-from ..config import MonitorConfig, WayperConfig, compact_home, save_config
+from ...config import MonitorConfig, WayperConfig, compact_home, save_config
 from .colors import C_BASE, C_SUBTEXT, C_TEXT
 
 _LABEL_W = 140
@@ -346,20 +346,22 @@ class SettingsWindowController(NSObject):
     """Manages the Preferences window (singleton, recreated on reopen)."""
 
     @classmethod
-    def sharedWithConfig_(cls, config: WayperConfig):
+    def sharedWithConfig_onSave_(cls, config: WayperConfig, on_save=None):
         global _shared_controller
         if _shared_controller is not None:
+            _shared_controller._on_save = on_save
             _shared_controller.window.makeKeyAndOrderFront_(None)
             return _shared_controller
-        ctrl = cls.alloc().initWithConfig_(config)
+        ctrl = cls.alloc().initWithConfig_onSave_(config, on_save)
         _shared_controller = ctrl
         return ctrl
 
-    def initWithConfig_(self, config: WayperConfig):
+    def initWithConfig_onSave_(self, config: WayperConfig, on_save=None):
         self = objc.super(SettingsWindowController, self).init()
         if self is None:
             return None
         self.config = config
+        self._on_save = on_save
         self._build()
         return self
 
@@ -419,6 +421,9 @@ class SettingsWindowController(NSObject):
         self._general.applyToConfig_(self.config)
         self._wallhaven.applyToConfig_(self.config)
         save_config(self.config)
+        if self._on_save:
+            self._on_save()
+        self.window.close()
 
     def windowWillClose_(self, notification):
         global _shared_controller

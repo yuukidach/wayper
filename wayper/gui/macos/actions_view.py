@@ -26,13 +26,13 @@ from AppKit import (
 )
 from Foundation import NSObject
 
-from ..backend import get_context, get_focused_monitor, query_current, set_wallpaper
-from ..browse._common import wallhaven_url
-from ..config import NO_TRANSITION
-from ..history import go_prev, pick_next
-from ..history import push as push_history
-from ..pool import add_to_blacklist, favorites_dir, pick_random, pool_dir, remove_from_blacklist
-from ..state import pop_undo, push_undo, read_mode, restore_from_trash
+from ...backend import get_context, get_focused_monitor, query_current, set_wallpaper
+from ...browse._common import wallhaven_url
+from ...config import NO_TRANSITION
+from ...history import go_prev, pick_next
+from ...history import push as push_history
+from ...pool import add_to_blacklist, favorites_dir, pick_random, pool_dir, remove_from_blacklist
+from ...state import pop_undo, push_undo, read_mode, restore_from_trash
 from .colors import C_BLUE, C_GREEN, C_SURFACE_CG, C_TEXT
 
 

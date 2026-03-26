@@ -22,9 +22,9 @@ from AppKit import (
 )
 from Foundation import NSObject
 
-from ..daemon import is_daemon_running
-from ..pool import count_images, disk_usage_mb, favorites_dir, pool_dir
-from ..state import read_mode
+from ...daemon import is_daemon_running
+from ...pool import count_images, disk_usage_mb, favorites_dir, pool_dir
+from ...state import read_mode
 from .colors import C_BASE_CG, C_GREEN, C_RED, C_SUBTEXT, C_TEXT
 
 
@@ -80,19 +80,11 @@ class DaemonControlBar(NSObject):
         self._daemon_btn.setFont_(NSFont.systemFontOfSize_(11))
         bar.addView_inGravity_(self._daemon_btn, NSStackViewGravityLeading)
 
-        # Right: stats + settings gear
+        # Right: stats
         self._stats_label = NSTextField.labelWithString_("")
         self._stats_label.setTextColor_(C_SUBTEXT)
         self._stats_label.setFont_(NSFont.monospacedSystemFontOfSize_weight_(11, 0))
         bar.addView_inGravity_(self._stats_label, NSStackViewGravityTrailing)
-
-        settings_btn = NSButton.buttonWithTitle_target_action_(
-            "\u2699\uFE0E", self, "openSettings:",
-        )
-        settings_btn.setBezelStyle_(NSBezelStyleRounded)
-        settings_btn.setFont_(NSFont.systemFontOfSize_(13))
-        settings_btn.setBordered_(False)
-        bar.addView_inGravity_(settings_btn, NSStackViewGravityTrailing)
 
         return bar
 
@@ -157,11 +149,6 @@ class DaemonControlBar(NSObject):
         self._refresh()
 
     # ── Actions ──
-
-    @objc.typedSelector(b"v@:@")
-    def openSettings_(self, sender):
-        from .settings_window import SettingsWindowController
-        SettingsWindowController.sharedWithConfig_(self.config).showWindow()
 
     @objc.typedSelector(b"v@:@")
     def toggleDaemon_(self, sender):

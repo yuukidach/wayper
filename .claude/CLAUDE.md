@@ -10,15 +10,25 @@ uv venv && uv pip install -e '.[macos]'   # macOS
 uv venv && uv pip install -e .             # Linux
 
 # Run
-wayper next          # Set next wallpaper
 wayper daemon start  # Start background rotation
-wayper-gui           # Launch macOS GUI app
+wayper daemon stop   # Stop daemon
+wayper next          # Set next wallpaper
+wayper prev          # Go back to previous wallpaper
+wayper status        # Show current state, daemon, disk usage
+wayper-gui           # Launch GUI app (GTK4 on Linux, AppKit on macOS)
 wayper-mcp           # Start MCP server
 
 # Lint
 ruff check wayper/
 ruff format --check wayper/
 ```
+
+## Config & State
+
+- Config: `~/.config/wayper/config.toml` (see `example-config.toml`)
+- PID file: `~/.config/wayper/wayper.pid`
+- State files live inside `download_dir`: `.mode`, `.blacklist`, `.undo`, `.history`
+- Version: managed in `pyproject.toml` — keep `wayper/__init__.py` in sync
 
 ## Architecture
 
@@ -37,21 +47,28 @@ wayper/
 │   ├── base.py      #   WallpaperBackend protocol
 │   ├── macos.py     #   macOS (AppKit/osascript)
 │   └── linux.py     #   Linux (swww/dbus)
-├── browse/          # Native wallpaper browser
-│   ├── macos.py     #   AppKit browser
-│   └── gtk.py       #   GTK4 browser
-└── gui/             # macOS standalone GUI app
-    ├── app.py       #   NSApplication setup
-    ├── main_window.py
-    └── ...
+├── browse/          # Shared browse helpers
+│   └── _common.py   #   get_images, wallhaven_url, etc.
+└── gui/             # GUI app (platform-dispatched)
+    ├── macos/       #   macOS AppKit GUI
+    │   ├── app.py, main_window.py, browse_view.py
+    │   ├── actions_view.py, daemon_control.py
+    │   ├── settings_window.py, colors.py
+    │   └── __init__.py
+    └── gtk/         #   Linux GTK4 GUI
+        ├── app.py, main_window.py, browse_view.py
+        ├── actions_view.py, daemon_control.py
+        ├── settings_window.py, css.py
+        └── __init__.py
 ```
 
 **Key patterns:**
-- Platform code is isolated in `backend/` and `browse/` — shared logic lives in top-level modules
-- CLI and GUI both share the same backend logic
+- Platform code is isolated in `backend/` and `gui/` — shared logic lives in top-level modules
+- CLI and GUI both share the same backend logic; `browse/_common.py` has shared browse helpers
 - File-based state: TOML config, plain text blacklist/undo, JSON history
 - File locks (`flock`) prevent concurrent state modifications
-- Daemon uses SIGUSR1 (force rotation) and SIGUSR2 (mode reload)
+- Daemon uses SIGUSR1 (force rotation) and SIGUSR2 (mode reload); `daemon start` runs in background, bare `daemon` runs in foreground
+- UI uses Catppuccin Mocha palette across GTK4 and macOS GUI
 
 ## Code Conventions
 
@@ -70,4 +87,6 @@ wayper/
 - Pool directory structure: `download_dir/[sfw|nsfw]/[portrait|landscape]` + `favorites/` + `.trash/`
 - All CLI commands support `--json` flag for machine-readable output
 - macOS GUI uses PyObjC (AppKit bindings) — no SwiftUI or Interface Builder
-- Keep platform-specific code in `backend/` or `browse/`, never in shared modules
+- Linux GUI uses GTK4/PyGObject — no libadwaita
+- `gui/__init__.py` dispatches by platform: darwin → AppKit, else → GTK4
+- Keep platform-specific code in `backend/` or `gui/` — never in shared modules
