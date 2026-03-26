@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
+import sys
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -143,8 +145,43 @@ class BrowsePanel:
         self.flowbox.add_controller(drop)
 
         scroll.set_child(self.flowbox)
-        self._grid_revealer.set_child(scroll)
+
+        # Empty state
+        self._empty_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self._empty_box.set_valign(Gtk.Align.CENTER)
+        self._empty_box.set_halign(Gtk.Align.CENTER)
+        self._empty_box.add_css_class("empty-state")
+        self._empty_icon = Gtk.Label()
+        self._empty_icon.add_css_class("empty-icon")
+        self._empty_box.append(self._empty_icon)
+        self._empty_title = Gtk.Label()
+        self._empty_title.add_css_class("empty-title")
+        self._empty_box.append(self._empty_title)
+        self._empty_desc = Gtk.Label()
+        self._empty_desc.add_css_class("empty-desc")
+        self._empty_desc.set_wrap(True)
+        self._empty_desc.set_max_width_chars(40)
+        self._empty_desc.set_justify(Gtk.Justification.CENTER)
+        self._empty_box.append(self._empty_desc)
+
+        self._empty_cta = Gtk.Button(label="Start Daemon")
+        self._empty_cta.add_css_class("action-btn")
+        self._empty_cta.set_halign(Gtk.Align.CENTER)
+        self._empty_cta.set_margin_top(12)
+        self._empty_cta.connect("clicked", self._on_empty_cta)
+        self._empty_cta.set_visible(False)
+        self._empty_box.append(self._empty_cta)
+
+        # Stack to switch between grid and empty state
+        self._grid_stack = Gtk.Stack()
+        self._grid_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self._grid_stack.set_vexpand(True)
+        self._grid_stack.add_named(scroll, "grid")
+        self._grid_stack.add_named(self._empty_box, "empty")
+
+        self._grid_revealer.set_child(self._grid_stack)
         grid_col.append(self._grid_revealer)
+
         parent.append(grid_col)
 
     def _build_preview(self, parent: Gtk.Box):
@@ -313,6 +350,13 @@ class BrowsePanel:
 
         display_images = images if images is not None else self.images
 
+        # Show empty state or grid
+        bl_count = len(self._blocklist_only)
+        if len(display_images) == 0 and bl_count == 0:
+            self._show_empty_state()
+        else:
+            self._grid_stack.set_visible_child_name("grid")
+
         for img_path in display_images:
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             box._image_path = img_path
@@ -368,35 +412,45 @@ class BrowsePanel:
             self._load_thumb_async(str(img_path), picture, info_label)
             self.flowbox.append(box)
 
-        for name in self._blocklist_only:
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            box._image_path = None
-            box._blocklist_name = name
+    _EMPTY_STATE = {
+        "pool": (
+            "",
+            "Pool is empty",
+            "The daemon will download wallpapers\nautomatically, or drag images here",
+        ),
+        "favorites": (
+            "\u2606",
+            "No favorites yet",
+            "Press F to favorite a wallpaper\nfrom the pool",
+        ),
+        "disliked": (
+            "\u2205",
+            "Nothing disliked",
+            "Press X to reject wallpapers\nyou don\u2019t want to see again",
+        ),
+    }
 
-            placeholder = Gtk.Label(label="No file")
-            placeholder.set_size_request(THUMB_SIZE, THUMB_SIZE)
-            placeholder.add_css_class("blocklist-placeholder")
-            box.append(placeholder)
+    def _show_empty_state(self):
+        icon, title, desc = self._EMPTY_STATE.get(self.category, ("", "No images", ""))
+        self._empty_icon.set_label(icon)
+        self._empty_title.set_label(title)
+        self._empty_desc.set_label(desc)
+        # Apply category color
+        for c in ("cat-pool", "cat-favorites", "cat-disliked"):
+            self._empty_icon.remove_css_class(c)
+        self._empty_icon.add_css_class(f"cat-{self.category}")
+        # CTA button only for pool
+        self._empty_cta.set_visible(self.category == "pool")
+        self._grid_stack.set_visible_child_name("empty")
 
-            stem = Path(name).stem
-            label = Gtk.Label(label=stem[-8:])
-            label.set_ellipsize(Pango.EllipsizeMode.END)
-            label.set_max_width_chars(12)
-            box.append(label)
-
-            # Left-click: plain click = single select, Ctrl+click = toggle
-            left_click = Gtk.GestureClick.new()
-            left_click.set_button(1)
-            left_click.connect("pressed", self._on_thumb_click)
-            box.add_controller(left_click)
-
-            # Right-click context menu for blocklist items
-            right_click = Gtk.GestureClick.new()
-            right_click.set_button(3)
-            right_click.connect("released", self._on_right_click, box)
-            box.add_controller(right_click)
-
-            self.flowbox.append(box)
+    def _on_empty_cta(self, _btn):
+        wayper_bin = shutil.which("wayper") or str(Path(sys.executable).parent / "wayper")
+        subprocess.Popen(
+            [wayper_bin, "daemon"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
     def _on_right_click(self, gesture, n_press, x, y, box: Gtk.Box):
         """Show context menu on right-click."""
@@ -815,16 +869,13 @@ class BrowsePanel:
 
         idx = child.get_index()
         img_path = getattr(box, "_image_path", None)
-        bl_name = getattr(box, "_blocklist_name", None)
         if img_path and img_path in self.images:
             self.images.remove(img_path)
-        elif bl_name and bl_name in self._blocklist_only:
-            self._blocklist_only.remove(bl_name)
 
         self.flowbox.remove(child)
         self._update_status()
 
-        total = len(self.images) + len(self._blocklist_only)
+        total = len(self.images)
         if total > 0:
             next_idx = min(idx, total - 1)
             next_child = self.flowbox.get_child_at_index(next_idx)
@@ -835,18 +886,22 @@ class BrowsePanel:
             self._selected_name = None
             self._set_preview(None)
             self._update_buttons()
+            self._show_empty_state()
 
     # ── Helpers ──
 
     def _update_status(self):
-        n = len(self.images) + len(self._blocklist_only)
+        n_img = len(self.images)
+        n_bl = len(self._blocklist_only)
         if len(self._selected_paths) > 1:
             sel = len(self._selected_paths)
-            self.status_label.set_text(f"{sel} selected / {n} \u00b7 {self.mode.upper()}")
+            total = n_img + n_bl
+            self.status_label.set_text(f"{sel} selected / {total} \u00b7 {self.mode.upper()}")
         else:
-            self.status_label.set_text(
-                f"{n} image{'s' if n != 1 else ''} \u00b7 {self.mode.upper()}"
-            )
+            parts = [f"{n_img} image{'s' if n_img != 1 else ''}"]
+            if n_bl > 0:
+                parts.append(f"{n_bl} blocked")
+            self.status_label.set_text(f"{' + '.join(parts)} \u00b7 {self.mode.upper()}")
 
     def _update_buttons(self):
         multi = len(self._selected_paths) > 1

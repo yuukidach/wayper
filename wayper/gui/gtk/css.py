@@ -188,6 +188,35 @@ notebook > header > tabs > tab:checked {
     border-radius: 0 0 8px 8px;
 }
 
+/* ── Empty state ── */
+.empty-state {
+    padding: 48px 24px;
+}
+.empty-state .empty-icon {
+    font-size: 48px;
+    margin-bottom: 12px;
+}
+.empty-state .empty-icon.cat-pool {
+    color: #89b4fa;
+}
+.empty-state .empty-icon.cat-favorites {
+    color: #a6e3a1;
+}
+.empty-state .empty-icon.cat-disliked {
+    color: #f38ba8;
+}
+.empty-state .empty-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #cdd6f4;
+    margin-bottom: 6px;
+}
+.empty-state .empty-desc {
+    font-size: 13px;
+    color: #6c7086;
+    line-height: 1.5;
+}
+
 /* ── Skeleton placeholder + fade-in ── */
 @keyframes skeleton-pulse {
     0%, 100% { opacity: 0.5; }
