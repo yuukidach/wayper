@@ -180,6 +180,9 @@ notebook > header > tabs > tab:checked {
 }
 
 /* ── Thumbnail overlay ── */
+.thumb-frame {
+    border-radius: 8px;
+}
 .thumb-overlay {
     background: rgba(0, 0, 0, 0.65);
     color: #cdd6f4;

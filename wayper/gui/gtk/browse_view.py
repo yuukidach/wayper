@@ -363,6 +363,8 @@ class BrowsePanel:
 
             # Overlay for thumbnail info on hover
             overlay = Gtk.Overlay()
+            overlay.set_overflow(Gtk.Overflow.HIDDEN)
+            overlay.add_css_class("thumb-frame")
             picture = Gtk.Picture()
             picture.set_size_request(THUMB_SIZE, THUMB_SIZE)
             picture.set_content_fit(Gtk.ContentFit.COVER)
