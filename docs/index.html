@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wayper — Cross-platform wallpaper manager</title>
+<meta name="description" content="Cross-platform wallpaper manager with Wallhaven integration and AI-native control.">
+<style>
+:root {
+  --base: #1e1e2e; --mantle: #181825; --surface0: #313244; --surface1: #45475a;
+  --text: #cdd6f4; --subtext: #a6adc8; --overlay: #6c7086;
+  --blue: #89b4fa; --teal: #94e2d5; --green: #a6e3a1; --red: #f38ba8;
+  --mauve: #cba6f7; --peach: #fab387;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--base); color: var(--text);
+  line-height: 1.6; -webkit-font-smoothing: antialiased;
+}
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  background: var(--surface0); padding: 2px 6px; border-radius: 4px; font-size: 0.9em;
+}
+pre {
+  background: var(--mantle); border: 1px solid var(--surface0); border-radius: 8px;
+  padding: 16px 20px; overflow-x: auto; font-size: 0.85em; line-height: 1.5;
+}
+pre code { background: none; padding: 0; }
+
+/* Layout */
+.container { max-width: 800px; margin: 0 auto; padding: 0 24px; }
+
+/* Hero */
+.hero {
+  text-align: center; padding: 64px 0 48px;
+  background: linear-gradient(180deg, var(--mantle) 0%, var(--base) 100%);
+}
+.hero svg { width: 80px; height: 80px; margin-bottom: 16px; }
+.hero h1 { font-size: 2.5em; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 8px; }
+.hero p { color: var(--subtext); font-size: 1.1em; max-width: 520px; margin: 0 auto 28px; }
+.buttons { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 10px 22px; border-radius: 8px; font-weight: 500; font-size: 0.95em;
+  transition: transform .15s, box-shadow .15s;
+}
+.btn:hover { text-decoration: none; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+.btn-primary { background: var(--blue); color: var(--base); }
+.btn-secondary { background: var(--surface0); color: var(--text); }
+
+/* Demo */
+.demo { text-align: center; padding: 32px 0 48px; }
+.demo img { width: 100%; max-width: 720px; border-radius: 12px; border: 1px solid var(--surface0); }
+
+/* Sections */
+section { padding: 40px 0; border-top: 1px solid var(--surface0); }
+section h2 { font-size: 1.5em; margin-bottom: 16px; color: var(--text); }
+section h3 { font-size: 1.1em; margin: 20px 0 8px; color: var(--subtext); }
+
+/* Features */
+.features { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.feature {
+  background: var(--mantle); border: 1px solid var(--surface0); border-radius: 10px;
+  padding: 20px;
+}
+.feature strong { color: var(--blue); }
+.feature span { color: var(--subtext); font-size: 0.92em; }
+
+/* Kbd */
+.kbd-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 6px 24px; font-family: 'JetBrains Mono', monospace; font-size: 0.85em;
+}
+.kbd-grid span { color: var(--overlay); }
+kbd {
+  background: var(--surface0); padding: 2px 8px; border-radius: 4px;
+  font-family: inherit; color: var(--peach);
+}
+
+/* Footer */
+footer {
+  padding: 32px 0; text-align: center; color: var(--overlay); font-size: 0.85em;
+  border-top: 1px solid var(--surface0);
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="container">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#0ea5e9"/><stop offset="100%" stop-color="#00e5d0"/>
+      </linearGradient></defs>
+      <rect x="8" y="8" width="112" height="112" rx="24" fill="#1a1b2e"/>
+      <polyline points="28,40 44,92 64,50 84,92 100,40" stroke="url(#g)" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <h1>wayper</h1>
+    <p>Cross-platform wallpaper manager with Wallhaven integration and AI-native control.</p>
+    <div class="buttons">
+      <a class="btn btn-primary" href="https://github.com/yuukidach/wayper/releases">Download</a>
+      <a class="btn btn-secondary" href="https://github.com/yuukidach/wayper">GitHub</a>
+      <a class="btn btn-secondary" href="https://aur.archlinux.org/packages/wayper">AUR</a>
+    </div>
+  </div>
+</div>
+
+<div class="demo container">
+  <img src="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/demo-desktop.gif" alt="wallpaper transitions">
+</div>
+
+<div class="container">
+
+<section>
+  <h2>Features</h2>
+  <div class="features">
+    <div class="feature"><strong>Wallhaven</strong><br><span>Auto-downloads wallpapers based on your search preferences.</span></div>
+    <div class="feature"><strong>Auto orientation</strong><br><span>Portrait monitors get portrait wallpapers. No manual sorting.</span></div>
+    <div class="feature"><strong>Pool management</strong><br><span>Validates, resizes, and rotates wallpapers automatically.</span></div>
+    <div class="feature"><strong>SFW/NSFW toggle</strong><br><span>One key to switch. Persistent across sessions.</span></div>
+    <div class="feature"><strong>History</strong><br><span>Prev/next through wallpaper history per monitor.</span></div>
+    <div class="feature"><strong>Favorites &amp; blacklist</strong><br><span>Like/dislike with undo. Favorites stay in rotation.</span></div>
+    <div class="feature"><strong>Native browser</strong><br><span>GTK4 on Linux, AppKit on macOS. Keyboard-driven.</span></div>
+    <div class="feature"><strong>AI-native</strong><br><span>Built-in MCP server for Claude Code and other AI assistants.</span></div>
+    <div class="feature"><strong>JSON output</strong><br><span><code>--json</code> flag on every command for scripting.</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>Install</h2>
+  <h3>Arch Linux (AUR)</h3>
+  <pre><code>paru -S wayper     # or: yay -S wayper</code></pre>
+  <h3>From source</h3>
+  <pre><code>git clone https://github.com/yuukidach/wayper.git
+cd wayper
+uv venv && uv pip install -e .</code></pre>
+  <h3>macOS</h3>
+  <pre><code>pip install 'wayper[macos]'</code></pre>
+</section>
+
+<section>
+  <h2>Usage</h2>
+  <pre><code>wayper daemon               # start background rotation + downloads
+wayper next                 # next wallpaper
+wayper prev                 # previous wallpaper
+wayper fav [--open]         # favorite current wallpaper
+wayper dislike              # blacklist + switch
+wayper undislike            # undo last dislike
+wayper mode [sfw|nsfw]      # toggle or set mode
+wayper status               # show current state
+wayper browse               # native wallpaper browser</code></pre>
+</section>
+
+<section>
+  <h2>Browse</h2>
+  <p style="margin-bottom:16px">
+    <img src="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png" alt="browse window" style="width:100%;max-width:540px;border-radius:10px;border:1px solid var(--surface0)">
+  </p>
+  <div class="kbd-grid">
+    <div><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <span>switch category</span></div>
+    <div><kbd>Enter</kbd> <span>set as wallpaper</span></div>
+    <div><kbd>f</kbd> <span>favorite</span></div>
+    <div><kbd>x</kbd> <span>remove / reject / restore</span></div>
+    <div><kbd>o</kbd> <span>open on Wallhaven</span></div>
+    <div><kbd>d</kbd> <span>delete</span></div>
+    <div><kbd>m</kbd> <span>toggle SFW/NSFW</span></div>
+    <div><kbd>q</kbd> / <kbd>Esc</kbd> <span>close</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>MCP</h2>
+  <p style="margin-bottom:12px">Built-in <a href="https://modelcontextprotocol.io/">MCP</a> server lets AI assistants control your wallpapers natively.</p>
+  <pre><code>{
+  "mcpServers": {
+    "wayper": {
+      "command": "/path/to/.venv/bin/wayper-mcp"
+    }
+  }
+}</code></pre>
+  <p style="margin-top:12px;color:var(--subtext);font-size:.9em">
+    Tools: <code>status</code> <code>next_wallpaper</code> <code>prev_wallpaper</code> <code>fav</code> <code>unfav</code> <code>dislike</code> <code>undislike</code> <code>set_mode</code> <code>delete_wallpaper</code>
+  </p>
+</section>
+
+<section>
+  <h2>Requirements</h2>
+  <ul style="list-style:none;padding:0">
+    <li>Python 3.12+</li>
+    <li><a href="https://wallhaven.cc/settings/account">Wallhaven API key</a></li>
+    <li><strong>Linux:</strong> <a href="https://github.com/LGFae/swww">swww</a>, <a href="https://hyprland.org/">Hyprland</a>, GTK4 + PyGObject</li>
+    <li><strong>macOS:</strong> PyObjC (<code>pip install 'wayper[macos]'</code>)</li>
+  </ul>
+</section>
+
+</div>
+
+<footer>
+  <a href="https://github.com/yuukidach/wayper/blob/main/LICENSE">MIT License</a>
+</footer>
+
+</body>
+</html>
