@@ -437,9 +437,7 @@ class BrowsePanelController(NSObject):
 
     def _update_status(self):
         n = len(self.images) + len(self._blocklist_only)
-        self._status.setStringValue_(
-            f"{n} image{'s' if n != 1 else ''} \u00b7 {self.mode.upper()}"
-        )
+        self._status.setStringValue_(f"{n} image{'s' if n != 1 else ''}")
 
     def _update_buttons(self):
         has_file = self._selected_path() is not None

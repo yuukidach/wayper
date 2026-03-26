@@ -1,4 +1,4 @@
-"""Daemon control footer bar: status, start/stop, mode toggle, pool stats."""
+"""Daemon control footer bar: status, start/stop, pool stats."""
 
 from __future__ import annotations
 
@@ -14,21 +14,19 @@ from AppKit import (
     NSFont,
     NSMakeRect,
     NSStackView,
-    NSStackViewGravityCenter,
     NSStackViewGravityLeading,
     NSStackViewGravityTrailing,
     NSTextField,
     NSTimer,
     NSUserInterfaceLayoutOrientationHorizontal,
-    NSView,
 )
 from Foundation import NSObject
 from Quartz import CGColorCreateGenericRGB
 
 from ..config import WayperConfig
-from ..daemon import is_daemon_running, signal_daemon
+from ..daemon import is_daemon_running
 from ..pool import count_images, disk_usage_mb, favorites_dir, pool_dir
-from ..state import read_mode, write_mode
+from ..state import read_mode
 from .colors import C_BASE, C_GREEN, C_RED, C_SUBTEXT, C_TEXT
 
 
@@ -65,72 +63,41 @@ class DaemonControlBar(NSObject):
     def _build_ui(self) -> NSView:
         bar = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 800, 32))
         bar.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
-        bar.setSpacing_(16)
+        bar.setSpacing_(8)
         bar.setWantsLayer_(True)
         bar.layer().setBackgroundColor_(
             CGColorCreateGenericRGB(C_BASE.redComponent(), C_BASE.greenComponent(),
                                    C_BASE.blueComponent(), 1)
         )
 
-        # Left: daemon status + button
-        left = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 300, 28))
-        left.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
-        left.setSpacing_(6)
-
-        daemon_label = NSTextField.labelWithString_("Daemon:")
-        daemon_label.setTextColor_(C_SUBTEXT)
-        daemon_label.setFont_(NSFont.systemFontOfSize_(11))
-        left.addView_inGravity_(daemon_label, NSStackViewGravityLeading)
-
+        # Left: daemon status dot + text + start/stop button
         self._status_dot = NSTextField.labelWithString_("\u25cf")
         self._status_dot.setFont_(NSFont.systemFontOfSize_(11))
-        left.addView_inGravity_(self._status_dot, NSStackViewGravityLeading)
+        bar.addView_inGravity_(self._status_dot, NSStackViewGravityLeading)
 
         self._status_text = NSTextField.labelWithString_("")
         self._status_text.setTextColor_(C_TEXT)
         self._status_text.setFont_(NSFont.systemFontOfSize_(11))
-        left.addView_inGravity_(self._status_text, NSStackViewGravityLeading)
+        bar.addView_inGravity_(self._status_text, NSStackViewGravityLeading)
 
         self._daemon_btn = NSButton.buttonWithTitle_target_action_("Start", self, "toggleDaemon:")
         self._daemon_btn.setBezelStyle_(NSBezelStyleAccessoryBarAction)
         self._daemon_btn.setFont_(NSFont.systemFontOfSize_(11))
-        left.addView_inGravity_(self._daemon_btn, NSStackViewGravityLeading)
+        bar.addView_inGravity_(self._daemon_btn, NSStackViewGravityLeading)
 
-        bar.addView_inGravity_(left, NSStackViewGravityLeading)
+        # Right: stats + settings gear
+        self._stats_label = NSTextField.labelWithString_("")
+        self._stats_label.setTextColor_(C_SUBTEXT)
+        self._stats_label.setFont_(NSFont.monospacedSystemFontOfSize_weight_(11, 0))
+        bar.addView_inGravity_(self._stats_label, NSStackViewGravityTrailing)
 
-        # Center: mode toggle
-        center = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 150, 28))
-        center.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
-        center.setSpacing_(6)
-
-        mode_label = NSTextField.labelWithString_("Mode:")
-        mode_label.setTextColor_(C_SUBTEXT)
-        mode_label.setFont_(NSFont.systemFontOfSize_(11))
-        center.addView_inGravity_(mode_label, NSStackViewGravityLeading)
-
-        self._mode_btn = NSButton.buttonWithTitle_target_action_("SFW", self, "toggleMode:")
-        self._mode_btn.setBezelStyle_(NSBezelStyleAccessoryBarAction)
-        self._mode_btn.setFont_(NSFont.systemFontOfSize_(11))
-        center.addView_inGravity_(self._mode_btn, NSStackViewGravityLeading)
-
-        bar.addView_inGravity_(center, NSStackViewGravityCenter)
-
-        # Right: pool + disk stats
-        right = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 250, 28))
-        right.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
-        right.setSpacing_(12)
-
-        self._pool_label = NSTextField.labelWithString_("")
-        self._pool_label.setTextColor_(C_SUBTEXT)
-        self._pool_label.setFont_(NSFont.systemFontOfSize_(11))
-        right.addView_inGravity_(self._pool_label, NSStackViewGravityTrailing)
-
-        self._disk_label = NSTextField.labelWithString_("")
-        self._disk_label.setTextColor_(C_SUBTEXT)
-        self._disk_label.setFont_(NSFont.systemFontOfSize_(11))
-        right.addView_inGravity_(self._disk_label, NSStackViewGravityTrailing)
-
-        bar.addView_inGravity_(right, NSStackViewGravityTrailing)
+        settings_btn = NSButton.buttonWithTitle_target_action_(
+            "\u2699\uFE0E", self, "openSettings:",
+        )
+        settings_btn.setBezelStyle_(NSBezelStyleAccessoryBarAction)
+        settings_btn.setFont_(NSFont.systemFontOfSize_(13))
+        settings_btn.setBordered_(False)
+        bar.addView_inGravity_(settings_btn, NSStackViewGravityTrailing)
 
         return bar
 
@@ -174,9 +141,9 @@ class DaemonControlBar(NSObject):
             self._status_text.setStringValue_("Stopped")
             self._daemon_btn.setTitle_("Start")
 
-        self._mode_btn.setTitle_("NSFW" if mode == "nsfw" else "SFW")
-        self._pool_label.setStringValue_(f"Pool: {pool_count}  Fav: {fav_count}")
-        self._disk_label.setStringValue_(f"Disk: {disk_mb / 1024:.1f} GB")
+        self._stats_label.setStringValue_(
+            f"Pool {pool_count} \u00b7 Fav {fav_count} \u00b7 {disk_mb / 1024:.1f} GB"
+        )
 
     def startPolling(self):
         if self._timer:
@@ -197,6 +164,11 @@ class DaemonControlBar(NSObject):
     # ── Actions ──
 
     @objc.typedSelector(b"v@:@")
+    def openSettings_(self, sender):
+        from .settings_window import SettingsWindowController
+        SettingsWindowController.sharedWithConfig_(self.config).showWindow()
+
+    @objc.typedSelector(b"v@:@")
     def toggleDaemon_(self, sender):
         running, pid = is_daemon_running(self.config)
         if running and pid:
@@ -214,11 +186,3 @@ class DaemonControlBar(NSObject):
             1.0, self, "pollRefresh:", None, False,
         )
 
-    @objc.typedSelector(b"v@:@")
-    def toggleMode_(self, sender):
-        mode = read_mode(self.config)
-        new_mode = "sfw" if mode == "nsfw" else "nsfw"
-        write_mode(self.config, new_mode)
-        signal_daemon(self.config, signal.SIGUSR2)
-        self._last_state = None  # force UI update
-        self._refresh()

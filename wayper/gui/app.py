@@ -11,19 +11,21 @@ from AppKit import (
     NSMenu,
     NSMenuItem,
 )
-from Foundation import NSObject
+from Foundation import NSBundle, NSObject
 
 from ..config import WayperConfig
 from .main_window import MainWindowController
+from .settings_window import SettingsWindowController
 
 
 class AppDelegate(NSObject):
 
-    def initWithController_(self, controller):
+    def initWithController_config_(self, controller, config):
         self = objc.super(AppDelegate, self).init()
         if self is None:
             return None
         self._controller = controller
+        self._config = config
         return self
 
     def applicationShouldTerminateAfterLastWindowClosed_(self, app):
@@ -32,17 +34,27 @@ class AppDelegate(NSObject):
     def applicationWillTerminate_(self, notification):
         self._controller.cleanup()
 
+    @objc.typedSelector(b"v@:@")
+    def showSettings_(self, sender):
+        SettingsWindowController.sharedWithConfig_(self._config).showWindow()
+
 
 class WayperApp:
 
     @staticmethod
     def launch(config: WayperConfig) -> None:
+        # Set process name so menu bar shows "Wayper" instead of "Python"
+        bundle = NSBundle.mainBundle()
+        info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+        if info:
+            info["CFBundleName"] = "Wayper"
+
         app = NSApplication.sharedApplication()
         app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
 
         controller = MainWindowController.alloc().initWithConfig_(config)
 
-        delegate = AppDelegate.alloc().initWithController_(controller)
+        delegate = AppDelegate.alloc().initWithController_config_(controller, config)
         app.setDelegate_(delegate)
 
         _build_menu(app, controller)
@@ -58,6 +70,9 @@ def _build_menu(app: NSApplication, controller: MainWindowController) -> None:
     # App menu
     app_menu = NSMenu.alloc().initWithTitle_("Wayper")
     app_menu.addItemWithTitle_action_keyEquivalent_("About Wayper", "orderFrontStandardAboutPanel:", "")
+    app_menu.addItem_(NSMenuItem.separatorItem())
+    prefs_item = app_menu.addItemWithTitle_action_keyEquivalent_("Settings\u2026", "showSettings:", ",")
+    prefs_item.setTarget_(app.delegate())
     app_menu.addItem_(NSMenuItem.separatorItem())
     app_menu.addItemWithTitle_action_keyEquivalent_("Quit Wayper", "terminate:", "q")
 

@@ -85,6 +85,74 @@ class WayperConfig:
         return CONFIG_DIR / "wayper.pid"
 
 
+def compact_home(path: Path | str) -> str:
+    """Replace home dir prefix with ~ for display/serialization."""
+    s = str(path)
+    home = str(Path.home())
+    return "~" + s[len(home):] if s.startswith(home) else s
+
+
+def _esc(s: str) -> str:
+    """Escape a string for TOML double-quoted values."""
+    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def save_config(config: WayperConfig, path: Path | None = None) -> None:
+    """Serialize config back to TOML and write to disk."""
+    path = path or CONFIG_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    dl = compact_home(config.download_dir)
+    lines: list[str] = []
+
+    lines.append(f'api_key = "{_esc(config.api_key)}"')
+    if config.proxy:
+        lines.append(f'proxy = "{_esc(config.proxy)}"')
+    lines.append(f'download_dir = "{_esc(dl)}"')
+    lines.append(f'default_mode = "{config.default_mode}"')
+    lines.append(f"interval = {config.interval}")
+    lines.append(f"pool_target = {config.pool_target}")
+    lines.append(f"quota_mb = {config.quota_mb}")
+    lines.append(f"blacklist_ttl_days = {config.blacklist_ttl_days}")
+
+    for m in config.monitors:
+        lines.append("")
+        lines.append("[[monitors]]")
+        lines.append(f'name = "{_esc(m.name)}"')
+        lines.append(f"width = {m.width}")
+        lines.append(f"height = {m.height}")
+        lines.append(f'orientation = "{m.orientation}"')
+
+    wh = config.wallhaven
+    lines.append("")
+    lines.append("[wallhaven]")
+    lines.append(f'categories = "{wh.categories}"')
+    lines.append(f'top_range = "{wh.top_range}"')
+    lines.append(f'sorting = "{wh.sorting}"')
+    lines.append(f"ai_art_filter = {wh.ai_art_filter}")
+    lines.append(f"max_page = {wh.max_page}")
+    lines.append(f"batch_size = {wh.batch_size}")
+
+    tr = config.transition
+    lines.append("")
+    lines.append("[transition]")
+    lines.append(f'type = "{tr.type}"')
+    lines.append(f"duration = {tr.duration}")
+    lines.append(f"fps = {tr.fps}")
+
+    gr = config.greeter
+    if gr.image:
+        lines.append("")
+        lines.append("[greeter]")
+        lines.append(f'image = "{_esc(str(gr.image))}"')
+        lines.append(f"interval = {gr.interval}")
+        if gr.sudo_password:
+            lines.append(f'sudo_password = "{_esc(gr.sudo_password)}"')
+
+    lines.append("")
+    path.write_text("\n".join(lines))
+
+
 def load_config(path: Path | None = None) -> WayperConfig:
     """Load config from TOML file, falling back to defaults."""
     path = path or CONFIG_FILE

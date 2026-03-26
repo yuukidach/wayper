@@ -12,7 +12,7 @@ gui_a = Analysis(
     hiddenimports=[
         'wayper', 'wayper.gui', 'wayper.gui.app', 'wayper.gui.main_window',
         'wayper.gui.browse_view', 'wayper.gui.actions_view',
-        'wayper.gui.daemon_control', 'wayper.gui.colors',
+        'wayper.gui.daemon_control', 'wayper.gui.settings_window', 'wayper.gui.colors',
         'wayper.backend', 'wayper.backend.macos',
         'wayper.browse', 'wayper.browse._common', 'wayper.browse.macos',
         'wayper.config', 'wayper.daemon', 'wayper.history',
@@ -105,5 +105,6 @@ app = BUNDLE(
         'CFBundlePackageType': 'APPL',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '12.0',
+        'LSBackgroundOnly': False,
     },
 )
