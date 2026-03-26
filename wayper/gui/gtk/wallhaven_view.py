@@ -19,7 +19,7 @@ from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango
 from ...browse._common import format_size
 from ...config import WayperConfig
 from ...image import resize_crop
-from ...pool import favorites_dir, is_blacklisted, pool_dir, save_metadata
+from ...pool import extract_tag_names, favorites_dir, is_blacklisted, pool_dir, save_metadata
 from ...state import read_mode
 from ...wallhaven import WallhavenClient
 from . import populate_tags
@@ -379,7 +379,7 @@ class WallhavenPanel:
         self._views_label.set_label(f"Views: {views:,}  |  Favs: {favs:,}")
         self._meta_box.set_visible(True)
 
-        populate_tags(self._tags_box, [t.get("name", "") for t in item.get("tags", [])[:10]])
+        populate_tags(self._tags_box, extract_tag_names(item.get("tags", []))[:10])
 
         self._dl_btn.set_sensitive(True)
         self._open_btn.set_sensitive(True)
