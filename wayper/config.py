@@ -35,6 +35,9 @@ class TransitionConfig:
     fps: int = 60
 
 
+NO_TRANSITION = TransitionConfig(type="none", duration=0, fps=60)
+
+
 @dataclass
 class GreeterConfig:
     image: Path | None = Path("/usr/share/backgrounds/greeter.jpg")

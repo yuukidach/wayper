@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import signal
 from pathlib import Path
 
@@ -17,11 +16,13 @@ from .backend import (
     query_current,
     set_wallpaper,
 )
-from .config import TransitionConfig, load_config
+from .config import NO_TRANSITION, load_config
+from .daemon import is_daemon_running, signal_daemon
 from .history import go_prev, pick_next, push as push_history
 from .pool import (
     add_to_blacklist,
     count_images,
+    disk_usage_mb,
     favorites_dir,
     pick_random,
     pool_dir,
@@ -56,23 +57,12 @@ def status() -> dict:
             "favorites_count": fc,
         })
 
-    total_bytes = sum(
-        f.stat().st_size for f in config.download_dir.rglob("*") if f.is_file()
-    ) if config.download_dir.exists() else 0
-
-    daemon_running = False
-    if config.pid_file.exists():
-        try:
-            pid = int(config.pid_file.read_text().strip())
-            os.kill(pid, 0)
-            daemon_running = True
-        except (ValueError, ProcessLookupError, OSError):
-            pass
+    daemon_running, _ = is_daemon_running(config)
 
     return {
         "mode": current_mode,
         "daemon": daemon_running,
-        "disk_mb": round(total_bytes / 1024 / 1024, 1),
+        "disk_mb": round(disk_usage_mb(config), 1),
         "quota_mb": config.quota_mb,
         "monitors": monitors_info,
     }
@@ -142,7 +132,7 @@ def fav(open_url: bool = False) -> dict:
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / img.name
         img.rename(dest)
-        set_wallpaper(monitor, dest, TransitionConfig(type="none", duration=0, fps=60))
+        set_wallpaper(monitor, dest, NO_TRANSITION)
 
         if open_url:
             import webbrowser
@@ -170,7 +160,7 @@ def unfav() -> dict:
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / img.name
         img.rename(dest)
-        set_wallpaper(monitor, dest, TransitionConfig(type="none", duration=0, fps=60))
+        set_wallpaper(monitor, dest, NO_TRANSITION)
         notify("Wallpaper", "Removed from favorites")
         return {"action": "unfav", "image": str(dest)}
 
@@ -238,12 +228,7 @@ def set_mode(mode: str | None = None) -> dict:
 
     write_mode(config, mode)
 
-    if config.pid_file.exists():
-        try:
-            pid = int(config.pid_file.read_text().strip())
-            os.kill(pid, signal.SIGUSR2)
-        except (ValueError, ProcessLookupError, OSError):
-            pass
+    signal_daemon(config, signal.SIGUSR2)
 
     notify("Wallpaper", f"Mode: {mode}")
     return {"action": "mode", "mode": mode}

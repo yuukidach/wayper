@@ -49,6 +49,27 @@ def remove_pid_file(config: WayperConfig) -> None:
     config.pid_file.unlink(missing_ok=True)
 
 
+def is_daemon_running(config: WayperConfig) -> tuple[bool, int | None]:
+    """Check if daemon is alive. Returns (running, pid)."""
+    if not config.pid_file.exists():
+        return False, None
+    try:
+        pid = int(config.pid_file.read_text().strip())
+        os.kill(pid, 0)
+        return True, pid
+    except (ValueError, ProcessLookupError, OSError):
+        return False, None
+
+
+def signal_daemon(config: WayperConfig, sig: int) -> bool:
+    """Send a signal to the running daemon. Returns True if sent."""
+    running, pid = is_daemon_running(config)
+    if running and pid:
+        os.kill(pid, sig)
+        return True
+    return False
+
+
 def set_all_wallpapers(config: WayperConfig, mode: str) -> None:
     """Set wallpaper on all configured monitors."""
     history_items: list[tuple[str, Path]] = []

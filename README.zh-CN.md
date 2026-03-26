@@ -28,7 +28,7 @@
 - **SFW/NSFW 切换** — 一键切换，跨会话持久化。
 - **历史导航** — 前进/后退浏览壁纸历史，按显示器独立记录。
 - **收藏与黑名单** — 喜欢/不喜欢，支持撤销。收藏的壁纸继续参与轮换。
-- **GTK4 浏览器** — 浏览、预览和管理壁纸集合，支持键盘快捷键。可从 rofi 等启动器打开。
+- **原生浏览器** — 浏览、预览和管理壁纸集合，支持键盘快捷键。Linux 使用 GTK4，macOS 使用 AppKit。
 - **AI 原生** — 内置 MCP 服务器，AI 助手（Claude Code 等）可以直接控制壁纸。对 AI 说"删掉这张坏壁纸"或"收藏这张"就能执行。
 - **JSON 输出** — 所有命令支持 `--json`，方便脚本和自动化。
 
@@ -40,12 +40,17 @@
 paru -S wayper     # 或: yay -S wayper
 ```
 
+### macOS
+
+从 [Releases](https://github.com/yuukidach/wayper/releases) 下载 `Wayper.app.zip`，解压后拖入 `~/Applications`。
+
 ### 从源码安装
 
 ```bash
 git clone https://github.com/yuukidach/wayper.git
 cd wayper
-uv venv && uv pip install -e .
+uv venv && uv pip install -e '.[macos]'
+wayper setup   # 安装 Wayper.app 到 ~/Applications
 ```
 
 ## 使用
@@ -60,14 +65,15 @@ wayper dislike              # 拉黑 + 切换
 wayper undislike            # 撤销上次拉黑
 wayper mode [sfw|nsfw]      # 切换模式
 wayper status               # 查看当前状态
-wayper browse               # GTK4 壁纸浏览器
-wayper setup                # 安装桌面入口（rofi 等启动器）
+wayper browse               # 原生壁纸浏览器
+wayper-gui                  # 独立 GUI 应用（macOS）
+wayper setup                # 安装 .app（macOS）或 .desktop（Linux）
 wayper --json status        # JSON 格式输出
 ```
 
 ### 浏览器
 
-GTK4 壁纸浏览器，支持缩略图网格、全尺寸预览和键盘快捷键。
+原生壁纸浏览器，支持缩略图网格、全尺寸预览和键盘快捷键。Linux 使用 GTK4，macOS 使用 AppKit。
 
 <p align="center">
   <img src="assets/browse.png" alt="浏览器窗口" width="540">
@@ -81,7 +87,9 @@ o          在 Wallhaven 打开      d        删除
 q/Esc      关闭
 ```
 
-运行 `wayper setup` 安装桌面入口，之后可通过 rofi 等启动器打开。
+### GUI 应用（macOS）
+
+`wayper-gui` 启动独立应用，集成浏览、快捷操作（下一张/上一张/收藏/拉黑）和 daemon 控制。运行 `wayper setup` 将 `Wayper.app` 安装到 `~/Applications`，即可通过 Spotlight/Alfred 启动。
 
 ### Hyprland 快捷键示例
 
@@ -129,10 +137,11 @@ cp example-config.toml ~/.config/wayper/config.toml
 ## 依赖
 
 - Python 3.12+
-- [swww](https://github.com/LGFae/swww) — Wayland 壁纸引擎
-- [Hyprland](https://hyprland.org/) — 用于检测当前聚焦的显示器
 - [Wallhaven API key](https://wallhaven.cc/settings/account)
-- [GTK4](https://gtk.org/) + [PyGObject](https://pygobject.gnome.org/) — 用于 `wayper browse`（安装：`sudo pacman -S python-gobject gtk4`）
+
+**Linux:** [swww](https://github.com/LGFae/swww)、[Hyprland](https://hyprland.org/)、GTK4 + PyGObject（`sudo pacman -S python-gobject gtk4`）
+
+**macOS:** `pip install 'wayper[macos]'`（安装 PyObjC）
 
 ## 许可
 

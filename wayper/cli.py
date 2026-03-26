@@ -13,7 +13,7 @@ from pathlib import Path
 import click
 
 from .backend import FileLock, get_context, get_focused_monitor, notify, query_current, set_wallpaper
-from .config import TransitionConfig, load_config
+from .config import NO_TRANSITION, TransitionConfig, load_config
 from .history import go_prev, pick_next, push as push_history
 from .pool import (
     add_to_blacklist,
@@ -122,7 +122,7 @@ def fav(ctx, open_url):
         img.rename(dest)
 
         # Re-set wallpaper with no transition so it doesn't flash
-        set_wallpaper(monitor, dest, TransitionConfig(type="none", duration=0, fps=60))
+        set_wallpaper(monitor, dest, NO_TRANSITION)
 
         if open_url:
             import webbrowser
@@ -158,7 +158,7 @@ def unfav(ctx):
         dest_dir = pool_dir(config, mode, mon_cfg.orientation)
         dest = dest_dir / img.name
         img.rename(dest)
-        set_wallpaper(monitor, dest, TransitionConfig(type="none", duration=0, fps=60))
+        set_wallpaper(monitor, dest, NO_TRANSITION)
 
         if ctx.obj["json"]:
             click.echo(json_mod.dumps({"action": "unfav", "image": str(dest)}))
@@ -248,13 +248,8 @@ def mode(ctx, new_mode):
 
     write_mode(config, new_mode)
 
-    # Signal daemon if running
-    if config.pid_file.exists():
-        try:
-            pid = int(config.pid_file.read_text().strip())
-            os.kill(pid, signal.SIGUSR2)
-        except (ValueError, ProcessLookupError, OSError):
-            pass
+    from .daemon import signal_daemon
+    signal_daemon(config, signal.SIGUSR2)
 
     if ctx.obj["json"]:
         click.echo(json_mod.dumps({"action": "mode", "mode": new_mode}))
@@ -283,23 +278,10 @@ def status(ctx):
             "favorites_count": fc,
         })
 
-    # Disk usage
-    total_bytes = sum(
-        f.stat().st_size
-        for f in config.download_dir.rglob("*")
-        if f.is_file()
-    ) if config.download_dir.exists() else 0
-    disk_mb = total_bytes / 1024 / 1024
-
-    # Daemon status
-    daemon_running = False
-    if config.pid_file.exists():
-        try:
-            pid = int(config.pid_file.read_text().strip())
-            os.kill(pid, 0)
-            daemon_running = True
-        except (ValueError, ProcessLookupError, OSError):
-            pass
+    from .daemon import is_daemon_running
+    from .pool import disk_usage_mb
+    disk_mb = disk_usage_mb(config)
+    daemon_running, _ = is_daemon_running(config)
 
     if ctx.obj["json"]:
         click.echo(json_mod.dumps({
@@ -334,18 +316,64 @@ def browse(ctx, category):
 
 @cli.command()
 def setup():
-    """Install desktop entry for application launchers (rofi, etc.)."""
+    """Install desktop entry (Linux) or .app bundle (macOS)."""
     import shutil
 
-    wayper_bin = shutil.which("wayper") or sys.executable.replace("python", "wayper")
-    desktop = Path.home() / ".local/share/applications/wayper-browse.desktop"
-    desktop.parent.mkdir(parents=True, exist_ok=True)
-    desktop.write_text(
-        "[Desktop Entry]\n"
-        "Name=Wayper Browse\n"
-        f"Exec={wayper_bin} browse\n"
-        "Icon=preferences-desktop-wallpaper\n"
-        "Type=Application\n"
-        "Categories=Utility;\n"
+    if sys.platform == "darwin":
+        _setup_macos_app()
+    else:
+        wayper_bin = shutil.which("wayper") or sys.executable.replace("python", "wayper")
+        desktop = Path.home() / ".local/share/applications/wayper-browse.desktop"
+        desktop.parent.mkdir(parents=True, exist_ok=True)
+        desktop.write_text(
+            "[Desktop Entry]\n"
+            "Name=Wayper Browse\n"
+            f"Exec={wayper_bin} browse\n"
+            "Icon=preferences-desktop-wallpaper\n"
+            "Type=Application\n"
+            "Categories=Utility;\n"
+        )
+        click.echo(f"Installed {desktop}")
+
+
+def _setup_macos_app() -> None:
+    import shutil
+
+    gui_bin = shutil.which("wayper-gui") or str(Path(sys.executable).parent / "wayper-gui")
+    app_dir = Path.home() / "Applications" / "Wayper.app"
+    contents = app_dir / "Contents"
+    macos_dir = contents / "MacOS"
+    resources = contents / "Resources"
+
+    macos_dir.mkdir(parents=True, exist_ok=True)
+    resources.mkdir(parents=True, exist_ok=True)
+
+    # Launcher script
+    launcher = macos_dir / "Wayper"
+    launcher.write_text(f"#!/bin/bash\nexec \"{gui_bin}\"\n")
+    launcher.chmod(0o755)
+
+    # Info.plist
+    (contents / "Info.plist").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"'
+        ' "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0">\n<dict>\n'
+        "  <key>CFBundleName</key><string>Wayper</string>\n"
+        "  <key>CFBundleDisplayName</key><string>Wayper</string>\n"
+        "  <key>CFBundleIdentifier</key>"
+        "<string>io.github.yuukidach.wayper</string>\n"
+        "  <key>CFBundleVersion</key><string>1.0</string>\n"
+        "  <key>CFBundleExecutable</key><string>Wayper</string>\n"
+        "  <key>CFBundleIconFile</key><string>icon</string>\n"
+        "  <key>CFBundlePackageType</key><string>APPL</string>\n"
+        "  <key>NSHighResolutionCapable</key><true/>\n"
+        "</dict>\n</plist>\n"
     )
-    click.echo(f"Installed {desktop}")
+
+    # Copy icon if available
+    icon_src = Path(__file__).parent.parent / "assets" / "icon.icns"
+    if icon_src.exists():
+        shutil.copy2(icon_src, resources / "icon.icns")
+
+    click.echo(f"Installed {app_dir}")

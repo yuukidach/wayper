@@ -21,6 +21,13 @@ def count_images(directory: Path) -> int:
     return len(list_images(directory))
 
 
+def disk_usage_mb(config: WayperConfig) -> float:
+    """Total disk usage of download_dir in MB."""
+    if not config.download_dir.exists():
+        return 0.0
+    return sum(f.stat().st_size for f in config.download_dir.rglob("*") if f.is_file()) / 1024 / 1024
+
+
 def pool_dir(config: WayperConfig, mode: str, orientation: str) -> Path:
     return config.download_dir / mode / orientation
 

@@ -40,12 +40,17 @@
 paru -S wayper     # or: yay -S wayper
 ```
 
+### macOS
+
+Download `Wayper.app.zip` from [Releases](https://github.com/yuukidach/wayper/releases), unzip, and drag to `~/Applications`.
+
 ### From source
 
 ```bash
 git clone https://github.com/yuukidach/wayper.git
 cd wayper
-uv venv && uv pip install -e .
+uv venv && uv pip install -e '.[macos]'
+wayper setup   # install Wayper.app to ~/Applications
 ```
 
 ## Usage
@@ -61,7 +66,8 @@ wayper undislike            # undo last dislike
 wayper mode [sfw|nsfw]      # toggle or set mode
 wayper status               # show current state
 wayper browse               # native wallpaper browser
-wayper setup                # install desktop entry for rofi/launchers
+wayper-gui                  # standalone GUI app (macOS)
+wayper setup                # install .app bundle (macOS) or .desktop entry (Linux)
 wayper --json status        # machine-readable output
 ```
 
@@ -75,6 +81,10 @@ f        favorite               x        remove/reject/restore
 o        open on Wallhaven      d        delete
 m        toggle SFW/NSFW        q/Esc    close
 ```
+
+### GUI App (macOS)
+
+`wayper-gui` launches a standalone app with browse, quick actions (next/prev/fav/dislike), and daemon control — all in one window. Run `wayper setup` to install `Wayper.app` in `~/Applications` for Spotlight/Alfred access.
 
 ### Keybindings
 

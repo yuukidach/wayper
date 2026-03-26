@@ -266,21 +266,23 @@ footer .links a { color: var(--subtext); }
   <h2>Install</h2>
   <div class="tabs">
     <div class="tab active" onclick="switchTab(event, 'tab-aur')">Arch (AUR)</div>
-    <div class="tab" onclick="switchTab(event, 'tab-source')">From source</div>
     <div class="tab" onclick="switchTab(event, 'tab-macos')">macOS</div>
+    <div class="tab" onclick="switchTab(event, 'tab-source')">From source</div>
   </div>
   <div id="tab-aur" class="tab-content active">
     <pre><code>paru -S wayper     # or: yay -S wayper</code></pre>
   </div>
+  <div id="tab-macos" class="tab-content">
+    <div style="padding:18px 22px;background:var(--mantle);border:1px solid var(--surface0);border-radius:0 10px 10px 10px">
+      <p style="margin-bottom:12px">Download <code>Wayper.app.zip</code>, unzip, and drag to <code>~/Applications</code>.</p>
+      <a class="btn btn-primary" href="https://github.com/yuukidach/wayper/releases/latest" style="font-size:.88em;padding:8px 20px">Download from Releases</a>
+    </div>
+  </div>
   <div id="tab-source" class="tab-content">
     <pre><code>git clone https://github.com/yuukidach/wayper.git
 cd wayper
-uv venv && uv pip install -e .</code></pre>
-  </div>
-  <div id="tab-macos" class="tab-content">
-    <pre><code>git clone https://github.com/yuukidach/wayper.git
-cd wayper
-uv venv && uv pip install -e '.[macos]'</code></pre>
+uv venv && uv pip install -e '.[macos]'   # macOS
+uv venv && uv pip install -e .            # Linux</code></pre>
   </div>
 </section>
 
@@ -294,14 +296,19 @@ wayper dislike              # blacklist + switch
 wayper undislike            # undo last dislike
 wayper mode [sfw|nsfw]      # toggle or set mode
 wayper status               # show current state
-wayper browse               # native wallpaper browser</code></pre>
+wayper browse               # native wallpaper browser
+wayper-gui                  # standalone GUI app (macOS)</code></pre>
 </section>
 
 <section id="browse">
-  <h2>Browse</h2>
+  <h2>Browse &amp; GUI</h2>
   <p style="margin-bottom:20px">
     <img src="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png" alt="browse window" loading="lazy"
          style="width:100%;max-width:560px;border-radius:12px;border:1px solid var(--surface0);box-shadow:0 4px 24px rgba(0,0,0,.3)">
+  </p>
+  <p style="margin-bottom:16px;color:var(--subtext);font-size:.92em">
+    <code>wayper browse</code> opens a native browser window (GTK4 on Linux, AppKit on macOS).<br>
+    On macOS, <code>Wayper.app</code> is a standalone GUI with browse, quick actions, and daemon control in one window.
   </p>
   <div class="kbd-grid">
     <div><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <span class="label">switch category</span></div>

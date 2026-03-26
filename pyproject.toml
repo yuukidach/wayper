@@ -11,10 +11,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-macos = ["pyobjc-framework-Cocoa>=10.0"]
+macos = ["pyobjc-framework-Cocoa>=10.0", "pyobjc-framework-Quartz>=10.0"]
 
 [project.scripts]
 wayper = "wayper.cli:cli"
+wayper-gui = "wayper.gui:run_app"
 wayper-mcp = "wayper.mcp_server:main"
 
 [build-system]
