@@ -30,6 +30,7 @@ class ActionsPanel:
         self.config = config
         self._current_path: Path | None = None
         self._current_monitor: str | None = None
+        self._target_monitor: str | None = None  # None = auto (focused)
         self._timer_id: int | None = None
         self.widget = self._build()
         self._refresh()
@@ -55,9 +56,14 @@ class ActionsPanel:
         info_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         info_bar.set_halign(Gtk.Align.CENTER)
 
-        self._monitor_label = Gtk.Label(label="\u2014")
-        self._monitor_label.add_css_class("info-label")
-        info_bar.append(self._monitor_label)
+        # Monitor selector
+        self._monitor_combo = Gtk.ComboBoxText()
+        self._monitor_combo.append_text("Auto")
+        for mon in self.config.monitors:
+            self._monitor_combo.append_text(mon.name)
+        self._monitor_combo.set_active(0)
+        self._monitor_combo.connect("changed", self._on_monitor_changed)
+        info_bar.append(self._monitor_combo)
 
         self._filename_label = Gtk.Label(label="No wallpaper")
         info_bar.append(self._filename_label)
@@ -108,16 +114,30 @@ class ActionsPanel:
         btn.connect("clicked", lambda _: handler())
         return btn
 
+    # ── Monitor selector ──
+
+    def _on_monitor_changed(self, combo: Gtk.ComboBoxText):
+        idx = combo.get_active()
+        if idx <= 0:
+            self._target_monitor = None
+        else:
+            self._target_monitor = combo.get_active_text()
+        self._current_path = None  # Force refresh
+        self._refresh()
+
+    def _get_monitor(self) -> str | None:
+        return self._target_monitor or get_focused_monitor()
+
     # ── Refresh ──
 
     def refresh(self):
         """Public refresh — force update regardless of change detection."""
-        self._last_state = None
+        self._current_path = None
         self._refresh()
 
     def _refresh(self):
         current = query_current()
-        monitor = get_focused_monitor()
+        monitor = self._get_monitor()
         if not monitor or monitor not in current:
             for name, path in current.items():
                 if path:
@@ -137,7 +157,6 @@ class ActionsPanel:
         else:
             self._preview.set_filename(None)
 
-        self._monitor_label.set_label(monitor or "\u2014")
         self._filename_label.set_label(img.name if img else "No wallpaper")
 
         is_fav = img and "favorites" in str(img)
@@ -165,32 +184,32 @@ class ActionsPanel:
     # ── Actions ──
 
     def _do_next(self):
-        do_next(self.config)
+        do_next(self.config, self._target_monitor)
         self._current_path = None
         self._refresh()
 
     def _do_prev(self):
-        do_prev(self.config)
+        do_prev(self.config, self._target_monitor)
         self._current_path = None
         self._refresh()
 
     def _do_fav(self):
-        do_favorite(self.config)
+        do_favorite(self.config, self._target_monitor)
         self._current_path = None
         self._refresh()
 
     def _do_unfav(self):
-        do_unfavorite(self.config)
+        do_unfavorite(self.config, self._target_monitor)
         self._current_path = None
         self._refresh()
 
     def _do_dislike(self):
-        do_dislike(self.config)
+        do_dislike(self.config, self._target_monitor)
         self._current_path = None
         self._refresh()
 
     def _do_undislike(self):
-        do_undislike(self.config)
+        do_undislike(self.config, self._target_monitor)
         self._current_path = None
         self._refresh()
 

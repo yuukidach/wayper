@@ -58,7 +58,7 @@ wayper/
     └── gtk/         #   Linux GTK4 GUI
         ├── app.py, main_window.py, browse_view.py
         ├── actions_view.py, daemon_control.py
-        ├── settings_window.py, css.py
+        ├── settings_window.py, wallhaven_view.py, css.py
         └── __init__.py
 ```
 

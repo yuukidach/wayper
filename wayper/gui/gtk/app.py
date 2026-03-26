@@ -24,7 +24,7 @@ class WayperGtkApp(Gtk.Application):
     def do_activate(self):
         if not WayperGtkApp._css_applied:
             css = Gtk.CssProvider()
-            css.load_from_data(CSS)
+            css.load_from_data(CSS.encode())
             Gtk.StyleContext.add_provider_for_display(
                 Gdk.Display.get_default(),
                 css,

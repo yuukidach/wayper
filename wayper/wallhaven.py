@@ -13,6 +13,8 @@ from .pool import favorites_dir, is_blacklisted, pool_dir
 
 SEARCH_URL = "https://wallhaven.cc/api/v1/search"
 
+_PURITY_CODES = {"sfw": "100", "sketchy": "010", "nsfw": "001"}
+
 
 class WallhavenClient:
     def __init__(self, config: WayperConfig):
@@ -28,7 +30,7 @@ class WallhavenClient:
     async def search(self, orientation: str, purity: str) -> list[str]:
         """Return list of image URLs from wallhaven search."""
         page = random.randint(1, self.config.wallhaven.max_page)
-        purity_code = "100" if purity == "sfw" else "001"
+        purity_code = _PURITY_CODES.get(purity, "001")
         params = {
             "categories": self.config.wallhaven.categories,
             "purity": purity_code,
@@ -44,6 +46,35 @@ class WallhavenClient:
             resp = await self.client.get(SEARCH_URL, params=params)
             resp.raise_for_status()
             return [item["path"] for item in resp.json().get("data", [])]
+        except Exception:
+            return []
+
+    async def search_with_meta(
+        self,
+        query: str = "",
+        page: int = 1,
+        purity: str = "sfw",
+        **overrides: str,
+    ) -> list[dict]:
+        """Search Wallhaven and return full metadata for each result."""
+        purity_code = _PURITY_CODES.get(purity, "001")
+        params = {
+            "categories": self.config.wallhaven.categories,
+            "purity": purity_code,
+            "topRange": self.config.wallhaven.top_range,
+            "sorting": self.config.wallhaven.sorting,
+            "order": "desc",
+            "ai_art_filter": self.config.wallhaven.ai_art_filter,
+            "page": page,
+            "apikey": self.config.api_key,
+        }
+        if query:
+            params["q"] = query
+        params.update(overrides)
+        try:
+            resp = await self.client.get(SEARCH_URL, params=params)
+            resp.raise_for_status()
+            return resp.json().get("data", [])
         except Exception:
             return []
 
