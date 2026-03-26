@@ -70,13 +70,13 @@ class MainWindow(Gtk.ApplicationWindow):
 
         # Center: view selector
         view_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        self._view_browse_btn = Gtk.ToggleButton(label="Browse")
+        self._view_browse_btn = Gtk.ToggleButton(label="Browse [B]")
         self._view_browse_btn.add_css_class("view-btn")
         self._view_browse_btn.set_active(True)
-        self._view_actions_btn = Gtk.ToggleButton(label="Quick Actions")
+        self._view_actions_btn = Gtk.ToggleButton(label="Quick Actions [A]")
         self._view_actions_btn.add_css_class("view-btn")
         self._view_actions_btn.set_group(self._view_browse_btn)
-        self._view_wallhaven_btn = Gtk.ToggleButton(label="Wallhaven")
+        self._view_wallhaven_btn = Gtk.ToggleButton(label="Wallhaven [W]")
         self._view_wallhaven_btn.add_css_class("view-btn")
         self._view_wallhaven_btn.set_group(self._view_browse_btn)
         self._view_browse_btn.connect("toggled", self._on_view_toggled, 0)
@@ -163,10 +163,22 @@ class MainWindow(Gtk.ApplicationWindow):
         self._browse.set_mode(self._mode)
         self._daemon.force_refresh()
 
+    _VIEW_KEYS = {
+        Gdk.KEY_b: 0,
+        Gdk.KEY_a: 1,
+        Gdk.KEY_w: 2,
+    }
+    _VIEW_BUTTONS = ("_view_browse_btn", "_view_actions_btn", "_view_wallhaven_btn")
+
     def _on_key(self, ctrl, keyval, keycode, state):
         # Global keys
         if keyval == Gdk.KEY_m:
             self._mode_btn.set_active(not self._mode_btn.get_active())
+            return True
+
+        # View switching keys
+        if (view_idx := self._VIEW_KEYS.get(keyval)) is not None:
+            getattr(self, self._VIEW_BUTTONS[view_idx]).set_active(True)
             return True
 
         # Category keys (browse view only)
