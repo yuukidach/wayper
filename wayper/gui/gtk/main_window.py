@@ -51,7 +51,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.set_titlebar(header)
 
         # Left: category buttons
-        self._cat_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self._cat_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self._cat_buttons: dict[str, Gtk.ToggleButton] = {}
         group = None
         for cat in CATEGORIES:
@@ -69,7 +69,7 @@ class MainWindow(Gtk.ApplicationWindow):
         header.pack_start(self._cat_box)
 
         # Center: view selector
-        view_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        view_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self._view_browse_btn = Gtk.ToggleButton(label="Browse [B]")
         self._view_browse_btn.add_css_class("view-btn")
         self._view_browse_btn.set_active(True)
