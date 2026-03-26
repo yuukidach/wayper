@@ -7,7 +7,7 @@ from pathlib import Path
 
 import objc
 from AppKit import (
-    NSBezelStyleAccessoryBarAction,
+    NSBezelStyleRounded,
     NSButton,
     NSFont,
     NSImage,
@@ -25,15 +25,15 @@ from AppKit import (
     NSView,
 )
 from Foundation import NSObject
-from Quartz import CGColorCreateGenericRGB
 
 from ..backend import get_context, get_focused_monitor, query_current, set_wallpaper
 from ..browse._common import wallhaven_url
-from ..config import NO_TRANSITION, WayperConfig
-from ..history import go_prev, pick_next, push as push_history
+from ..config import NO_TRANSITION
+from ..history import go_prev, pick_next
+from ..history import push as push_history
 from ..pool import add_to_blacklist, favorites_dir, pick_random, pool_dir, remove_from_blacklist
 from ..state import pop_undo, push_undo, read_mode, restore_from_trash
-from .colors import C_BLUE, C_GREEN, C_TEXT
+from .colors import C_BLUE, C_GREEN, C_SURFACE_CG, C_TEXT
 
 
 class ActionsPanelController(NSObject):
@@ -58,13 +58,14 @@ class ActionsPanelController(NSObject):
         stack = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 700, 550))
         stack.setOrientation_(NSUserInterfaceLayoutOrientationVertical)
         stack.setSpacing_(16)
+        stack.setDistribution_(2)  # NSStackViewDistributionFill
         stack.setTranslatesAutoresizingMaskIntoConstraints_(False)
 
         self._preview = NSImageView.alloc().initWithFrame_(NSMakeRect(0, 0, 700, 400))
         self._preview.setImageScaling_(NSImageScaleProportionallyUpOrDown)
         self._preview.setWantsLayer_(True)
         self._preview.layer().setCornerRadius_(12)
-        self._preview.layer().setBackgroundColor_(CGColorCreateGenericRGB(0, 0, 0, 1))
+        self._preview.layer().setBackgroundColor_(C_SURFACE_CG)
         self._preview.setContentHuggingPriority_forOrientation_(1, 1)
         self._preview.setContentHuggingPriority_forOrientation_(1, 0)
         self._preview.setContentCompressionResistancePriority_forOrientation_(1, 1)
@@ -92,24 +93,48 @@ class ActionsPanelController(NSObject):
         self._fav_label.setFont_(NSFont.systemFontOfSize_(12))
         info_bar.addView_inGravity_(self._fav_label, NSStackViewGravityTrailing)
 
+        info_bar.setContentHuggingPriority_forOrientation_(999, 1)
         stack.addView_inGravity_(info_bar, NSStackViewGravityLeading)
 
-        # Action buttons
-        btn_bar = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 600, 36))
-        btn_bar.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
-        btn_bar.setSpacing_(12)
-
+        # Action buttons — grouped by function
         self._btn_prev = self._make_btn("Prev", "doPrev:")
         self._btn_next = self._make_btn("Next", "doNext:")
+        self._btn_next.setKeyEquivalent_("\r")
         self._btn_fav = self._make_btn("Fav", "doFav:")
         self._btn_unfav = self._make_btn("Unfav", "doUnfav:")
         self._btn_dislike = self._make_btn("Dislike", "doDislike:")
         self._btn_undo = self._make_btn("Undo Dislike", "doUndislike:")
         self._btn_open = self._make_btn("Open", "doOpen:")
 
-        for b in (self._btn_prev, self._btn_next, self._btn_fav, self._btn_unfav,
-                  self._btn_dislike, self._btn_undo, self._btn_open):
-            btn_bar.addView_inGravity_(b, NSStackViewGravityCenter)
+        # Navigation group
+        nav_group = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 150, 36))
+        nav_group.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
+        nav_group.setSpacing_(8)
+        nav_group.addView_inGravity_(self._btn_prev, NSStackViewGravityCenter)
+        nav_group.addView_inGravity_(self._btn_next, NSStackViewGravityCenter)
+
+        # Rating group
+        rate_group = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 250, 36))
+        rate_group.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
+        rate_group.setSpacing_(8)
+        rate_group.addView_inGravity_(self._btn_fav, NSStackViewGravityCenter)
+        rate_group.addView_inGravity_(self._btn_unfav, NSStackViewGravityCenter)
+        rate_group.addView_inGravity_(self._btn_dislike, NSStackViewGravityCenter)
+        rate_group.addView_inGravity_(self._btn_undo, NSStackViewGravityCenter)
+
+        # Utility group
+        util_group = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 80, 36))
+        util_group.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
+        util_group.setSpacing_(8)
+        util_group.addView_inGravity_(self._btn_open, NSStackViewGravityCenter)
+
+        btn_bar = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 600, 36))
+        btn_bar.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
+        btn_bar.setSpacing_(20)
+        btn_bar.addView_inGravity_(nav_group, NSStackViewGravityCenter)
+        btn_bar.addView_inGravity_(rate_group, NSStackViewGravityCenter)
+        btn_bar.addView_inGravity_(util_group, NSStackViewGravityCenter)
+        btn_bar.setContentHuggingPriority_forOrientation_(999, 1)
 
         stack.addView_inGravity_(btn_bar, NSStackViewGravityCenter)
 
@@ -122,13 +147,14 @@ class ActionsPanelController(NSObject):
 
             self._preview.leadingAnchor().constraintEqualToAnchor_(stack.leadingAnchor()),
             self._preview.trailingAnchor().constraintEqualToAnchor_(stack.trailingAnchor()),
+            self._preview.heightAnchor().constraintGreaterThanOrEqualToConstant_(200),
         ])
 
         return root
 
     def _make_btn(self, title: str, action: str) -> NSButton:
         btn = NSButton.buttonWithTitle_target_action_(title, self, action)
-        btn.setBezelStyle_(NSBezelStyleAccessoryBarAction)
+        btn.setBezelStyle_(NSBezelStyleRounded)
         return btn
 
     # ── Refresh with change detection ──

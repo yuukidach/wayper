@@ -7,7 +7,7 @@ from pathlib import Path
 
 import objc
 from AppKit import (
-    NSBezelStyleAccessoryBarAction,
+    NSBezelStyleRounded,
     NSButton,
     NSCenterTextAlignment,
     NSCollectionView,
@@ -32,15 +32,13 @@ from AppKit import (
     NSView,
 )
 from Foundation import NSIndexPath, NSIndexSet, NSObject
-from Quartz import CGColorCreateGenericRGB
 
 from ..backend import find_monitor, get_focused_monitor, set_wallpaper
 from ..browse._common import get_blocklist_only, get_images, get_orient, wallhaven_url
-from ..config import WayperConfig
 from ..history import push as push_history
 from ..pool import add_to_blacklist, favorites_dir, pool_dir, remove_from_blacklist
 from ..state import push_undo, read_mode, write_mode
-from .colors import C_BASE, C_BLUE, C_OVERLAY, C_TEXT
+from .colors import C_BASE, C_BLUE, C_OVERLAY, C_SURFACE_CG, C_TEXT
 
 THUMB_SIZE = 140
 ITEM_IDENTIFIER = "gui_thumb"
@@ -66,7 +64,7 @@ class ThumbnailItem(NSCollectionViewItem):
         label = NSTextField.labelWithString_("")
         label.setFrame_(NSMakeRect(0, 2, THUMB_SIZE, 18))
         label.setAlignment_(NSCenterTextAlignment)
-        label.setFont_(NSFont.systemFontOfSize_(10))
+        label.setFont_(NSFont.systemFontOfSize_(11))
         label.setTextColor_(C_TEXT)
         label.setLineBreakMode_(NSLineBreakByTruncatingTail)
         container.addSubview_(label)
@@ -149,12 +147,20 @@ class BrowsePanelController(NSObject):
         self._preview.setImageScaling_(NSImageScaleProportionallyUpOrDown)
         self._preview.setWantsLayer_(True)
         self._preview.layer().setCornerRadius_(12)
-        self._preview.layer().setBackgroundColor_(CGColorCreateGenericRGB(0, 0, 0, 1))
+        self._preview.layer().setBackgroundColor_(C_SURFACE_CG)
         self._preview.setContentHuggingPriority_forOrientation_(1, 1)
         self._preview.setContentHuggingPriority_forOrientation_(1, 0)
         self._preview.setContentCompressionResistancePriority_forOrientation_(1, 1)
         self._preview.setContentCompressionResistancePriority_forOrientation_(1, 0)
         self._preview.setTranslatesAutoresizingMaskIntoConstraints_(False)
+
+        self._placeholder = NSTextField.labelWithString_("Select an image to preview")
+        self._placeholder.setTextColor_(C_OVERLAY)
+        self._placeholder.setFont_(NSFont.systemFontOfSize_(13))
+        self._placeholder.setAlignment_(NSCenterTextAlignment)
+        self._placeholder.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        self._preview.addSubview_(self._placeholder)
+
         right.addView_inGravity_(self._preview, NSStackViewGravityLeading)
 
         btn_bar = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 400, 32))
@@ -188,7 +194,8 @@ class BrowsePanelController(NSObject):
         root.addConstraints_([
             scroll.topAnchor().constraintEqualToAnchor_constant_(root.topAnchor(), 8),
             scroll.leadingAnchor().constraintEqualToAnchor_constant_(root.leadingAnchor(), 8),
-            scroll.widthAnchor().constraintEqualToConstant_(480),
+            scroll.widthAnchor().constraintEqualToAnchor_multiplier_(root.widthAnchor(), 0.4),
+            scroll.widthAnchor().constraintGreaterThanOrEqualToConstant_(300),
             scroll.bottomAnchor().constraintEqualToAnchor_constant_(root.bottomAnchor(), -8),
 
             right.topAnchor().constraintEqualToAnchor_constant_(root.topAnchor(), 8),
@@ -198,6 +205,11 @@ class BrowsePanelController(NSObject):
 
             self._preview.leadingAnchor().constraintEqualToAnchor_(right.leadingAnchor()),
             self._preview.trailingAnchor().constraintEqualToAnchor_(right.trailingAnchor()),
+
+            self._placeholder.centerXAnchor().constraintEqualToAnchor_(
+                self._preview.centerXAnchor()),
+            self._placeholder.centerYAnchor().constraintEqualToAnchor_(
+                self._preview.centerYAnchor()),
         ])
 
         self._update_buttons()
@@ -205,7 +217,7 @@ class BrowsePanelController(NSObject):
 
     def _make_btn(self, title, action):
         btn = NSButton.buttonWithTitle_target_action_(title, self, action)
-        btn.setBezelStyle_(NSBezelStyleAccessoryBarAction)
+        btn.setBezelStyle_(NSBezelStyleRounded)
         return btn
 
     # ── Data loading ──
@@ -218,7 +230,7 @@ class BrowsePanelController(NSObject):
         )
         self._thumb_cache.clear()
         self.selected_index = -1
-        self._preview.setImage_(None)
+        self._update_preview()
         self._cv.reloadData()
         self._update_status()
         self._update_buttons()
@@ -243,7 +255,7 @@ class BrowsePanelController(NSObject):
         total = len(self.images) + len(self._blocklist_only)
         if total == 0:
             self.selected_index = -1
-            self._preview.setImage_(None)
+            self._update_preview()
         else:
             self.selected_index = min(idx, total - 1)
             ip = NSIndexPath.indexPathForItem_inSection_(self.selected_index, 0)
@@ -309,7 +321,7 @@ class BrowsePanelController(NSObject):
     def collectionView_didDeselectItemsAtIndexPaths_(self, cv, indexPaths):
         if not cv.selectionIndexPaths():
             self.selected_index = -1
-            self._preview.setImage_(None)
+            self._update_preview()
             self._update_buttons()
 
     # ── Preview ──
@@ -319,8 +331,10 @@ class BrowsePanelController(NSObject):
         if path and path.exists():
             img = NSImage.alloc().initByReferencingFile_(str(path))
             self._preview.setImage_(img)
+            self._placeholder.setHidden_(True)
         else:
             self._preview.setImage_(None)
+            self._placeholder.setHidden_(False)
 
     def _selected_path(self) -> Path | None:
         if 0 <= self.selected_index < len(self.images):

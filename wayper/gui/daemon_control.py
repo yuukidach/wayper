@@ -9,7 +9,7 @@ from pathlib import Path
 
 import objc
 from AppKit import (
-    NSBezelStyleAccessoryBarAction,
+    NSBezelStyleRounded,
     NSButton,
     NSFont,
     NSMakeRect,
@@ -21,13 +21,11 @@ from AppKit import (
     NSUserInterfaceLayoutOrientationHorizontal,
 )
 from Foundation import NSObject
-from Quartz import CGColorCreateGenericRGB
 
-from ..config import WayperConfig
 from ..daemon import is_daemon_running
 from ..pool import count_images, disk_usage_mb, favorites_dir, pool_dir
 from ..state import read_mode
-from .colors import C_BASE, C_GREEN, C_RED, C_SUBTEXT, C_TEXT
+from .colors import C_BASE_CG, C_GREEN, C_RED, C_SUBTEXT, C_TEXT
 
 
 def _find_wayper_cli() -> str:
@@ -65,10 +63,7 @@ class DaemonControlBar(NSObject):
         bar.setOrientation_(NSUserInterfaceLayoutOrientationHorizontal)
         bar.setSpacing_(8)
         bar.setWantsLayer_(True)
-        bar.layer().setBackgroundColor_(
-            CGColorCreateGenericRGB(C_BASE.redComponent(), C_BASE.greenComponent(),
-                                   C_BASE.blueComponent(), 1)
-        )
+        bar.layer().setBackgroundColor_(C_BASE_CG)
 
         # Left: daemon status dot + text + start/stop button
         self._status_dot = NSTextField.labelWithString_("\u25cf")
@@ -81,7 +76,7 @@ class DaemonControlBar(NSObject):
         bar.addView_inGravity_(self._status_text, NSStackViewGravityLeading)
 
         self._daemon_btn = NSButton.buttonWithTitle_target_action_("Start", self, "toggleDaemon:")
-        self._daemon_btn.setBezelStyle_(NSBezelStyleAccessoryBarAction)
+        self._daemon_btn.setBezelStyle_(NSBezelStyleRounded)
         self._daemon_btn.setFont_(NSFont.systemFontOfSize_(11))
         bar.addView_inGravity_(self._daemon_btn, NSStackViewGravityLeading)
 
@@ -94,7 +89,7 @@ class DaemonControlBar(NSObject):
         settings_btn = NSButton.buttonWithTitle_target_action_(
             "\u2699\uFE0E", self, "openSettings:",
         )
-        settings_btn.setBezelStyle_(NSBezelStyleAccessoryBarAction)
+        settings_btn.setBezelStyle_(NSBezelStyleRounded)
         settings_btn.setFont_(NSFont.systemFontOfSize_(13))
         settings_btn.setBordered_(False)
         bar.addView_inGravity_(settings_btn, NSStackViewGravityTrailing)
