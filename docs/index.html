@@ -186,7 +186,7 @@ footer .links a { color: var(--subtext); }
       <a href="#features">Features</a>
       <a href="#install">Install</a>
       <a href="#usage">Usage</a>
-      <a href="#browse">Browse</a>
+      <a href="#browse">GUI</a>
       <a href="#mcp">MCP</a>
     </div>
     <a class="gh-btn" href="https://github.com/yuukidach/wayper">GitHub</a>
@@ -226,7 +226,7 @@ footer .links a { color: var(--subtext); }
   <div class="features">
     <div class="feature">
       <strong>Wallhaven</strong>
-      <p>Auto-downloads wallpapers based on your search preferences.</p>
+      <p>Auto-downloads wallpapers based on your preferences. Browse and search Wallhaven online from the GUI.</p>
     </div>
     <div class="feature">
       <strong>Auto orientation</strong>
@@ -249,8 +249,8 @@ footer .links a { color: var(--subtext); }
       <p>Like/dislike with undo. Favorites stay in rotation.</p>
     </div>
     <div class="feature">
-      <strong>Native browser</strong>
-      <p>GTK4 on Linux, AppKit on macOS. Keyboard-driven.</p>
+      <strong>Native GUI</strong>
+      <p>Browse, search, filter, multi-select, drag-and-drop, right-click menus. GTK4 on Linux, AppKit on macOS.</p>
     </div>
     <div class="feature">
       <strong>AI-native</strong>
@@ -289,7 +289,8 @@ uv venv && uv pip install -e .            # Linux</code></pre>
 
 <section id="usage">
   <h2>Usage</h2>
-  <pre><code>wayper daemon               # start background rotation + downloads
+  <pre><code>wayper daemon start         # start background rotation + downloads
+wayper daemon stop          # stop daemon
 wayper next                 # next wallpaper
 wayper prev                 # previous wallpaper
 wayper fav [--open]         # favorite current wallpaper
@@ -297,27 +298,29 @@ wayper dislike              # blacklist + switch
 wayper undislike            # undo last dislike
 wayper mode [sfw|nsfw]      # toggle or set mode
 wayper status               # show current state
-wayper-gui                  # GUI app (browse, actions, daemon, settings)</code></pre>
+wayper-gui                  # GUI app</code></pre>
 </section>
 
 <section id="browse">
-  <h2>Browse &amp; GUI</h2>
+  <h2>GUI</h2>
   <p style="margin-bottom:20px">
     <img src="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png" alt="browse window" loading="lazy"
-         style="width:100%;max-width:560px;border-radius:12px;border:1px solid var(--surface0);box-shadow:0 4px 24px rgba(0,0,0,.3)">
+         style="width:100%;max-width:740px;border-radius:12px;border:1px solid var(--surface0);box-shadow:0 4px 24px rgba(0,0,0,.3)">
   </p>
   <p style="margin-bottom:16px;color:var(--subtext);font-size:.92em">
-    <code>wayper-gui</code> launches a standalone app with browse, quick actions, daemon control, and settings — all in one window. GTK4 on Linux, AppKit on macOS.
+    <code>wayper-gui</code> — browse your pool, favorites, and disliked wallpapers with search, filter, and sort. Multi-select with <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click, drag-and-drop import, right-click context menus, preview zoom (<kbd>Ctrl</kbd>+scroll). Includes a Wallhaven online search tab, quick actions panel, and live daemon control with quota monitoring. GTK4 on Linux, AppKit on macOS.
   </p>
   <div class="kbd-grid">
     <div><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <span class="label">switch category</span></div>
     <div><kbd>Enter</kbd> <span class="label">set as wallpaper</span></div>
     <div><kbd>f</kbd> <span class="label">favorite</span></div>
-    <div><kbd>x</kbd> <span class="label">remove / reject / restore</span></div>
-    <div><kbd>o</kbd> <span class="label">open on Wallhaven</span></div>
+    <div><kbd>x</kbd> <span class="label">reject / restore</span></div>
     <div><kbd>d</kbd> <span class="label">delete</span></div>
+    <div><kbd>o</kbd> <span class="label">open on Wallhaven</span></div>
     <div><kbd>m</kbd> <span class="label">toggle SFW/NSFW</span></div>
-    <div><kbd>q</kbd> / <kbd>Esc</kbd> <span class="label">close</span></div>
+    <div><kbd>/</kbd> <span class="label">search</span></div>
+    <div><kbd>Ctrl+A</kbd> <span class="label">select all</span></div>
+    <div><kbd>Esc</kbd> <span class="label">clear search / deselect</span></div>
   </div>
 </section>
 
