@@ -73,7 +73,11 @@ nav .gh-btn:hover { background: var(--surface1); color: var(--text); }
 .hero .title-row {
   display: inline-flex; align-items: center; gap: 20px; margin-bottom: 12px;
 }
-.hero .title-row svg { width: 72px; height: 72px; flex-shrink: 0; filter: drop-shadow(0 0 24px rgba(14,165,233,.25)); }
+.hero .title-row svg {
+  width: 72px; height: 72px; flex-shrink: 0;
+  border: 1px solid var(--surface1); border-radius: 14px;
+  filter: drop-shadow(0 0 24px rgba(14,165,233,.25));
+}
 .hero h1 {
   font-size: 3.5em; font-weight: 700; letter-spacing: -0.03em;
   background: linear-gradient(135deg, var(--blue) 0%, var(--teal) 100%);
