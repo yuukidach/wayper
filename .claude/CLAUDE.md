@@ -28,7 +28,7 @@ ruff format --check wayper/
 - Config: `~/.config/wayper/config.toml` (see `example-config.toml`)
 - PID file: `~/.config/wayper/wayper.pid`
 - State files live inside `download_dir`: `.mode`, `.blacklist`, `.undo`, `.history`
-- Version: managed in `pyproject.toml` — keep `wayper/__init__.py` in sync
+- Version: managed in `pyproject.toml` — keep `wayper/__init__.py` and `wayper.spec` (CFBundleVersion) in sync
 
 ## Architecture
 
@@ -80,6 +80,13 @@ wayper/
 - Imports order: stdlib → third-party → local (relative)
 - snake_case functions/variables, PascalCase classes
 - Private methods/functions use `_` prefix
+
+## Release Checklist
+
+1. Bump version in `pyproject.toml`, `wayper/__init__.py`, `wayper.spec`
+2. Commit and tag: `git tag v{version}`
+3. Push with tags: `git push origin main --tags` (triggers macOS DMG build)
+4. Update AUR: edit `~/projects/wayper-aur/PKGBUILD` (pkgver, sha256sums), regenerate `.SRCINFO` via `makepkg --printsrcinfo > .SRCINFO`, commit and push to `ssh://aur@aur.archlinux.org/wayper.git`
 
 ## Guidelines
 
