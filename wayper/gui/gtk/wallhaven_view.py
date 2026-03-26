@@ -19,7 +19,7 @@ from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango
 from ...browse._common import format_size
 from ...config import WayperConfig
 from ...image import resize_crop
-from ...pool import favorites_dir, is_blacklisted, pool_dir
+from ...pool import favorites_dir, is_blacklisted, pool_dir, save_metadata
 from ...state import read_mode
 from ...wallhaven import WallhavenClient
 
@@ -436,6 +436,7 @@ class WallhavenPanel:
             try:
                 success = asyncio.run(self._client.download_image(url, dest))
                 if success:
+                    save_metadata(self.config, filename, item)
                     # Resize to monitor dimensions
                     for m in self.config.monitors:
                         if m.orientation == orient:

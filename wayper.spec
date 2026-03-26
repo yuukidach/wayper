@@ -99,8 +99,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'Wayper',
         'CFBundleDisplayName': 'Wayper',
-        'CFBundleVersion': '0.7.2',
-        'CFBundleShortVersionString': '0.7.2',
+        'CFBundleVersion': '0.7.3',
+        'CFBundleShortVersionString': '0.7.3',
         'CFBundleExecutable': 'Wayper',
         'CFBundleIconFile': 'icon.icns',
         'CFBundlePackageType': 'APPL',
