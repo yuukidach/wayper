@@ -31,6 +31,8 @@ sorting = "toplist"
 ai_art_filter = 0      # 0=off, 1=on
 max_page = 15
 batch_size = 5
+# exclude_tags = ["MetArt", "watermarked"]
+# exclude_combos = [["blonde", "nude", "standing"], ["pornstar", "nude"]]
 
 [transition]
 type = "grow"

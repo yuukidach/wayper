@@ -192,6 +192,37 @@ class SettingsWindow(Gtk.Window):
         self._ai_filter.set_active(wh.ai_art_filter == 1)
         vbox.append(self._ai_filter)
 
+        # Exclude Tags (API-level OR)
+        tag_label = Gtk.Label(label="Exclude Tags (comma-separated, any match)")
+        tag_label.set_halign(Gtk.Align.START)
+        vbox.append(tag_label)
+
+        self._exclude_tags = Gtk.Entry()
+        self._exclude_tags.set_text(", ".join(wh.exclude_tags))
+        self._exclude_tags.set_hexpand(True)
+        self._exclude_tags.add_css_class("settings-entry")
+        self._exclude_tags.set_placeholder_text("e.g. MetArt, watermarked")
+        vbox.append(self._exclude_tags)
+
+        # Exclude Combos (client-side AND within each line)
+        combo_label = Gtk.Label(label="Exclude Combos (one rule per line, tags joined by +)")
+        combo_label.set_halign(Gtk.Align.START)
+        vbox.append(combo_label)
+
+        combo_scroll = Gtk.ScrolledWindow()
+        combo_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        combo_scroll.set_min_content_height(80)
+        combo_scroll.set_vexpand(True)
+
+        self._exclude_combos = Gtk.TextView()
+        self._exclude_combos.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self._exclude_combos.add_css_class("settings-entry")
+        buf = self._exclude_combos.get_buffer()
+        combo_text = "\n".join(" + ".join(combo) for combo in wh.exclude_combos)
+        buf.set_text(combo_text)
+        combo_scroll.set_child(self._exclude_combos)
+        vbox.append(combo_scroll)
+
         return vbox
 
     # ── Monitors ──
@@ -325,6 +356,17 @@ class SettingsWindow(Gtk.Window):
         c.wallhaven.sorting = self._sorting.get_active_text() or c.wallhaven.sorting
         c.wallhaven.top_range = self._top_range.get_active_text() or c.wallhaven.top_range
         c.wallhaven.ai_art_filter = 1 if self._ai_filter.get_active() else 0
+        raw_tags = self._exclude_tags.get_text().strip()
+        c.wallhaven.exclude_tags = (
+            [t.strip() for t in raw_tags.split(",") if t.strip()] if raw_tags else []
+        )
+        buf = self._exclude_combos.get_buffer()
+        combo_text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+        c.wallhaven.exclude_combos = [
+            [t.strip() for t in line.split("+") if t.strip()]
+            for line in combo_text.strip().splitlines()
+            if line.strip()
+        ]
 
         # Monitors
         c.monitors = []

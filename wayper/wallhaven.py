@@ -28,6 +28,18 @@ class WallhavenClient:
     async def close(self) -> None:
         await self.client.aclose()
 
+    def _exclude_query(self) -> str:
+        """Build exclusion query fragment from exclude_tags config."""
+        tags = self.config.wallhaven.exclude_tags
+        return " ".join(f"-{t}" for t in tags) if tags else ""
+
+    def _matches_exclude_combo(self, tag_names: list[str]) -> bool:
+        """Return True if tag_names matches any exclude combo rule."""
+        tag_set = set(tag_names)
+        return any(
+            all(t in tag_set for t in combo) for combo in self.config.wallhaven.exclude_combos
+        )
+
     async def search(self, orientation: str, purity: str) -> list[dict]:
         """Return list of wallpaper data dicts from wallhaven search."""
         page = random.randint(1, self.config.wallhaven.max_page)
@@ -43,6 +55,9 @@ class WallhavenClient:
             "page": page,
             "apikey": self.config.api_key,
         }
+        exclude_q = self._exclude_query()
+        if exclude_q:
+            params["q"] = exclude_q
         try:
             resp = await self.client.get(SEARCH_URL, params=params)
             resp.raise_for_status()
@@ -69,8 +84,10 @@ class WallhavenClient:
             "page": page,
             "apikey": self.config.api_key,
         }
-        if query:
-            params["q"] = query
+        exclude_q = self._exclude_query()
+        q_parts = [p for p in (query, exclude_q) if p]
+        if q_parts:
+            params["q"] = " ".join(q_parts)
         params.update(overrides)
         try:
             resp = await self.client.get(SEARCH_URL, params=params)
@@ -157,6 +174,13 @@ class WallhavenClient:
                 if detail:
                     item = {**item, **detail}
                 save_metadata(config, filename, item)
+
+                # Check exclude combos against tags
+                tags = item.get("tags", [])
+                tag_names = [(t["name"] if isinstance(t, dict) else t) for t in tags]
+                if self._matches_exclude_combo(tag_names):
+                    dest.unlink(missing_ok=True)
+                    continue
 
                 if mon and not resize_crop(dest, mon.width, mon.height):
                     dest.unlink(missing_ok=True)
