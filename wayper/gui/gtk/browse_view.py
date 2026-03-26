@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
-import sys
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -34,6 +32,7 @@ from ...history import push as push_history
 from ...image import validate_image
 from ...pool import IMAGE_EXTENSIONS, pool_dir
 from ...state import read_mode, write_mode
+from .daemon_control import _find_wayper_cli
 
 THUMB_SIZE = 200
 CATEGORIES = ("pool", "favorites", "disliked")
@@ -444,9 +443,10 @@ class BrowsePanel:
         self._grid_stack.set_visible_child_name("empty")
 
     def _on_empty_cta(self, _btn):
-        wayper_bin = shutil.which("wayper") or str(Path(sys.executable).parent / "wayper")
+        import subprocess
+
         subprocess.Popen(
-            [wayper_bin, "daemon"],
+            [_find_wayper_cli(), "daemon"],
             start_new_session=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
