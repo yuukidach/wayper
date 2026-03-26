@@ -42,7 +42,7 @@ paru -S wayper     # or: yay -S wayper
 
 ### macOS
 
-Download `Wayper.app.zip` from [Releases](https://github.com/yuukidach/wayper/releases), unzip, and drag to `~/Applications`.
+Download [`Wayper.dmg`](https://github.com/yuukidach/wayper/releases/latest/download/Wayper.dmg), open it, and drag to Applications.
 
 ### From source
 

@@ -23,12 +23,19 @@ jobs:
       - name: Build Wayper.app
         run: pyinstaller wayper.spec
 
-      - name: Create zip
+      - name: Create DMG
         run: |
-          cd dist
-          zip -r Wayper.app.zip Wayper.app
+          brew install create-dmg
+          create-dmg \
+            --volname "Wayper" \
+            --window-size 500 320 \
+            --icon-size 80 \
+            --icon "Wayper.app" 130 150 \
+            --app-drop-link 370 150 \
+            --hide-extension "Wayper.app" \
+            dist/Wayper.dmg dist/Wayper.app
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Wayper.app.zip
+          files: dist/Wayper.dmg

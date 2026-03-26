@@ -42,7 +42,7 @@ paru -S wayper     # 或: yay -S wayper
 
 ### macOS
 
-从 [Releases](https://github.com/yuukidach/wayper/releases) 下载 `Wayper.app.zip`，解压后拖入 `~/Applications`。
+下载 [`Wayper.dmg`](https://github.com/yuukidach/wayper/releases/latest/download/Wayper.dmg)，打开后拖入 Applications。
 
 ### 从源码安装
 
