@@ -229,9 +229,12 @@ class SettingsWindow(Gtk.Window):
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         add_btn = Gtk.Button(label="+")
         add_btn.add_css_class("action-btn")
-        add_btn.connect("clicked", lambda _: self._add_monitor_row(
-            MonitorConfig(name="DP-1", width=1920, height=1080, orientation="landscape")
-        ))
+        add_btn.connect(
+            "clicked",
+            lambda _: self._add_monitor_row(
+                MonitorConfig(name="DP-1", width=1920, height=1080, orientation="landscape")
+            ),
+        )
         remove_btn = Gtk.Button(label="-")
         remove_btn.add_css_class("action-btn")
         remove_btn.connect("clicked", lambda _: self._remove_last_monitor())
@@ -270,13 +273,15 @@ class SettingsWindow(Gtk.Window):
         row.append(orient_combo)
 
         self._monitor_list.append(row)
-        self._monitor_rows.append({
-            "name": name_entry,
-            "width": width_entry,
-            "height": height_entry,
-            "orientation": orient_combo,
-            "row": row,
-        })
+        self._monitor_rows.append(
+            {
+                "name": name_entry,
+                "width": width_entry,
+                "height": height_entry,
+                "orientation": orient_combo,
+                "row": row,
+            }
+        )
 
     def _remove_last_monitor(self):
         if not self._monitor_rows:
@@ -325,12 +330,14 @@ class SettingsWindow(Gtk.Window):
         c.monitors = []
         for row_fields in self._monitor_rows:
             try:
-                c.monitors.append(MonitorConfig(
-                    name=row_fields["name"].get_text().strip(),
-                    width=int(row_fields["width"].get_text()),
-                    height=int(row_fields["height"].get_text()),
-                    orientation=row_fields["orientation"].get_active_text() or "landscape",
-                ))
+                c.monitors.append(
+                    MonitorConfig(
+                        name=row_fields["name"].get_text().strip(),
+                        width=int(row_fields["width"].get_text()),
+                        height=int(row_fields["height"].get_text()),
+                        orientation=row_fields["orientation"].get_active_text() or "landscape",
+                    )
+                )
             except ValueError:
                 continue
 

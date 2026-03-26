@@ -31,13 +31,19 @@ from AppKit import (
     NSUserInterfaceLayoutOrientationVertical,
     NSView,
 )
-from Foundation import NSIndexPath, NSIndexSet, NSObject
+from Foundation import NSIndexPath, NSObject
 
 from ...backend import find_monitor, get_focused_monitor, set_wallpaper
-from ...browse._common import get_blocklist_only, get_images, get_orient, wallhaven_url
+from ...browse._common import (
+    get_blocklist_only,
+    get_images,
+    perform_context_action,
+    perform_delete,
+    perform_favorite,
+    wallhaven_url,
+)
 from ...history import push as push_history
-from ...pool import add_to_blacklist, favorites_dir, pool_dir, remove_from_blacklist
-from ...state import push_undo, read_mode, write_mode
+from ...state import read_mode, write_mode
 from .colors import C_BASE, C_BLUE, C_OVERLAY, C_SURFACE_CG, C_TEXT
 
 THUMB_SIZE = 200
@@ -48,7 +54,6 @@ ACTION_LABELS = {"favorites": "Remove", "pool": "Reject", "disliked": "Restore"}
 
 
 class ThumbnailItem(NSCollectionViewItem):
-
     def loadView(self):
         container = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, THUMB_SIZE, THUMB_SIZE + 24))
         container.setWantsLayer_(True)
@@ -191,26 +196,31 @@ class BrowsePanelController(NSObject):
         scroll.setTranslatesAutoresizingMaskIntoConstraints_(False)
         right.setTranslatesAutoresizingMaskIntoConstraints_(False)
 
-        root.addConstraints_([
-            scroll.topAnchor().constraintEqualToAnchor_constant_(root.topAnchor(), 8),
-            scroll.leadingAnchor().constraintEqualToAnchor_constant_(root.leadingAnchor(), 8),
-            scroll.widthAnchor().constraintEqualToAnchor_multiplier_(root.widthAnchor(), 0.4),
-            scroll.widthAnchor().constraintGreaterThanOrEqualToConstant_(300),
-            scroll.bottomAnchor().constraintEqualToAnchor_constant_(root.bottomAnchor(), -8),
-
-            right.topAnchor().constraintEqualToAnchor_constant_(root.topAnchor(), 8),
-            right.leadingAnchor().constraintEqualToAnchor_constant_(scroll.trailingAnchor(), 12),
-            right.trailingAnchor().constraintEqualToAnchor_constant_(root.trailingAnchor(), -12),
-            right.bottomAnchor().constraintEqualToAnchor_constant_(root.bottomAnchor(), -8),
-
-            self._preview.leadingAnchor().constraintEqualToAnchor_(right.leadingAnchor()),
-            self._preview.trailingAnchor().constraintEqualToAnchor_(right.trailingAnchor()),
-
-            self._placeholder.centerXAnchor().constraintEqualToAnchor_(
-                self._preview.centerXAnchor()),
-            self._placeholder.centerYAnchor().constraintEqualToAnchor_(
-                self._preview.centerYAnchor()),
-        ])
+        root.addConstraints_(
+            [
+                scroll.topAnchor().constraintEqualToAnchor_constant_(root.topAnchor(), 8),
+                scroll.leadingAnchor().constraintEqualToAnchor_constant_(root.leadingAnchor(), 8),
+                scroll.widthAnchor().constraintEqualToAnchor_multiplier_(root.widthAnchor(), 0.4),
+                scroll.widthAnchor().constraintGreaterThanOrEqualToConstant_(300),
+                scroll.bottomAnchor().constraintEqualToAnchor_constant_(root.bottomAnchor(), -8),
+                right.topAnchor().constraintEqualToAnchor_constant_(root.topAnchor(), 8),
+                right.leadingAnchor().constraintEqualToAnchor_constant_(
+                    scroll.trailingAnchor(), 12
+                ),
+                right.trailingAnchor().constraintEqualToAnchor_constant_(
+                    root.trailingAnchor(), -12
+                ),
+                right.bottomAnchor().constraintEqualToAnchor_constant_(root.bottomAnchor(), -8),
+                self._preview.leadingAnchor().constraintEqualToAnchor_(right.leadingAnchor()),
+                self._preview.trailingAnchor().constraintEqualToAnchor_(right.trailingAnchor()),
+                self._placeholder.centerXAnchor().constraintEqualToAnchor_(
+                    self._preview.centerXAnchor()
+                ),
+                self._placeholder.centerYAnchor().constraintEqualToAnchor_(
+                    self._preview.centerYAnchor()
+                ),
+            ]
+        )
 
         self._update_buttons()
         return root
@@ -225,8 +235,7 @@ class BrowsePanelController(NSObject):
     def _reload_images(self):
         self.images = get_images(self.category, self.mode, self.config)
         self._blocklist_only = (
-            get_blocklist_only(self.images, self.config)
-            if self.category == "disliked" else []
+            get_blocklist_only(self.images, self.config) if self.category == "disliked" else []
         )
         self._thumb_cache.clear()
         self.selected_index = -1
@@ -246,7 +255,6 @@ class BrowsePanelController(NSObject):
             if bl_idx < len(self._blocklist_only):
                 del self._blocklist_only[bl_idx]
 
-        index_set = NSIndexSet.indexSetWithIndex_(idx)
         ip_set = set()
         ip_set.add(NSIndexPath.indexPathForItem_inSection_(idx, 0))
         self._cv.deleteItemsAtIndexPaths_(ip_set)
@@ -301,7 +309,8 @@ class BrowsePanelController(NSObject):
             NSMakeRect(
                 (orig_size.width - side) / 2,
                 (orig_size.height - side) / 2,
-                side, side,
+                side,
+                side,
             ),
             NSCompositingOperationSourceOver,
             1.0,
@@ -379,53 +388,25 @@ class BrowsePanelController(NSObject):
         path = self._selected_path()
         if not path or not path.exists():
             return
-        orient = get_orient(path)
-        dest = favorites_dir(self.config, self.mode, orient) / path.name
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        path.rename(dest)
+        perform_favorite(self.config, path, self.mode)
         self._remove_at(idx)
 
     @objc.typedSelector(b"v@:@")
     def doAction_(self, sender):
         idx = self.selected_index
-        name = self._selected_blocklist_name()
-        path = self._selected_path()
-
-        if self.category == "disliked" and name and not path:
-            remove_from_blacklist(self.config, name)
-            self._remove_at(idx)
-            return
-
-        if not path or not path.exists():
-            return
-        orient = get_orient(path)
-
-        if self.category == "favorites":
-            dest = pool_dir(self.config, self.mode, orient) / path.name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            path.rename(dest)
-        elif self.category == "pool":
-            add_to_blacklist(self.config, path.name)
-            push_undo(self.config, path.name, path.parent)
-        elif self.category == "disliked":
-            dest = pool_dir(self.config, self.mode, orient) / path.name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            path.rename(dest)
-            remove_from_blacklist(self.config, path.name)
-
+        perform_context_action(
+            self.config,
+            self._selected_path(),
+            self.category,
+            self.mode,
+            self._selected_blocklist_name(),
+        )
         self._remove_at(idx)
 
     @objc.typedSelector(b"v@:@")
     def doDelete_(self, sender):
         idx = self.selected_index
-        name = self._selected_blocklist_name()
-        path = self._selected_path()
-        if not name and not path:
-            return
-        if name and not path:
-            remove_from_blacklist(self.config, name)
-        elif path and path.exists():
-            path.unlink()
+        perform_delete(self.config, self._selected_path(), self._selected_blocklist_name())
         self._remove_at(idx)
 
     # ── Keyboard ──

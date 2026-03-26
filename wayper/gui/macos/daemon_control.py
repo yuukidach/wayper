@@ -19,29 +19,29 @@ from AppKit import (
     NSTextField,
     NSTimer,
     NSUserInterfaceLayoutOrientationHorizontal,
+    NSView,
 )
 from Foundation import NSObject
 
-from ...daemon import is_daemon_running
-from ...pool import count_images, disk_usage_mb, favorites_dir, pool_dir
-from ...state import read_mode
+from ...daemon import compute_daemon_state, is_daemon_running
 from .colors import C_BASE_CG, C_GREEN, C_RED, C_SUBTEXT, C_TEXT
 
 
 def _find_wayper_cli() -> str:
     """Locate the wayper CLI binary — works inside PyInstaller bundles and venvs."""
     import shutil
+
     # PyInstaller bundle: cli lives next to the GUI executable
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         bundle_dir = Path(sys.executable).parent
-        for name in ('wayper-cli', 'wayper'):
+        for name in ("wayper-cli", "wayper"):
             candidate = bundle_dir / name
             if candidate.exists():
                 return str(candidate)
-    found = shutil.which('wayper')
+    found = shutil.which("wayper")
     if found:
         return found
-    return str(Path(sys.executable).parent / 'wayper')
+    return str(Path(sys.executable).parent / "wayper")
 
 
 class DaemonControlBar(NSObject):
@@ -96,28 +96,11 @@ class DaemonControlBar(NSObject):
         self._refresh()
 
     def _refresh(self):
-        # Cheap checks first
-        running, _ = is_daemon_running(self.config)
-        mode = read_mode(self.config)
-
-        # Quick state check before expensive I/O
-        if self._last_state and self._last_state[:2] == (running, mode):
-            return
-
-        pool_count = sum(
-            count_images(pool_dir(self.config, mode, o))
-            for o in ("landscape", "portrait")
-        )
-        fav_count = sum(
-            count_images(favorites_dir(self.config, mode, o))
-            for o in ("landscape", "portrait")
-        )
-        disk_mb = disk_usage_mb(self.config)
-
-        state = (running, mode, pool_count, fav_count, round(disk_mb))
+        state = compute_daemon_state(self.config)
         if state == self._last_state:
             return
         self._last_state = state
+        running, mode, pool_count, fav_count, disk_mb = state
 
         if running:
             self._status_dot.setTextColor_(C_GREEN)
@@ -136,7 +119,11 @@ class DaemonControlBar(NSObject):
         if self._timer:
             return
         self._timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-            5.0, self, "pollRefresh:", None, True,
+            5.0,
+            self,
+            "pollRefresh:",
+            None,
+            True,
         )
 
     def stopPolling(self):
@@ -155,6 +142,7 @@ class DaemonControlBar(NSObject):
         running, pid = is_daemon_running(self.config)
         if running and pid:
             import os
+
             os.kill(pid, signal.SIGTERM)
         else:
             wayper_bin = _find_wayper_cli()
@@ -165,6 +153,9 @@ class DaemonControlBar(NSObject):
                 stderr=subprocess.DEVNULL,
             )
         NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-            1.0, self, "pollRefresh:", None, False,
+            1.0,
+            self,
+            "pollRefresh:",
+            None,
+            False,
         )
-

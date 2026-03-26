@@ -12,7 +12,9 @@ def run_app() -> None:
 
     if sys.platform == "darwin":
         from .macos.app import WayperApp
+
         WayperApp.launch(config)
     else:
         from .gtk.app import run
+
         run(config)

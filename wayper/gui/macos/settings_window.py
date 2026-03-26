@@ -17,10 +17,10 @@ from AppKit import (
     NSScrollView,
     NSSecureTextField,
     NSStackView,
-    NSTabViewController,
-    NSTabViewItem,
     NSTableColumn,
     NSTableView,
+    NSTabViewController,
+    NSTabViewItem,
     NSTextField,
     NSUserInterfaceLayoutOrientationVertical,
     NSView,
@@ -104,7 +104,6 @@ def _make_pane(rows: list[NSStackView]) -> NSView:
 
 
 class GeneralPane(NSViewController):
-
     def initWithConfig_(self, config: WayperConfig):
         self = objc.super(GeneralPane, self).init()
         if self is None:
@@ -173,7 +172,6 @@ class GeneralPane(NSViewController):
 
 
 class WallhavenPane(NSViewController):
-
     def initWithConfig_(self, config: WayperConfig):
         self = objc.super(WallhavenPane, self).init()
         if self is None:
@@ -189,9 +187,13 @@ class WallhavenPane(NSViewController):
         self._cat_anime = _checkbox("Anime", cats[1] == "1")
         self._cat_people = _checkbox("People", cats[2] == "1")
 
-        cat_stack = NSStackView.stackViewWithViews_([
-            self._cat_general, self._cat_anime, self._cat_people,
-        ])
+        cat_stack = NSStackView.stackViewWithViews_(
+            [
+                self._cat_general,
+                self._cat_anime,
+                self._cat_people,
+            ]
+        )
         cat_stack.setSpacing_(12)
 
         sort_options = ["toplist", "random", "hot", "date_added", "relevance", "views", "favorites"]
@@ -274,7 +276,6 @@ class MonitorsTableDelegate(NSObject):
 
 
 class MonitorsPane(NSViewController):
-
     def initWithConfig_(self, config: WayperConfig):
         self = objc.super(MonitorsPane, self).init()
         if self is None:
@@ -323,9 +324,14 @@ class MonitorsPane(NSViewController):
 
     @objc.typedSelector(b"v@:@")
     def addMonitor_(self, sender):
-        self.config.monitors.append(MonitorConfig(
-            name="DP-1", width=1920, height=1080, orientation="landscape",
-        ))
+        self.config.monitors.append(
+            MonitorConfig(
+                name="DP-1",
+                width=1920,
+                height=1080,
+                orientation="landscape",
+            )
+        )
         self._tv.reloadData()
 
     @objc.typedSelector(b"v@:@")
@@ -367,11 +373,16 @@ class SettingsWindowController(NSObject):
 
     def _build(self):
         style = (
-            NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
-            | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
+            NSWindowStyleMaskTitled
+            | NSWindowStyleMaskClosable
+            | NSWindowStyleMaskMiniaturizable
+            | NSWindowStyleMaskResizable
         )
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(200, 200, 560, 400), style, NSBackingStoreBuffered, False,
+            NSMakeRect(200, 200, 560, 400),
+            style,
+            NSBackingStoreBuffered,
+            False,
         )
         self.window.setTitle_("Wayper Settings")
         self.window.setBackgroundColor_(C_BASE)
@@ -407,14 +418,18 @@ class SettingsWindowController(NSObject):
         content = self.window.contentView()
         save_btn.setTranslatesAutoresizingMaskIntoConstraints_(False)
         content.addSubview_(save_btn)
-        content.addConstraints_([
-            save_btn.trailingAnchor().constraintEqualToAnchor_constant_(
-                content.trailingAnchor(), -_PAD,
-            ),
-            save_btn.bottomAnchor().constraintEqualToAnchor_constant_(
-                content.bottomAnchor(), -_PAD,
-            ),
-        ])
+        content.addConstraints_(
+            [
+                save_btn.trailingAnchor().constraintEqualToAnchor_constant_(
+                    content.trailingAnchor(),
+                    -_PAD,
+                ),
+                save_btn.bottomAnchor().constraintEqualToAnchor_constant_(
+                    content.bottomAnchor(),
+                    -_PAD,
+                ),
+            ]
+        )
 
     @objc.typedSelector(b"v@:@")
     def saveSettings_(self, sender):

@@ -24,7 +24,6 @@ from AppKit import (
 )
 from Foundation import NSObject
 
-from ...config import WayperConfig
 from ...state import read_mode
 from .actions_view import ActionsPanelController
 from .browse_view import CATEGORIES, LABELS, BrowsePanelController
@@ -35,7 +34,13 @@ CATEGORY_ID = "category"
 VIEW_SELECTOR_ID = "viewSelector"
 MODE_TOGGLE_ID = "modeToggle"
 FLEXIBLE_SPACE_ID = "NSToolbarFlexibleSpaceItem"
-TOOLBAR_ITEMS = [CATEGORY_ID, FLEXIBLE_SPACE_ID, VIEW_SELECTOR_ID, FLEXIBLE_SPACE_ID, MODE_TOGGLE_ID]
+TOOLBAR_ITEMS = [
+    CATEGORY_ID,
+    FLEXIBLE_SPACE_ID,
+    VIEW_SELECTOR_ID,
+    FLEXIBLE_SPACE_ID,
+    MODE_TOGGLE_ID,
+]
 
 
 class MainWindow(NSWindow):
@@ -71,11 +76,18 @@ class MainWindowController(NSObject):
         return self
 
     def _build_window(self):
-        style = (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
-                 NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable |
-                 NSWindowStyleMaskFullSizeContentView)
+        style = (
+            NSWindowStyleMaskTitled
+            | NSWindowStyleMaskClosable
+            | NSWindowStyleMaskMiniaturizable
+            | NSWindowStyleMaskResizable
+            | NSWindowStyleMaskFullSizeContentView
+        )
         self.window = MainWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(150, 150, 1200, 750), style, NSBackingStoreBuffered, False,
+            NSMakeRect(150, 150, 1200, 750),
+            style,
+            NSBackingStoreBuffered,
+            False,
         )
         self.window._controller = self
         self.window.setTitle_("Wayper")
@@ -105,19 +117,28 @@ class MainWindowController(NSObject):
         footer.setTranslatesAutoresizingMaskIntoConstraints_(False)
         content.addSubview_(footer)
 
-        content.addConstraints_([
-            self._content_container.topAnchor().constraintEqualToAnchor_(content.topAnchor()),
-            self._content_container.leadingAnchor().constraintEqualToAnchor_(content.leadingAnchor()),
-            self._content_container.trailingAnchor().constraintEqualToAnchor_(content.trailingAnchor()),
-            self._content_container.bottomAnchor().constraintEqualToAnchor_constant_(
-                footer.topAnchor(), -4
-            ),
-
-            footer.leadingAnchor().constraintEqualToAnchor_constant_(content.leadingAnchor(), 12),
-            footer.trailingAnchor().constraintEqualToAnchor_constant_(content.trailingAnchor(), -12),
-            footer.bottomAnchor().constraintEqualToAnchor_constant_(content.bottomAnchor(), -6),
-            footer.heightAnchor().constraintEqualToConstant_(32),
-        ])
+        content.addConstraints_(
+            [
+                self._content_container.topAnchor().constraintEqualToAnchor_(content.topAnchor()),
+                self._content_container.leadingAnchor().constraintEqualToAnchor_(
+                    content.leadingAnchor()
+                ),
+                self._content_container.trailingAnchor().constraintEqualToAnchor_(
+                    content.trailingAnchor()
+                ),
+                self._content_container.bottomAnchor().constraintEqualToAnchor_constant_(
+                    footer.topAnchor(), -4
+                ),
+                footer.leadingAnchor().constraintEqualToAnchor_constant_(
+                    content.leadingAnchor(), 12
+                ),
+                footer.trailingAnchor().constraintEqualToAnchor_constant_(
+                    content.trailingAnchor(), -12
+                ),
+                footer.bottomAnchor().constraintEqualToAnchor_constant_(content.bottomAnchor(), -6),
+                footer.heightAnchor().constraintEqualToConstant_(32),
+            ]
+        )
 
     # ── Tab switching ──
 
@@ -138,12 +159,20 @@ class MainWindowController(NSObject):
         view = self._browse.view if idx == 0 else self._actions.view
         view.setTranslatesAutoresizingMaskIntoConstraints_(False)
         self._content_container.addSubview_(view)
-        self._content_container.addConstraints_([
-            view.topAnchor().constraintEqualToAnchor_(self._content_container.topAnchor()),
-            view.leadingAnchor().constraintEqualToAnchor_(self._content_container.leadingAnchor()),
-            view.trailingAnchor().constraintEqualToAnchor_(self._content_container.trailingAnchor()),
-            view.bottomAnchor().constraintEqualToAnchor_(self._content_container.bottomAnchor()),
-        ])
+        self._content_container.addConstraints_(
+            [
+                view.topAnchor().constraintEqualToAnchor_(self._content_container.topAnchor()),
+                view.leadingAnchor().constraintEqualToAnchor_(
+                    self._content_container.leadingAnchor()
+                ),
+                view.trailingAnchor().constraintEqualToAnchor_(
+                    self._content_container.trailingAnchor()
+                ),
+                view.bottomAnchor().constraintEqualToAnchor_(
+                    self._content_container.bottomAnchor()
+                ),
+            ]
+        )
 
     # ── Keyboard ──
 
@@ -213,7 +242,10 @@ class MainWindowController(NSObject):
 
         if identifier == CATEGORY_ID:
             seg = NSSegmentedControl.segmentedControlWithLabels_trackingMode_target_action_(
-                list(LABELS), 0, self, "categoryChanged:",
+                list(LABELS),
+                0,
+                self,
+                "categoryChanged:",
             )
             seg.setSelectedSegment_(0)
             item.setView_(seg)
@@ -222,7 +254,10 @@ class MainWindowController(NSObject):
 
         elif identifier == VIEW_SELECTOR_ID:
             seg = NSSegmentedControl.segmentedControlWithLabels_trackingMode_target_action_(
-                ["Browse", "Quick Actions"], 0, self, "tabChanged:",
+                ["Browse", "Quick Actions"],
+                0,
+                self,
+                "tabChanged:",
             )
             seg.setSelectedSegment_(self._active_tab)
             item.setView_(seg)
@@ -232,7 +267,8 @@ class MainWindowController(NSObject):
         elif identifier == MODE_TOGGLE_ID:
             btn = NSButton.buttonWithTitle_target_action_(
                 "NSFW" if self._mode == "nsfw" else "SFW",
-                self, "modeToggled:",
+                self,
+                "modeToggled:",
             )
             btn.setBezelStyle_(NSBezelStyleAccessoryBarAction)
             item.setView_(btn)

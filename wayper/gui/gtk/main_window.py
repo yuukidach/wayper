@@ -171,7 +171,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._mode_btn.set_active(self._mode == "nsfw")
         self._mode_btn.set_label(f"{self._mode.upper()} [M]")
         self._browse.set_mode(self._mode)
-        self._browse.set_category(self._browse._category)
+        self._browse.set_category(self._browse.category)
         self._actions.refresh()
         self._daemon.force_refresh()
 

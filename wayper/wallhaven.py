@@ -9,7 +9,7 @@ import httpx
 
 from .config import WayperConfig
 from .image import resize_crop, validate_image
-from .pool import is_blacklisted, list_images, favorites_dir, pool_dir
+from .pool import favorites_dir, is_blacklisted, pool_dir
 
 SEARCH_URL = "https://wallhaven.cc/api/v1/search"
 

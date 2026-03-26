@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import webbrowser
 from pathlib import Path
 
 import objc
@@ -26,13 +25,16 @@ from AppKit import (
 )
 from Foundation import NSObject
 
-from ...backend import get_context, get_focused_monitor, query_current, set_wallpaper
-from ...browse._common import wallhaven_url
-from ...config import NO_TRANSITION
-from ...history import go_prev, pick_next
-from ...history import push as push_history
-from ...pool import add_to_blacklist, favorites_dir, pick_random, pool_dir, remove_from_blacklist
-from ...state import pop_undo, push_undo, read_mode, restore_from_trash
+from ...backend import get_focused_monitor, query_current
+from ..actions import (
+    do_dislike,
+    do_favorite,
+    do_next,
+    do_open_wallhaven,
+    do_prev,
+    do_undislike,
+    do_unfavorite,
+)
 from .colors import C_BLUE, C_GREEN, C_SURFACE_CG, C_TEXT
 
 
@@ -139,16 +141,19 @@ class ActionsPanelController(NSObject):
         stack.addView_inGravity_(btn_bar, NSStackViewGravityCenter)
 
         root.addSubview_(stack)
-        root.addConstraints_([
-            stack.topAnchor().constraintEqualToAnchor_constant_(root.topAnchor(), 20),
-            stack.leadingAnchor().constraintEqualToAnchor_constant_(root.leadingAnchor(), 20),
-            stack.trailingAnchor().constraintEqualToAnchor_constant_(root.trailingAnchor(), -20),
-            stack.bottomAnchor().constraintEqualToAnchor_constant_(root.bottomAnchor(), -20),
-
-            self._preview.leadingAnchor().constraintEqualToAnchor_(stack.leadingAnchor()),
-            self._preview.trailingAnchor().constraintEqualToAnchor_(stack.trailingAnchor()),
-            self._preview.heightAnchor().constraintGreaterThanOrEqualToConstant_(200),
-        ])
+        root.addConstraints_(
+            [
+                stack.topAnchor().constraintEqualToAnchor_constant_(root.topAnchor(), 20),
+                stack.leadingAnchor().constraintEqualToAnchor_constant_(root.leadingAnchor(), 20),
+                stack.trailingAnchor().constraintEqualToAnchor_constant_(
+                    root.trailingAnchor(), -20
+                ),
+                stack.bottomAnchor().constraintEqualToAnchor_constant_(root.bottomAnchor(), -20),
+                self._preview.leadingAnchor().constraintEqualToAnchor_(stack.leadingAnchor()),
+                self._preview.trailingAnchor().constraintEqualToAnchor_(stack.trailingAnchor()),
+                self._preview.heightAnchor().constraintGreaterThanOrEqualToConstant_(200),
+            ]
+        )
 
         return root
 
@@ -195,7 +200,11 @@ class ActionsPanelController(NSObject):
         if self._timer:
             return
         self._timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-            3.0, self, "pollRefresh:", None, True,
+            3.0,
+            self,
+            "pollRefresh:",
+            None,
+            True,
         )
 
     def stopPolling(self):
@@ -211,93 +220,43 @@ class ActionsPanelController(NSObject):
 
     @objc.typedSelector(b"v@:@")
     def doNext_(self, sender):
-        monitor, mon_cfg, _ = get_context(self.config)
-        if not mon_cfg:
-            return
-        img = pick_next(self.config, monitor, mon_cfg.orientation)
-        if img:
-            set_wallpaper(monitor, img, self.config.transition)
-        self._current_path = None  # force refresh
+        do_next(self.config)
+        self._current_path = None
         self._refresh()
 
     @objc.typedSelector(b"v@:@")
     def doPrev_(self, sender):
-        monitor, mon_cfg, _ = get_context(self.config)
-        if not mon_cfg:
-            return
-        img = go_prev(self.config, monitor)
-        if img:
-            set_wallpaper(monitor, img, self.config.transition)
+        do_prev(self.config)
         self._current_path = None
         self._refresh()
 
     @objc.typedSelector(b"v@:@")
     def doFav_(self, sender):
-        monitor, mon_cfg, img = get_context(self.config)
-        if not img or not mon_cfg:
-            return
-        if "favorites" in str(img):
-            return
-        mode = read_mode(self.config)
-        dest_dir = favorites_dir(self.config, mode, mon_cfg.orientation)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / img.name
-        img.rename(dest)
-        set_wallpaper(monitor, dest, NO_TRANSITION)
+        do_favorite(self.config)
         self._current_path = None
         self._refresh()
 
     @objc.typedSelector(b"v@:@")
     def doUnfav_(self, sender):
-        monitor, mon_cfg, img = get_context(self.config)
-        if not img or not mon_cfg:
-            return
-        if "favorites" not in str(img):
-            return
-        mode = read_mode(self.config)
-        dest_dir = pool_dir(self.config, mode, mon_cfg.orientation)
-        dest = dest_dir / img.name
-        img.rename(dest)
-        set_wallpaper(monitor, dest, NO_TRANSITION)
+        do_unfavorite(self.config)
         self._current_path = None
         self._refresh()
 
     @objc.typedSelector(b"v@:@")
     def doDislike_(self, sender):
-        monitor, mon_cfg, img = get_context(self.config)
-        if not img or not mon_cfg:
-            return
-        if "favorites" in str(img):
-            return
-        mode = read_mode(self.config)
-        next_img = pick_random(self.config, mode, mon_cfg.orientation)
-        if next_img:
-            set_wallpaper(monitor, next_img, self.config.transition)
-            push_history(self.config, monitor, next_img)
-        add_to_blacklist(self.config, img.name)
-        push_undo(self.config, img.name, img.parent)
+        do_dislike(self.config)
         self._current_path = None
         self._refresh()
 
     @objc.typedSelector(b"v@:@")
     def doUndislike_(self, sender):
-        entry = pop_undo(self.config)
-        if not entry:
-            return
-        filename, orig_dir = entry
-        restored = restore_from_trash(self.config, filename, orig_dir)
-        remove_from_blacklist(self.config, filename)
-        if restored:
-            monitor = get_focused_monitor()
-            if monitor:
-                set_wallpaper(monitor, restored, self.config.transition)
+        do_undislike(self.config)
         self._current_path = None
         self._refresh()
 
     @objc.typedSelector(b"v@:@")
     def doOpen_(self, sender):
-        if self._current_path:
-            webbrowser.open(wallhaven_url(self._current_path))
+        do_open_wallhaven(self._current_path)
 
     # ── Keyboard ──
 

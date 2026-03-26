@@ -5,16 +5,23 @@ from __future__ import annotations
 import asyncio
 import json as json_mod
 import logging
-import os
 import signal
 import sys
 from pathlib import Path
 
 import click
 
-from .backend import FileLock, get_context, get_focused_monitor, notify, query_current, set_wallpaper
-from .config import NO_TRANSITION, TransitionConfig, load_config
-from .history import go_prev, pick_next, push as push_history
+from .backend import (
+    FileLock,
+    get_context,
+    get_focused_monitor,
+    notify,
+    query_current,
+    set_wallpaper,
+)
+from .config import NO_TRANSITION, load_config
+from .history import go_prev, pick_next
+from .history import push as push_history
 from .pool import (
     add_to_blacklist,
     count_images,
@@ -24,8 +31,6 @@ from .pool import (
     remove_from_blacklist,
 )
 from .state import pop_undo, push_undo, read_mode, restore_from_trash, write_mode
-
-
 
 
 @click.group()
@@ -50,6 +55,7 @@ def daemon(ctx):
         datefmt="%H:%M:%S",
     )
     from .daemon import run_daemon
+
     asyncio.run(run_daemon(config))
 
 
@@ -126,7 +132,9 @@ def fav(ctx, open_url):
 
         if open_url:
             import webbrowser
+
             from .browse._common import wallhaven_url
+
             webbrowser.open(wallhaven_url(img))
 
         if ctx.obj["json"]:
@@ -249,6 +257,7 @@ def mode(ctx, new_mode):
     write_mode(config, new_mode)
 
     from .daemon import signal_daemon
+
     signal_daemon(config, signal.SIGUSR2)
 
     if ctx.obj["json"]:
@@ -270,27 +279,35 @@ def status(ctx):
         img = current.get(mon.name)
         pc = count_images(pool_dir(config, current_mode, mon.orientation))
         fc = count_images(favorites_dir(config, current_mode, mon.orientation))
-        monitors_info.append({
-            "name": mon.name,
-            "orientation": mon.orientation,
-            "image": str(img) if img else None,
-            "pool_count": pc,
-            "favorites_count": fc,
-        })
+        monitors_info.append(
+            {
+                "name": mon.name,
+                "orientation": mon.orientation,
+                "image": str(img) if img else None,
+                "pool_count": pc,
+                "favorites_count": fc,
+            }
+        )
 
     from .daemon import is_daemon_running
     from .pool import disk_usage_mb
+
     disk_mb = disk_usage_mb(config)
     daemon_running, _ = is_daemon_running(config)
 
     if ctx.obj["json"]:
-        click.echo(json_mod.dumps({
-            "mode": current_mode,
-            "daemon": daemon_running,
-            "disk_mb": round(disk_mb, 1),
-            "quota_mb": config.quota_mb,
-            "monitors": monitors_info,
-        }, indent=2))
+        click.echo(
+            json_mod.dumps(
+                {
+                    "mode": current_mode,
+                    "daemon": daemon_running,
+                    "disk_mb": round(disk_mb, 1),
+                    "quota_mb": config.quota_mb,
+                    "monitors": monitors_info,
+                },
+                indent=2,
+            )
+        )
     else:
         click.echo(f"Mode: {current_mode}")
         click.echo(f"Daemon: {'running' if daemon_running else 'stopped'}")
@@ -336,7 +353,7 @@ def _setup_macos_app() -> None:
 
     # Launcher script
     launcher = macos_dir / "Wayper"
-    launcher.write_text(f"#!/bin/bash\nexec \"{gui_bin}\"\n")
+    launcher.write_text(f'#!/bin/bash\nexec "{gui_bin}"\n')
     launcher.chmod(0o755)
 
     # Info.plist
