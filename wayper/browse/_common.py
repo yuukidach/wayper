@@ -81,10 +81,15 @@ def get_blocklist_only(images: list[Path], config: WayperConfig) -> list[str]:
     return [name for _ts, name in list_blacklist(config) if name not in trash_names]
 
 
+def wallhaven_id(name: str) -> str:
+    """Extract Wallhaven ID from a filename (with or without extension)."""
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return stem.split("-", 1)[-1] if "-" in stem else stem
+
+
 def wallhaven_url(img_path: Path) -> str:
     """Build Wallhaven URL from image path."""
-    wall_id = img_path.stem.replace("wallhaven-", "")
-    return f"https://wallhaven.cc/w/{wall_id}"
+    return f"https://wallhaven.cc/w/{wallhaven_id(img_path.name)}"
 
 
 def perform_favorite(config: WayperConfig, path: Path, mode: str) -> None:

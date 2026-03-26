@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
 from pathlib import Path
 
@@ -78,6 +79,18 @@ class WallhavenClient:
         except Exception:
             return []
 
+    async def wallpaper_info(self, wallpaper_id: str) -> dict:
+        """Fetch full details for a single wallpaper (includes tags)."""
+        try:
+            params = {"apikey": self.config.api_key} if self.config.api_key else {}
+            resp = await self.client.get(
+                f"https://wallhaven.cc/api/v1/w/{wallpaper_id}", params=params
+            )
+            resp.raise_for_status()
+            return resp.json().get("data", {})
+        except Exception:
+            return {}
+
     async def download_image(self, url: str, dest: Path) -> bool:
         """Download a single image. Returns True on success."""
         tmp = dest.with_name(f".dl_{dest.name}")
@@ -115,6 +128,7 @@ class WallhavenClient:
                 break
 
         sample = random.sample(items, min(config.wallhaven.batch_size, len(items)))
+        downloaded: list[tuple[str, dict, Path]] = []  # (filename, item, dest)
         for item in sample:
             url = item.get("path", "")
             if not url:
@@ -132,9 +146,17 @@ class WallhavenClient:
             if not await self.download_image(url, dest):
                 continue
 
-            save_metadata(config, filename, item)
+            downloaded.append((filename, item, dest))
 
-            # Resize to monitor resolution
-            if mon:
-                if not resize_crop(dest, mon.width, mon.height):
+        # Fetch full details (includes tags) in parallel for all downloaded images
+        if downloaded:
+            details = await asyncio.gather(
+                *(self.wallpaper_info(item.get("id", "")) for _, item, _ in downloaded)
+            )
+            for (filename, item, dest), detail in zip(downloaded, details):
+                if detail:
+                    item = {**item, **detail}
+                save_metadata(config, filename, item)
+
+                if mon and not resize_crop(dest, mon.width, mon.height):
                     dest.unlink(missing_ok=True)

@@ -5,10 +5,30 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
+from typing import TypedDict
 
 from .config import WayperConfig
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+class ImageMetadata(TypedDict, total=False):
+    id: str
+    tags: list[str]
+    category: str
+    purity: str
+    resolution: str
+    ratio: str
+    views: int
+    favorites: int
+    url: str
+    source: str
+    colors: list[str]
+    file_size: int
+    file_type: str
+    uploader: str
+    created_at: str
+    downloaded_at: int
 
 
 def list_images(directory: Path) -> list[Path]:
@@ -151,22 +171,29 @@ def save_metadata(config: WayperConfig, filename: str, item: dict) -> None:
     mf = config.metadata_file
     data: dict = json.loads(mf.read_text()) if mf.exists() else {}
     tags = item.get("tags") or []
+    uploader = item.get("uploader") or {}
     data[filename] = {
         "id": item.get("id", ""),
         "tags": [t["name"] for t in tags] if tags and isinstance(tags[0], dict) else tags,
         "category": item.get("category", ""),
         "purity": item.get("purity", ""),
         "resolution": item.get("resolution", ""),
+        "ratio": item.get("ratio", ""),
         "views": item.get("views", 0),
         "favorites": item.get("favorites", 0),
         "url": item.get("url", ""),
+        "source": item.get("source", ""),
         "colors": item.get("colors", []),
+        "file_size": item.get("file_size", 0),
+        "file_type": item.get("file_type", ""),
+        "uploader": uploader.get("username", "") if isinstance(uploader, dict) else uploader,
+        "created_at": item.get("created_at", ""),
         "downloaded_at": int(time.time()),
     }
     mf.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 
-def load_metadata(config: WayperConfig) -> dict:
+def load_metadata(config: WayperConfig) -> dict[str, ImageMetadata]:
     """Load all saved metadata."""
     mf = config.metadata_file
     if not mf.exists():

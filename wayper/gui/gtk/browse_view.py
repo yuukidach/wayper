@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import shutil
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
@@ -25,12 +26,13 @@ from ...browse._common import (
     perform_delete,
     perform_favorite,
     sort_images,
+    wallhaven_id,
     wallhaven_url,
 )
 from ...config import WayperConfig
 from ...history import push as push_history
 from ...image import validate_image
-from ...pool import IMAGE_EXTENSIONS, pool_dir
+from ...pool import IMAGE_EXTENSIONS, load_metadata, pool_dir
 from ...state import read_mode, write_mode
 from .daemon_control import _find_wayper_cli
 
@@ -41,6 +43,21 @@ ACTION_CONFIG = {
     "pool": "Reject",
     "disliked": "Restore",
 }
+
+
+def _draw_color_dot(area, cr, w, h, rgb):
+    """Draw a filled circle with pre-computed (r, g, b) floats."""
+    cr.set_source_rgb(*rgb)
+    cr.arc(w / 2, h / 2, min(w, h) / 2 - 1, 0, math.tau)
+    cr.fill()
+
+
+def _parse_hex_rgb(hex_color: str) -> tuple[float, float, float]:
+    """Parse hex color to (r, g, b) floats via Gdk.RGBA."""
+    rgba = Gdk.RGBA()
+    if rgba.parse(hex_color):
+        return (rgba.red, rgba.green, rgba.blue)
+    return (0.5, 0.5, 0.5)
 
 
 class BrowsePanel:
@@ -55,9 +72,11 @@ class BrowsePanel:
         self.images: list[Path] = []
         self._blocklist_only: list[str] = []
         self._thumb_pool = ThreadPoolExecutor(max_workers=4)
+        self._thumb_cache: dict[str, tuple[Gdk.Texture, str]] = {}  # path → (texture, info_text)
         self._zoom_level: float = 1.0
         self._preview_orig_w: int = 0
         self._preview_orig_h: int = 0
+        self._metadata: dict = load_metadata(config)
         # Filter state
         self._filter_text: str = ""
         self._filter_orientation: str | None = None
@@ -117,7 +136,6 @@ class BrowsePanel:
 
         grid_col.append(filter_bar)
 
-        # Wrap scroll in revealer for category crossfade
         self._grid_revealer = Gtk.Revealer()
         self._grid_revealer.set_transition_type(Gtk.RevealerTransitionType.CROSSFADE)
         self._grid_revealer.set_transition_duration(200)
@@ -215,21 +233,43 @@ class BrowsePanel:
         dbl_click.connect("released", self._on_preview_double_click)
         self._preview_scroll.add_controller(dbl_click)
 
-        # Info overlay at bottom
-        self._preview_info_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        # Info overlay — two rows at bottom of preview
+        self._preview_info_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self._preview_info_box.set_valign(Gtk.Align.END)
         self._preview_info_box.set_halign(Gtk.Align.FILL)
         self._preview_info_box.set_hexpand(True)
         self._preview_info_box.add_css_class("preview-overlay")
 
+        # Row 1: resolution | size | id | category · views · favs
+        info_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         self._preview_res_label = Gtk.Label(label="")
         self._preview_size_label = Gtk.Label(label="")
         self._preview_id_label = Gtk.Label(label="")
-        self._preview_info_box.append(self._preview_res_label)
-        self._preview_info_box.append(self._preview_size_label)
-        self._preview_info_box.append(self._preview_id_label)
-        self._preview_info_box.set_visible(False)
+        self._preview_stats_label = Gtk.Label(label="")
+        info_row.append(self._preview_res_label)
+        info_row.append(self._preview_size_label)
+        info_row.append(self._preview_id_label)
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        info_row.append(spacer)
+        self._preview_colors = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
+        info_row.append(self._preview_colors)
+        self._preview_info_box.append(info_row)
 
+        # Row 2: stats
+        self._preview_stats_label.add_css_class("stats-label")
+        self._preview_stats_label.set_halign(Gtk.Align.START)
+        self._preview_info_box.append(self._preview_stats_label)
+
+        # Row 3: tags (compact text)
+        self._preview_tags_label = Gtk.Label(label="")
+        self._preview_tags_label.add_css_class("stats-label")
+        self._preview_tags_label.set_halign(Gtk.Align.START)
+        self._preview_tags_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self._preview_tags_label.set_visible(False)
+        self._preview_info_box.append(self._preview_tags_label)
+
+        self._preview_info_box.set_visible(False)
         preview_overlay.add_overlay(self._preview_info_box)
         right.append(preview_overlay)
 
@@ -329,7 +369,8 @@ class BrowsePanel:
         self._blocklist_only = (
             get_blocklist_only(self.images, self.config) if self.category == "disliked" else []
         )
-        # Animate category switch via revealer crossfade
+        self._metadata = load_metadata(self.config)
+        self._thumb_cache.clear()
         self._grid_revealer.set_reveal_child(False)
         self._populate_grid()
         self._update_status()
@@ -412,6 +453,65 @@ class BrowsePanel:
 
             self._load_thumb_async(str(img_path), picture, info_label)
             self.flowbox.append(box)
+
+        # Blocklist-only items (no local file) — show metadata placeholder
+        if self.category == "disliked":
+            for bl_name in self._blocklist_only:
+                meta = self._metadata.get(bl_name)
+                box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                box._image_path = None
+                box._blocklist_name = bl_name
+
+                # Placeholder tile with metadata summary
+                frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+                frame.set_size_request(THUMB_SIZE, THUMB_SIZE)
+                frame.add_css_class("thumb-skeleton")
+                frame.add_css_class("thumb-frame")
+                placeholder = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                placeholder.set_valign(Gtk.Align.CENTER)
+                placeholder.set_halign(Gtk.Align.CENTER)
+                placeholder.set_vexpand(True)
+
+                wall_id = wallhaven_id(bl_name)
+                id_label = Gtk.Label(label=f"#{wall_id}")
+                id_label.add_css_class("info-label")
+                placeholder.append(id_label)
+
+                if meta:
+                    if cat := meta.get("category"):
+                        cat_label = Gtk.Label(label=cat)
+                        cat_label.add_css_class("stats-label")
+                        placeholder.append(cat_label)
+                    tags = meta.get("tags", [])[:3]
+                    if tags:
+                        tag_str = ", ".join(tags)
+                        tag_label = Gtk.Label(label=tag_str)
+                        tag_label.set_ellipsize(Pango.EllipsizeMode.END)
+                        tag_label.set_max_width_chars(18)
+                        tag_label.add_css_class("stats-label")
+                        placeholder.append(tag_label)
+
+                frame.append(placeholder)
+                box.append(frame)
+
+                name_label = Gtk.Label(label=bl_name[-12:])
+                name_label.set_ellipsize(Pango.EllipsizeMode.END)
+                name_label.set_max_width_chars(12)
+                box.append(name_label)
+
+                # Left-click
+                left_click = Gtk.GestureClick.new()
+                left_click.set_button(1)
+                left_click.connect("pressed", self._on_thumb_click)
+                box.add_controller(left_click)
+
+                # Right-click context menu
+                right_click = Gtk.GestureClick.new()
+                right_click.set_button(3)
+                right_click.connect("released", self._on_right_click, box)
+                box.add_controller(right_click)
+
+                self.flowbox.append(box)
 
     _EMPTY_STATE = {
         "pool": (
@@ -604,9 +704,17 @@ class BrowsePanel:
         info_label.set_visible(False)
 
     def _load_thumb_async(self, path: str, picture: Gtk.Picture, info_label: Gtk.Label):
+        cached = self._thumb_cache.get(path)
+        if cached:
+            texture, info_text = cached
+            picture.set_paintable(texture)
+            picture.remove_css_class("thumb-skeleton")
+            picture.add_css_class("thumb-loaded")
+            info_label.set_label(info_text)
+            return
+
         def worker():
             try:
-                # Read original dimensions (header-only, fast)
                 _fmt, orig_w, orig_h = GdkPixbuf.Pixbuf.get_file_info(path)
                 file_size = Path(path).stat().st_size
 
@@ -630,10 +738,14 @@ class BrowsePanel:
 
         def _set(pixbuf, orig_w, orig_h, file_size):
             texture = Gdk.Texture.new_for_pixbuf(pixbuf)
+            meta = self._metadata.get(Path(path).name)
+            cat_str = f" · {meta['category']}" if meta and meta.get("category") else ""
+            info_text = f"{orig_w}x{orig_h} | {format_size(file_size)}{cat_str}"
+            self._thumb_cache[path] = (texture, info_text)
             picture.set_paintable(texture)
             picture.remove_css_class("thumb-skeleton")
             picture.add_css_class("thumb-loaded")
-            info_label.set_label(f"{orig_w}x{orig_h} | {format_size(file_size)}")
+            info_label.set_label(info_text)
             return False
 
         self._thumb_pool.submit(worker)
@@ -655,18 +767,58 @@ class BrowsePanel:
                 self._preview_orig_w = w
                 self._preview_orig_h = h
                 file_size = path.stat().st_size
-                wall_id = path.stem.split("-", 1)[-1] if "-" in path.stem else path.stem
+                wall_id = wallhaven_id(path.name)
                 self._preview_res_label.set_label(f"{w}x{h}")
                 self._preview_size_label.set_label(format_size(file_size))
                 self._preview_id_label.set_label(f"#{wall_id}")
                 self._preview_info_box.set_visible(True)
             except Exception:
                 self._preview_info_box.set_visible(False)
+            self._show_detail_meta(self._metadata.get(path.name))
         else:
             self.preview.set_filename(None)
             self._preview_info_box.set_visible(False)
+            self._preview_tags_label.set_visible(False)
             self._preview_orig_w = 0
             self._preview_orig_h = 0
+
+    def _show_detail_meta(self, meta: dict | None):
+        """Render metadata in preview overlay."""
+        if not meta:
+            self._preview_stats_label.set_label("")
+            self._preview_tags_label.set_visible(False)
+            while child := self._preview_colors.get_first_child():
+                self._preview_colors.remove(child)
+            return
+
+        # Stats
+        parts = []
+        if cat := meta.get("category"):
+            parts.append(cat)
+        if (views := meta.get("views", 0)) > 0:
+            parts.append(f"{views:,} views")
+        if (favs := meta.get("favorites", 0)) > 0:
+            parts.append(f"{favs:,} favs")
+        self._preview_stats_label.set_label("  ·  ".join(parts))
+
+        # Color dots
+        while child := self._preview_colors.get_first_child():
+            self._preview_colors.remove(child)
+        for hex_color in meta.get("colors", [])[:5]:
+            rgb = _parse_hex_rgb(hex_color)
+            dot = Gtk.DrawingArea()
+            dot.set_size_request(12, 12)
+            dot.add_css_class("color-dot")
+            dot.set_draw_func(_draw_color_dot, rgb)
+            self._preview_colors.append(dot)
+
+        # Tags as compact text
+        tags = meta.get("tags", [])
+        if tags:
+            self._preview_tags_label.set_label(" · ".join(tags[:8]))
+            self._preview_tags_label.set_visible(True)
+        else:
+            self._preview_tags_label.set_visible(False)
 
     def _on_preview_scroll(self, ctrl, dx, dy):
         """Ctrl+scroll to zoom preview."""
@@ -800,7 +952,16 @@ class BrowsePanel:
         last_box = selected[-1].get_child()
         self.selected_path = getattr(last_box, "_image_path", None)
         self._selected_name = getattr(last_box, "_blocklist_name", None)
-        self._set_preview(self.selected_path)
+        if self.selected_path:
+            self._set_preview(self.selected_path)
+        else:
+            # Blocklist-only item — no file, but show metadata
+            self.preview.set_filename(None)
+            self._preview_info_box.set_visible(False)
+            if self._selected_name:
+                self._show_detail_meta(self._metadata.get(self._selected_name))
+            else:
+                self._preview_tags_label.set_visible(False)
         self._update_buttons()
         self._update_status()
 
@@ -873,6 +1034,7 @@ class BrowsePanel:
         img_path = getattr(box, "_image_path", None)
         if img_path and img_path in self.images:
             self.images.remove(img_path)
+            self._thumb_cache.pop(str(img_path), None)
 
         self.flowbox.remove(child)
         self._update_status()
