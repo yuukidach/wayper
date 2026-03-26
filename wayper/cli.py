@@ -29,6 +29,7 @@ from .pool import (
     pick_random,
     pool_dir,
     remove_from_blacklist,
+    should_download,
 )
 from .state import pop_undo, push_undo, read_mode, restore_from_trash, write_mode
 
@@ -76,6 +77,23 @@ def next_cmd(ctx):
             click.echo(json_mod.dumps({"action": "next", "monitor": monitor, "image": str(img)}))
         else:
             notify("Wallpaper", "Next wallpaper")
+
+    # Trigger download with same probability as daemon
+    mode = read_mode(config)
+    if should_download(config, mode):
+        from .wallhaven import WallhavenClient
+
+        async def _download():
+            client = WallhavenClient(config)
+            try:
+                await asyncio.gather(
+                    client.download_for("landscape", mode),
+                    client.download_for("portrait", mode),
+                )
+            finally:
+                await client.close()
+
+        asyncio.run(_download())
 
 
 @cli.command("prev")

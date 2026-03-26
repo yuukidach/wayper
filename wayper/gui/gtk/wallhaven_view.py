@@ -22,6 +22,7 @@ from ...image import resize_crop
 from ...pool import favorites_dir, is_blacklisted, pool_dir, save_metadata
 from ...state import read_mode
 from ...wallhaven import WallhavenClient
+from . import populate_tags
 
 THUMB_SIZE = 200
 
@@ -378,13 +379,7 @@ class WallhavenPanel:
         self._views_label.set_label(f"Views: {views:,}  |  Favs: {favs:,}")
         self._meta_box.set_visible(True)
 
-        # Tags
-        while child := self._tags_box.get_first_child():
-            self._tags_box.remove(child)
-        for tag in item.get("tags", [])[:10]:
-            tag_label = Gtk.Label(label=tag.get("name", ""))
-            tag_label.add_css_class("wallhaven-tag")
-            self._tags_box.append(tag_label)
+        populate_tags(self._tags_box, [t.get("name", "") for t in item.get("tags", [])[:10]])
 
         self._dl_btn.set_sensitive(True)
         self._open_btn.set_sensitive(True)

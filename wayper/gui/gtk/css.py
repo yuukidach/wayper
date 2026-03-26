@@ -288,6 +288,10 @@ notebook > header > tabs > tab:checked {
     color: #89b4fa;
     font-weight: bold;
 }
+.color-dot {
+    border-radius: 50%;
+    border: 1px solid rgba(205, 214, 244, 0.3);
+}
 
 /* ── Context menu (popover) ── */
 popover.background contents {

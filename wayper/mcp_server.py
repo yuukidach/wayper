@@ -25,6 +25,7 @@ from .pool import (
     count_images,
     disk_usage_mb,
     favorites_dir,
+    load_metadata,
     pick_random,
     pool_dir,
     remove_from_blacklist,
@@ -270,6 +271,29 @@ def delete_wallpaper(image_path: str, add_to_blacklist_flag: bool = False) -> di
         "image": image_path,
         "blacklisted": add_to_blacklist_flag,
     }
+
+
+@mcp.tool()
+def wallpaper_info(image_path: str | None = None) -> dict:
+    """Get Wallhaven metadata (tags, category, views, favorites, colors, uploader, etc.)
+    for a wallpaper. Defaults to the current wallpaper on the focused monitor.
+
+    Args:
+        image_path: Full path to image. If None, uses current wallpaper on focused monitor.
+    """
+    config = _config()
+    if image_path:
+        filename = Path(image_path).name
+    else:
+        _monitor, _mon_cfg, img = get_context(config)
+        if not img:
+            return {"error": "No current wallpaper"}
+        filename = img.name
+
+    meta = load_metadata(config).get(filename)
+    if not meta:
+        return {"filename": filename, "metadata": None}
+    return {"filename": filename, "metadata": meta}
 
 
 def main():
