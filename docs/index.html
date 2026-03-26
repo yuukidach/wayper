@@ -5,143 +5,296 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>wayper — Cross-platform wallpaper manager</title>
 <meta name="description" content="Cross-platform wallpaper manager with Wallhaven integration and AI-native control.">
+<meta property="og:title" content="wayper">
+<meta property="og:description" content="Cross-platform wallpaper manager with Wallhaven integration and AI-native control.">
+<meta property="og:image" content="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/icon-512.png">
+<link rel="icon" href="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/icon-64.png">
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 :root {
-  --base: #1e1e2e; --mantle: #181825; --surface0: #313244; --surface1: #45475a;
+  --base: #1e1e2e; --mantle: #181825; --crust: #11111b;
+  --surface0: #313244; --surface1: #45475a; --surface2: #585b70;
   --text: #cdd6f4; --subtext: #a6adc8; --overlay: #6c7086;
-  --blue: #89b4fa; --teal: #94e2d5; --green: #a6e3a1; --red: #f38ba8;
-  --mauve: #cba6f7; --peach: #fab387;
+  --blue: #89b4fa; --teal: #94e2d5; --green: #a6e3a1;
+  --mauve: #cba6f7; --peach: #fab387; --red: #f38ba8;
+  --sky: #89dceb; --lavender: #b4befe;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-family: 'Inter', -apple-system, system-ui, sans-serif;
   background: var(--base); color: var(--text);
-  line-height: 1.6; -webkit-font-smoothing: antialiased;
+  line-height: 1.7; -webkit-font-smoothing: antialiased;
 }
-a { color: var(--blue); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a { color: var(--blue); text-decoration: none; transition: color .2s; }
+a:hover { color: var(--lavender); }
 code {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  background: var(--surface0); padding: 2px 6px; border-radius: 4px; font-size: 0.9em;
+  font-family: 'JetBrains Mono', monospace;
+  background: var(--surface0); padding: 2px 7px; border-radius: 5px; font-size: .88em;
 }
 pre {
-  background: var(--mantle); border: 1px solid var(--surface0); border-radius: 8px;
-  padding: 16px 20px; overflow-x: auto; font-size: 0.85em; line-height: 1.5;
+  background: var(--mantle); border: 1px solid var(--surface0); border-radius: 10px;
+  padding: 18px 22px; overflow-x: auto; font-size: .85em; line-height: 1.6;
 }
 pre code { background: none; padding: 0; }
 
-/* Layout */
-.container { max-width: 800px; margin: 0 auto; padding: 0 24px; }
-
-/* Hero */
-.hero {
-  text-align: center; padding: 64px 0 48px;
-  background: linear-gradient(180deg, var(--mantle) 0%, var(--base) 100%);
+/* ── Nav ── */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(24, 24, 37, .85); backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--surface0);
+  padding: 0 24px;
 }
-.hero svg { width: 80px; height: 80px; margin-bottom: 16px; }
-.hero h1 { font-size: 2.5em; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 8px; }
-.hero p { color: var(--subtext); font-size: 1.1em; max-width: 520px; margin: 0 auto 28px; }
+nav .inner {
+  max-width: 960px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between;
+  height: 52px;
+}
+nav .logo { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 1.05em; color: var(--text); }
+nav .logo svg { width: 28px; height: 28px; }
+nav .links { display: flex; gap: 20px; font-size: .9em; }
+nav .links a { color: var(--subtext); }
+nav .links a:hover { color: var(--text); }
+nav .gh-btn {
+  background: var(--surface0); color: var(--text); padding: 6px 14px;
+  border-radius: 6px; font-size: .85em; font-weight: 500; transition: background .2s;
+}
+nav .gh-btn:hover { background: var(--surface1); color: var(--text); }
+
+/* ── Container ── */
+.container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+/* ── Hero ── */
+.hero {
+  text-align: center; padding: 100px 24px 64px;
+  background: radial-gradient(ellipse 80% 60% at 50% -10%, rgba(137,180,250,.1) 0%, transparent 70%),
+              linear-gradient(180deg, var(--crust) 0%, var(--base) 100%);
+}
+.hero svg { width: 88px; height: 88px; margin-bottom: 20px; filter: drop-shadow(0 0 24px rgba(14,165,233,.25)); }
+.hero h1 {
+  font-size: 3.5em; font-weight: 700; letter-spacing: -0.03em; margin-bottom: 12px;
+  background: linear-gradient(135deg, var(--blue) 0%, var(--teal) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero .tagline { color: var(--subtext); font-size: 1.2em; max-width: 540px; margin: 0 auto 12px; }
+.hero .badges { margin-bottom: 32px; }
+.hero .badges img { vertical-align: middle; }
 .buttons { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 .btn {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 10px 22px; border-radius: 8px; font-weight: 500; font-size: 0.95em;
-  transition: transform .15s, box-shadow .15s;
+  padding: 12px 28px; border-radius: 10px; font-weight: 600; font-size: .95em;
+  transition: transform .15s, box-shadow .2s;
 }
-.btn:hover { text-decoration: none; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,.3); }
-.btn-primary { background: var(--blue); color: var(--base); }
-.btn-secondary { background: var(--surface0); color: var(--text); }
+.btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,.35); text-decoration: none; }
+.btn-primary { background: linear-gradient(135deg, var(--blue), var(--teal)); color: var(--crust); }
+.btn-secondary { background: var(--surface0); color: var(--text); border: 1px solid var(--surface1); }
 
-/* Demo */
-.demo { text-align: center; padding: 32px 0 48px; }
-.demo img { width: 100%; max-width: 720px; border-radius: 12px; border: 1px solid var(--surface0); }
+/* ── Demo ── */
+.demo { text-align: center; padding: 40px 0 56px; }
+.demo img {
+  width: 100%; max-width: 740px; border-radius: 14px;
+  border: 1px solid var(--surface0);
+  box-shadow: 0 0 60px rgba(137,180,250,.08), 0 8px 32px rgba(0,0,0,.3);
+}
 
-/* Sections */
-section { padding: 40px 0; border-top: 1px solid var(--surface0); }
-section h2 { font-size: 1.5em; margin-bottom: 16px; color: var(--text); }
-section h3 { font-size: 1.1em; margin: 20px 0 8px; color: var(--subtext); }
+/* ── Sections ── */
+section { padding: 56px 0; }
+section + section { border-top: 1px solid var(--surface0); }
+section h2 {
+  font-size: 1.6em; margin-bottom: 20px; font-weight: 600;
+  display: flex; align-items: center; gap: 10px;
+}
+section h2 .icon { font-size: .85em; opacity: .7; }
 
-/* Features */
-.features { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+/* ── Features ── */
+.features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .feature {
-  background: var(--mantle); border: 1px solid var(--surface0); border-radius: 10px;
-  padding: 20px;
+  background: var(--mantle); border: 1px solid var(--surface0); border-radius: 12px;
+  padding: 22px; transition: border-color .2s, transform .2s;
 }
-.feature strong { color: var(--blue); }
-.feature span { color: var(--subtext); font-size: 0.92em; }
+.feature:hover { border-color: var(--surface1); transform: translateY(-2px); }
+.feature .f-icon { font-size: 1.3em; margin-bottom: 8px; }
+.feature strong { color: var(--text); font-weight: 600; font-size: .95em; }
+.feature p { color: var(--subtext); font-size: .88em; margin-top: 4px; line-height: 1.5; }
 
-/* Kbd */
+/* ── Install tabs ── */
+.tabs { display: flex; gap: 4px; margin-bottom: 0; }
+.tab {
+  padding: 8px 18px; border-radius: 8px 8px 0 0; cursor: pointer;
+  background: var(--surface0); color: var(--subtext); font-size: .9em;
+  font-weight: 500; border: 1px solid var(--surface0); border-bottom: none;
+  transition: background .2s, color .2s;
+}
+.tab.active { background: var(--mantle); color: var(--text); border-color: var(--surface0); }
+.tab:hover:not(.active) { background: var(--surface1); color: var(--text); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.tab-content pre { border-radius: 0 10px 10px 10px; margin-top: 0; border-top-left-radius: 0; }
+
+/* ── Kbd ── */
 .kbd-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 6px 24px; font-family: 'JetBrains Mono', monospace; font-size: 0.85em;
+  gap: 8px 24px; font-family: 'JetBrains Mono', monospace; font-size: .85em;
 }
-.kbd-grid span { color: var(--overlay); }
+.kbd-grid div { display: flex; align-items: center; gap: 6px; }
+.kbd-grid .label { color: var(--overlay); }
 kbd {
-  background: var(--surface0); padding: 2px 8px; border-radius: 4px;
-  font-family: inherit; color: var(--peach);
+  background: var(--surface0); padding: 3px 9px; border-radius: 5px;
+  font-family: inherit; color: var(--peach); font-size: .95em;
+  border: 1px solid var(--surface1); box-shadow: 0 1px 2px rgba(0,0,0,.2);
 }
 
-/* Footer */
+/* ── Footer ── */
 footer {
-  padding: 32px 0; text-align: center; color: var(--overlay); font-size: 0.85em;
+  padding: 40px 24px; text-align: center; color: var(--overlay); font-size: .85em;
   border-top: 1px solid var(--surface0);
+}
+footer .links { display: flex; gap: 20px; justify-content: center; margin-bottom: 12px; }
+footer .links a { color: var(--subtext); }
+
+/* ── Mobile ── */
+@media (max-width: 640px) {
+  .hero h1 { font-size: 2.4em; }
+  .hero { padding: 72px 20px 48px; }
+  .features { grid-template-columns: 1fr; }
+  nav .links { display: none; }
+  .buttons { flex-direction: column; align-items: center; }
+  .btn { width: 100%; max-width: 280px; justify-content: center; }
+  .tabs { overflow-x: auto; }
+  pre { font-size: .8em; }
+}
+@media (min-width: 641px) and (max-width: 900px) {
+  .features { grid-template-columns: repeat(2, 1fr); }
 }
 </style>
 </head>
 <body>
 
-<div class="hero">
-  <div class="container">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#0ea5e9"/><stop offset="100%" stop-color="#00e5d0"/>
-      </linearGradient></defs>
-      <rect x="8" y="8" width="112" height="112" rx="24" fill="#1a1b2e"/>
-      <polyline points="28,40 44,92 64,50 84,92 100,40" stroke="url(#g)" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-    <h1>wayper</h1>
-    <p>Cross-platform wallpaper manager with Wallhaven integration and AI-native control.</p>
-    <div class="buttons">
-      <a class="btn btn-primary" href="https://github.com/yuukidach/wayper/releases">Download</a>
-      <a class="btn btn-secondary" href="https://github.com/yuukidach/wayper">GitHub</a>
-      <a class="btn btn-secondary" href="https://aur.archlinux.org/packages/wayper">AUR</a>
+<nav>
+  <div class="inner">
+    <a class="logo" href="#">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+        <defs><linearGradient id="ng" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#0ea5e9"/><stop offset="100%" stop-color="#00e5d0"/>
+        </linearGradient></defs>
+        <rect x="8" y="8" width="112" height="112" rx="24" fill="#1a1b2e"/>
+        <polyline points="28,40 44,92 64,50 84,92 100,40" stroke="url(#ng)" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      wayper
+    </a>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="#usage">Usage</a>
+      <a href="#browse">Browse</a>
+      <a href="#mcp">MCP</a>
     </div>
+    <a class="gh-btn" href="https://github.com/yuukidach/wayper">GitHub</a>
+  </div>
+</nav>
+
+<div class="hero">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+    <defs><linearGradient id="hg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0ea5e9"/><stop offset="100%" stop-color="#00e5d0"/>
+    </linearGradient></defs>
+    <rect x="8" y="8" width="112" height="112" rx="24" fill="#1a1b2e"/>
+    <polyline points="28,40 44,92 64,50 84,92 100,40" stroke="url(#hg)" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  <h1>wayper</h1>
+  <p class="tagline">Cross-platform wallpaper manager with Wallhaven integration and AI-native control.</p>
+  <div class="badges">
+    <a href="https://github.com/yuukidach/wayper"><img src="https://img.shields.io/github/stars/yuukidach/wayper?style=flat&color=89b4fa&labelColor=313244&logo=github" alt="GitHub stars"></a>
+    <a href="https://github.com/yuukidach/wayper/blob/main/LICENSE"><img src="https://img.shields.io/github/license/yuukidach/wayper?style=flat&color=a6e3a1&labelColor=313244" alt="License"></a>
+    <a href="https://aur.archlinux.org/packages/wayper"><img src="https://img.shields.io/aur/version/wayper?style=flat&color=cba6f7&labelColor=313244&logo=archlinux&logoColor=cba6f7" alt="AUR"></a>
+  </div>
+  <div class="buttons">
+    <a class="btn btn-primary" href="https://github.com/yuukidach/wayper/releases">Download</a>
+    <a class="btn btn-secondary" href="https://github.com/yuukidach/wayper">View on GitHub</a>
   </div>
 </div>
 
 <div class="demo container">
-  <img src="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/demo-desktop.gif" alt="wallpaper transitions">
+  <img src="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/demo-desktop.gif" alt="wallpaper transitions" loading="lazy">
 </div>
 
 <div class="container">
 
-<section>
+<section id="features">
   <h2>Features</h2>
   <div class="features">
-    <div class="feature"><strong>Wallhaven</strong><br><span>Auto-downloads wallpapers based on your search preferences.</span></div>
-    <div class="feature"><strong>Auto orientation</strong><br><span>Portrait monitors get portrait wallpapers. No manual sorting.</span></div>
-    <div class="feature"><strong>Pool management</strong><br><span>Validates, resizes, and rotates wallpapers automatically.</span></div>
-    <div class="feature"><strong>SFW/NSFW toggle</strong><br><span>One key to switch. Persistent across sessions.</span></div>
-    <div class="feature"><strong>History</strong><br><span>Prev/next through wallpaper history per monitor.</span></div>
-    <div class="feature"><strong>Favorites &amp; blacklist</strong><br><span>Like/dislike with undo. Favorites stay in rotation.</span></div>
-    <div class="feature"><strong>Native browser</strong><br><span>GTK4 on Linux, AppKit on macOS. Keyboard-driven.</span></div>
-    <div class="feature"><strong>AI-native</strong><br><span>Built-in MCP server for Claude Code and other AI assistants.</span></div>
-    <div class="feature"><strong>JSON output</strong><br><span><code>--json</code> flag on every command for scripting.</span></div>
+    <div class="feature">
+      <div class="f-icon">&#127912;</div>
+      <strong>Wallhaven</strong>
+      <p>Auto-downloads wallpapers based on your search preferences.</p>
+    </div>
+    <div class="feature">
+      <div class="f-icon">&#128250;</div>
+      <strong>Auto orientation</strong>
+      <p>Portrait monitors get portrait wallpapers. No manual sorting.</p>
+    </div>
+    <div class="feature">
+      <div class="f-icon">&#128230;</div>
+      <strong>Pool management</strong>
+      <p>Validates, resizes, and rotates wallpapers automatically.</p>
+    </div>
+    <div class="feature">
+      <div class="f-icon">&#128274;</div>
+      <strong>SFW / NSFW</strong>
+      <p>One key to switch. Persistent across sessions.</p>
+    </div>
+    <div class="feature">
+      <div class="f-icon">&#9194;</div>
+      <strong>History</strong>
+      <p>Prev/next through wallpaper history per monitor.</p>
+    </div>
+    <div class="feature">
+      <div class="f-icon">&#11088;</div>
+      <strong>Favorites &amp; blacklist</strong>
+      <p>Like/dislike with undo. Favorites stay in rotation.</p>
+    </div>
+    <div class="feature">
+      <div class="f-icon">&#128444;&#65039;</div>
+      <strong>Native browser</strong>
+      <p>GTK4 on Linux, AppKit on macOS. Keyboard-driven.</p>
+    </div>
+    <div class="feature">
+      <div class="f-icon">&#129302;</div>
+      <strong>AI-native</strong>
+      <p>Built-in MCP server for Claude Code and other assistants.</p>
+    </div>
+    <div class="feature">
+      <div class="f-icon">&#128187;</div>
+      <strong>JSON output</strong>
+      <p><code>--json</code> flag on every command for scripting.</p>
+    </div>
   </div>
 </section>
 
-<section>
+<section id="install">
   <h2>Install</h2>
-  <h3>Arch Linux (AUR)</h3>
-  <pre><code>paru -S wayper     # or: yay -S wayper</code></pre>
-  <h3>From source</h3>
-  <pre><code>git clone https://github.com/yuukidach/wayper.git
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab(event, 'tab-aur')">Arch (AUR)</div>
+    <div class="tab" onclick="switchTab(event, 'tab-source')">From source</div>
+    <div class="tab" onclick="switchTab(event, 'tab-macos')">macOS</div>
+  </div>
+  <div id="tab-aur" class="tab-content active">
+    <pre><code>paru -S wayper     # or: yay -S wayper</code></pre>
+  </div>
+  <div id="tab-source" class="tab-content">
+    <pre><code>git clone https://github.com/yuukidach/wayper.git
 cd wayper
 uv venv && uv pip install -e .</code></pre>
-  <h3>macOS</h3>
-  <pre><code>pip install 'wayper[macos]'</code></pre>
+  </div>
+  <div id="tab-macos" class="tab-content">
+    <pre><code>git clone https://github.com/yuukidach/wayper.git
+cd wayper
+uv venv && uv pip install -e '.[macos]'</code></pre>
+  </div>
 </section>
 
-<section>
+<section id="usage">
   <h2>Usage</h2>
   <pre><code>wayper daemon               # start background rotation + downloads
 wayper next                 # next wallpaper
@@ -154,26 +307,27 @@ wayper status               # show current state
 wayper browse               # native wallpaper browser</code></pre>
 </section>
 
-<section>
+<section id="browse">
   <h2>Browse</h2>
-  <p style="margin-bottom:16px">
-    <img src="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png" alt="browse window" style="width:100%;max-width:540px;border-radius:10px;border:1px solid var(--surface0)">
+  <p style="margin-bottom:20px">
+    <img src="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png" alt="browse window" loading="lazy"
+         style="width:100%;max-width:560px;border-radius:12px;border:1px solid var(--surface0);box-shadow:0 4px 24px rgba(0,0,0,.3)">
   </p>
   <div class="kbd-grid">
-    <div><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <span>switch category</span></div>
-    <div><kbd>Enter</kbd> <span>set as wallpaper</span></div>
-    <div><kbd>f</kbd> <span>favorite</span></div>
-    <div><kbd>x</kbd> <span>remove / reject / restore</span></div>
-    <div><kbd>o</kbd> <span>open on Wallhaven</span></div>
-    <div><kbd>d</kbd> <span>delete</span></div>
-    <div><kbd>m</kbd> <span>toggle SFW/NSFW</span></div>
-    <div><kbd>q</kbd> / <kbd>Esc</kbd> <span>close</span></div>
+    <div><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <span class="label">switch category</span></div>
+    <div><kbd>Enter</kbd> <span class="label">set as wallpaper</span></div>
+    <div><kbd>f</kbd> <span class="label">favorite</span></div>
+    <div><kbd>x</kbd> <span class="label">remove / reject / restore</span></div>
+    <div><kbd>o</kbd> <span class="label">open on Wallhaven</span></div>
+    <div><kbd>d</kbd> <span class="label">delete</span></div>
+    <div><kbd>m</kbd> <span class="label">toggle SFW/NSFW</span></div>
+    <div><kbd>q</kbd> / <kbd>Esc</kbd> <span class="label">close</span></div>
   </div>
 </section>
 
-<section>
+<section id="mcp">
   <h2>MCP</h2>
-  <p style="margin-bottom:12px">Built-in <a href="https://modelcontextprotocol.io/">MCP</a> server lets AI assistants control your wallpapers natively.</p>
+  <p style="margin-bottom:14px">Built-in <a href="https://modelcontextprotocol.io/">MCP</a> server lets AI assistants control your wallpapers. Ask Claude to <em>"favorite this wallpaper"</em> or <em>"switch to something with mountains"</em> — it just works.</p>
   <pre><code>{
   "mcpServers": {
     "wayper": {
@@ -181,14 +335,14 @@ wayper browse               # native wallpaper browser</code></pre>
     }
   }
 }</code></pre>
-  <p style="margin-top:12px;color:var(--subtext);font-size:.9em">
+  <p style="margin-top:14px;color:var(--subtext);font-size:.88em">
     Tools: <code>status</code> <code>next_wallpaper</code> <code>prev_wallpaper</code> <code>fav</code> <code>unfav</code> <code>dislike</code> <code>undislike</code> <code>set_mode</code> <code>delete_wallpaper</code>
   </p>
 </section>
 
 <section>
   <h2>Requirements</h2>
-  <ul style="list-style:none;padding:0">
+  <ul style="list-style:none;padding:0;line-height:2.2">
     <li>Python 3.12+</li>
     <li><a href="https://wallhaven.cc/settings/account">Wallhaven API key</a></li>
     <li><strong>Linux:</strong> <a href="https://github.com/LGFae/swww">swww</a>, <a href="https://hyprland.org/">Hyprland</a>, GTK4 + PyGObject</li>
@@ -199,8 +353,22 @@ wayper browse               # native wallpaper browser</code></pre>
 </div>
 
 <footer>
-  <a href="https://github.com/yuukidach/wayper/blob/main/LICENSE">MIT License</a>
+  <div class="links">
+    <a href="https://github.com/yuukidach/wayper">GitHub</a>
+    <a href="https://github.com/yuukidach/wayper/releases">Releases</a>
+    <a href="https://github.com/yuukidach/wayper/issues">Issues</a>
+    <a href="https://github.com/yuukidach/wayper/blob/main/example-config.toml">Config</a>
+  </div>
+  <a href="https://github.com/yuukidach/wayper/blob/main/LICENSE">MIT License</a> &middot; Made with &#9825;
 </footer>
 
+<script>
+function switchTab(e, id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  e.target.classList.add('active');
+  document.getElementById(id).classList.add('active');
+}
+</script>
 </body>
 </html>
