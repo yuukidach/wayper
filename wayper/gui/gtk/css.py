@@ -217,43 +217,6 @@ notebook > header > tabs > tab:checked {
     line-height: 1.5;
 }
 
-/* ── List view ── */
-.list-row {
-    padding: 6px 12px;
-    border-bottom: 1px solid #313244;
-    min-height: 32px;
-}
-.list-row:hover {
-    background: rgba(69, 71, 90, 0.5);
-}
-.list-id {
-    background: transparent;
-    border: none;
-    color: #89b4fa;
-    font-family: monospace;
-    font-size: 12px;
-    padding: 2px 6px;
-    min-width: 80px;
-}
-.list-id:hover {
-    color: #b4d0fb;
-    text-decoration: underline;
-}
-.list-badge {
-    font-size: 10px;
-    padding: 1px 8px;
-    border-radius: 4px;
-    min-width: 50px;
-}
-.list-badge-file {
-    background: rgba(166, 227, 161, 0.15);
-    color: #a6e3a1;
-}
-.list-badge-blocked {
-    background: rgba(243, 139, 168, 0.15);
-    color: #f38ba8;
-}
-
 /* ── Skeleton placeholder + fade-in ── */
 @keyframes skeleton-pulse {
     0%, 100% { opacity: 0.5; }

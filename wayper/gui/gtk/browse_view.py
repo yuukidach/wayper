@@ -30,7 +30,7 @@ from ...browse._common import (
 from ...config import WayperConfig
 from ...history import push as push_history
 from ...image import validate_image
-from ...pool import IMAGE_EXTENSIONS, list_blacklist, pool_dir
+from ...pool import IMAGE_EXTENSIONS, pool_dir
 from ...state import read_mode, write_mode
 from .daemon_control import _find_wayper_cli
 
@@ -115,12 +115,6 @@ class BrowsePanel:
         self._sort_combo.connect("changed", self._on_sort_changed)
         filter_bar.append(self._sort_combo)
 
-        self._list_btn = Gtk.ToggleButton(label="\u2630")
-        self._list_btn.add_css_class("filter-btn")
-        self._list_btn.set_tooltip_text("List view")
-        self._list_btn.connect("toggled", self._on_view_toggle)
-        filter_bar.append(self._list_btn)
-
         grid_col.append(filter_bar)
 
         # Wrap scroll in revealer for category crossfade
@@ -177,20 +171,11 @@ class BrowsePanel:
         self._empty_cta.set_visible(False)
         self._empty_box.append(self._empty_cta)
 
-        # List view
-        list_scroll = Gtk.ScrolledWindow()
-        list_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        list_scroll.set_vexpand(True)
-        self._list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self._list_box.set_valign(Gtk.Align.START)
-        list_scroll.set_child(self._list_box)
-
-        # Stack to switch between grid, list, and empty state
+        # Stack to switch between grid and empty state
         self._grid_stack = Gtk.Stack()
         self._grid_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self._grid_stack.set_vexpand(True)
         self._grid_stack.add_named(scroll, "grid")
-        self._grid_stack.add_named(list_scroll, "list")
         self._grid_stack.add_named(self._empty_box, "empty")
 
         self._grid_revealer.set_child(self._grid_stack)
@@ -333,10 +318,7 @@ class BrowsePanel:
             filtered = [p for p in filtered if self._filter_orientation in str(p.parent).lower()]
 
         filtered = sort_images(filtered, self._sort_key)
-        if self._list_btn.get_active():
-            self._populate_list(filtered)
-        else:
-            self._populate_grid(filtered)
+        self._populate_grid(filtered)
         n = len(filtered)
         self.status_label.set_text(f"{n} image{'s' if n != 1 else ''} \u00b7 {self.mode.upper()}")
 
@@ -349,10 +331,7 @@ class BrowsePanel:
         )
         # Animate category switch via revealer crossfade
         self._grid_revealer.set_reveal_child(False)
-        if self._list_btn.get_active():
-            self._populate_list()
-        else:
-            self._populate_grid()
+        self._populate_grid()
         self._update_status()
         self._update_buttons()
         self.selected_path = None
@@ -431,166 +410,6 @@ class BrowsePanel:
 
             self._load_thumb_async(str(img_path), picture, info_label)
             self.flowbox.append(box)
-
-    def _on_view_toggle(self, btn: Gtk.ToggleButton):
-        if btn.get_active():
-            self._populate_list()
-            self._grid_stack.set_visible_child_name("list")
-        else:
-            self._populate_grid()
-            self._grid_stack.set_visible_child_name("grid")
-
-    def _populate_list(self, images: list[Path] | None = None):
-        import time as _time
-
-        while child := self._list_box.get_first_child():
-            self._list_box.remove(child)
-
-        display_images = images if images is not None else self.images
-
-        # Build timestamp lookup for blocklist entries
-        bl_timestamps: dict[str, int] = {}
-        if self.category == "disliked":
-            for ts, name in list_blacklist(self.config):
-                bl_timestamps[name] = ts
-
-        # Images with files
-        for img_path in display_images:
-            wall_id = img_path.stem.split("-", 1)[-1] if "-" in img_path.stem else img_path.stem
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            row.add_css_class("list-row")
-            row._image_path = img_path
-            row._blocklist_name = None
-
-            id_btn = Gtk.Button(label=f"#{wall_id}")
-            id_btn.add_css_class("list-id")
-            id_btn.connect("clicked", lambda _, p=img_path: webbrowser.open(wallhaven_url(p)))
-            row.append(id_btn)
-
-            badge = Gtk.Label(label="file")
-            badge.add_css_class("list-badge")
-            badge.add_css_class("list-badge-file")
-            row.append(badge)
-
-            try:
-                size = format_size(img_path.stat().st_size)
-            except OSError:
-                size = "—"
-            size_label = Gtk.Label(label=size)
-            size_label.add_css_class("status-label")
-            row.append(size_label)
-
-            ts = bl_timestamps.get(img_path.name, 0)
-            if ts:
-                date_str = _time.strftime("%Y-%m-%d", _time.localtime(ts))
-            else:
-                date_str = ""
-            date_label = Gtk.Label(label=date_str)
-            date_label.add_css_class("status-label")
-            row.append(date_label)
-
-            spacer = Gtk.Box()
-            spacer.set_hexpand(True)
-            row.append(spacer)
-
-            action_label = ACTION_CONFIG.get(self.category)
-            if action_label:
-                act_btn = Gtk.Button(label=action_label)
-                act_btn.add_css_class("filter-btn")
-                act_btn.connect(
-                    "clicked",
-                    lambda _, p=img_path: (
-                        perform_context_action(self.config, p, self.category, self.mode),
-                        self._reload_images(),
-                    ),
-                )
-                row.append(act_btn)
-
-            del_btn = Gtk.Button(label="Delete")
-            del_btn.add_css_class("filter-btn")
-            del_btn.add_css_class("destructive")
-            del_btn.connect(
-                "clicked",
-                lambda _, p=img_path: (
-                    perform_delete(self.config, p),
-                    self._reload_images(),
-                ),
-            )
-            row.append(del_btn)
-
-            self._list_box.append(row)
-
-        # Blocklist-only entries
-        for name in self._blocklist_only:
-            wall_id = Path(name).stem
-            wall_id = wall_id.split("-", 1)[-1] if "-" in wall_id else wall_id
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            row.add_css_class("list-row")
-            row._image_path = None
-            row._blocklist_name = name
-
-            id_btn = Gtk.Button(label=f"#{wall_id}")
-            id_btn.add_css_class("list-id")
-            id_btn.connect(
-                "clicked",
-                lambda _, n=name: webbrowser.open(wallhaven_url(Path(n))),
-            )
-            row.append(id_btn)
-
-            badge = Gtk.Label(label="blocked")
-            badge.add_css_class("list-badge")
-            badge.add_css_class("list-badge-blocked")
-            row.append(badge)
-
-            # No file size for blocklist-only
-            spacer_size = Gtk.Label(label="—")
-            spacer_size.add_css_class("status-label")
-            row.append(spacer_size)
-
-            ts = bl_timestamps.get(name, 0)
-            if ts:
-                date_str = _time.strftime("%Y-%m-%d", _time.localtime(ts))
-            else:
-                date_str = ""
-            date_label = Gtk.Label(label=date_str)
-            date_label.add_css_class("status-label")
-            row.append(date_label)
-
-            spacer = Gtk.Box()
-            spacer.set_hexpand(True)
-            row.append(spacer)
-
-            unblock_btn = Gtk.Button(label="Unblock")
-            unblock_btn.add_css_class("filter-btn")
-            unblock_btn.connect(
-                "clicked",
-                lambda _, n=name: (
-                    perform_context_action(self.config, None, self.category, self.mode, n),
-                    self._reload_images(),
-                ),
-            )
-            row.append(unblock_btn)
-
-            del_btn = Gtk.Button(label="Delete")
-            del_btn.add_css_class("filter-btn")
-            del_btn.add_css_class("destructive")
-            del_btn.connect(
-                "clicked",
-                lambda _, n=name: (
-                    perform_delete(self.config, None, n),
-                    self._reload_images(),
-                ),
-            )
-            row.append(del_btn)
-
-            self._list_box.append(row)
-
-        # Show empty state if nothing to display
-        total = len(display_images) + len(self._blocklist_only)
-        if total == 0:
-            self._show_empty_state()
-        else:
-            self._grid_stack.set_visible_child_name("list")
 
     _EMPTY_STATE = {
         "pool": (
