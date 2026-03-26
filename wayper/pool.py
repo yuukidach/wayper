@@ -31,6 +31,15 @@ class ImageMetadata(TypedDict, total=False):
     downloaded_at: int
 
 
+def extract_tag_names(tags: list) -> list[str]:
+    """Extract tag name strings from Wallhaven's mixed tag format."""
+    if not tags:
+        return []
+    if isinstance(tags[0], dict):
+        return [t.get("name", "") for t in tags]
+    return list(tags)
+
+
 def list_images(directory: Path) -> list[Path]:
     """List all image files in a directory."""
     if not directory.exists():
@@ -174,7 +183,7 @@ def save_metadata(config: WayperConfig, filename: str, item: dict) -> None:
     uploader = item.get("uploader") or {}
     data[filename] = {
         "id": item.get("id", ""),
-        "tags": [t["name"] for t in tags] if tags and isinstance(tags[0], dict) else tags,
+        "tags": extract_tag_names(tags),
         "category": item.get("category", ""),
         "purity": item.get("purity", ""),
         "resolution": item.get("resolution", ""),

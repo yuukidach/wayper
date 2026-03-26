@@ -10,7 +10,7 @@ import httpx
 
 from .config import WayperConfig
 from .image import resize_crop, validate_image
-from .pool import favorites_dir, is_blacklisted, pool_dir, save_metadata
+from .pool import extract_tag_names, favorites_dir, is_blacklisted, pool_dir, save_metadata
 
 SEARCH_URL = "https://wallhaven.cc/api/v1/search"
 
@@ -173,14 +173,12 @@ class WallhavenClient:
             for (filename, item, dest), detail in zip(downloaded, details):
                 if detail:
                     item = {**item, **detail}
-                save_metadata(config, filename, item)
 
-                # Check exclude combos against tags
-                tags = item.get("tags", [])
-                tag_names = [(t["name"] if isinstance(t, dict) else t) for t in tags]
-                if self._matches_exclude_combo(tag_names):
+                if self._matches_exclude_combo(extract_tag_names(item.get("tags", []))):
                     dest.unlink(missing_ok=True)
                     continue
+
+                save_metadata(config, filename, item)
 
                 if mon and not resize_crop(dest, mon.width, mon.height):
                     dest.unlink(missing_ok=True)
