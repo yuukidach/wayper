@@ -31,6 +31,10 @@ class WallpaperBackend(ABC):
     def is_locked(self) -> bool:
         """Check if the session is locked."""
 
+    @abstractmethod
+    def detect_monitors(self) -> list[MonitorConfig]:
+        """Detect current monitor configuration."""
+
     def ensure_ready(self) -> None:
         """Ensure the backend is ready (e.g. start required daemons). No-op by default."""
 

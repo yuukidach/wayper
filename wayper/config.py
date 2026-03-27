@@ -179,6 +179,16 @@ def load_config(path: Path | None = None) -> WayperConfig:
 
     monitors = [MonitorConfig(**m) for m in raw.get("monitors", [])]
 
+    if not monitors:
+        # Auto-detect monitors if none are configured
+        try:
+            from .backend import detect_monitors
+
+            monitors = detect_monitors()
+        except Exception:
+            # Fallback to empty list if detection fails (e.g. headless, missing deps)
+            pass
+
     wallhaven_raw = raw.get("wallhaven", {})
     wallhaven = WallhavenConfig(
         categories=wallhaven_raw.get("categories", "111"),
