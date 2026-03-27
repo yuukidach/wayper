@@ -10,6 +10,7 @@ from AppKit import (
     NSBezelStyleRounded,
     NSButton,
     NSFont,
+    NSImage,
     NSMakeRect,
     NSMakeSize,
     NSOpenPanel,
@@ -22,7 +23,7 @@ from AppKit import (
     NSTabViewController,
     NSTabViewItem,
     NSTextField,
-    NSUserInterfaceLayoutOrientationVertical,
+    NSTextView,
     NSView,
     NSViewController,
     NSWindow,
@@ -31,10 +32,11 @@ from AppKit import (
     NSWindowStyleMaskResizable,
     NSWindowStyleMaskTitled,
 )
-from Foundation import NSEdgeInsets, NSObject
+from Foundation import NSObject
 
 from ...config import MonitorConfig, WayperConfig, compact_home, save_config
-from .colors import C_BASE, C_SUBTEXT, C_TEXT
+from ._style_helpers import make_section_box
+from .colors import C_BASE, C_BLUE, C_GREEN, C_RED, C_SUBTEXT, C_SURFACE, C_SURFACE1_CG, C_TEXT
 
 _LABEL_W = 140
 _FIELD_W = 280
@@ -47,8 +49,12 @@ def _make_field(cls, value: str = "", placeholder: str = ""):
     tf.setStringValue_(value)
     tf.setPlaceholderString_(placeholder)
     tf.setTextColor_(C_TEXT)
-    tf.setBackgroundColor_(C_BASE)
+    tf.setBackgroundColor_(C_SURFACE)
     tf.setFont_(NSFont.systemFontOfSize_(13))
+    tf.setWantsLayer_(True)
+    tf.layer().setCornerRadius_(6)
+    tf.layer().setBorderWidth_(1)
+    tf.layer().setBorderColor_(C_SURFACE1_CG)
     return tf
 
 
@@ -85,19 +91,45 @@ def _checkbox(title: str, checked: bool) -> NSButton:
 
 def _row(label_text: str, control: NSView) -> NSStackView:
     lbl = _label(label_text)
-    lbl.setFrame_(NSMakeRect(0, 0, _LABEL_W, _ROW_H))
+    lbl.setTranslatesAutoresizingMaskIntoConstraints_(False)
     row = NSStackView.stackViewWithViews_([lbl, control])
     row.setSpacing_(12)
+    row.setDistribution_(2)  # NSStackViewDistributionFill
+    row.addConstraint_(lbl.widthAnchor().constraintEqualToConstant_(_LABEL_W))
+    lbl.setContentHuggingPriority_forOrientation_(999, 0)  # label stays fixed
+    control.setContentHuggingPriority_forOrientation_(1, 0)  # control stretches
     return row
 
 
-def _make_pane(rows: list[NSStackView]) -> NSView:
-    stack = NSStackView.stackViewWithViews_(rows)
-    stack.setOrientation_(NSUserInterfaceLayoutOrientationVertical)
-    stack.setAlignment_(6)  # NSLayoutAttributeLeading
-    stack.setSpacing_(12)
-    stack.setEdgeInsets_(NSEdgeInsets(_PAD, _PAD, _PAD, _PAD))
-    return stack
+def _make_pane(sections: list) -> NSView:
+    """Wrap section boxes in a view with explicit constraints so they fill width."""
+    root = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 520, 400))
+    root.setAutoresizingMask_(18)  # NSViewWidthSizable | NSViewHeightSizable
+    constraints = []
+    prev = None
+    for section in sections:
+        root.addSubview_(section)
+        constraints.extend(
+            [
+                section.leadingAnchor().constraintEqualToAnchor_constant_(
+                    root.leadingAnchor(), _PAD
+                ),
+                section.trailingAnchor().constraintEqualToAnchor_constant_(
+                    root.trailingAnchor(), -_PAD
+                ),
+            ]
+        )
+        if prev is None:
+            constraints.append(
+                section.topAnchor().constraintEqualToAnchor_constant_(root.topAnchor(), _PAD)
+            )
+        else:
+            constraints.append(
+                section.topAnchor().constraintEqualToAnchor_constant_(prev.bottomAnchor(), _PAD)
+            )
+        prev = section
+    root.addConstraints_(constraints)
+    return root
 
 
 # ── General Pane ──
@@ -118,6 +150,7 @@ class GeneralPane(NSViewController):
         self._proxy = _text_field(c.proxy or "", "http://127.0.0.1:7897")
         self._download_dir = _text_field(compact_home(c.download_dir))
         self._browse_btn = NSButton.buttonWithTitle_target_action_("Browse...", self, "browseDir:")
+        self._browse_btn.setContentTintColor_(C_BLUE)
         dir_row_inner = NSStackView.stackViewWithViews_([self._download_dir, self._browse_btn])
         dir_row_inner.setSpacing_(6)
 
@@ -126,17 +159,24 @@ class GeneralPane(NSViewController):
         self._interval = _text_field(str(c.interval))
         self._pool_target = _text_field(str(c.pool_target))
 
-        rows = [
-            _row("API Key", self._api_key),
-            _row("Proxy", self._proxy),
-            _row("Download Dir", dir_row_inner),
-            _row("Quota (MB)", self._quota),
-            _row("Default Mode", self._mode),
-            _row("Interval (s)", self._interval),
-            _row("Pool Target", self._pool_target),
-        ]
+        connection = make_section_box(
+            "Connection",
+            [_row("API Key", self._api_key), _row("Proxy", self._proxy)],
+        )
+        storage = make_section_box(
+            "Storage",
+            [_row("Download Dir", dir_row_inner), _row("Quota (MB)", self._quota)],
+        )
+        behavior = make_section_box(
+            "Behavior",
+            [
+                _row("Default Mode", self._mode),
+                _row("Interval (s)", self._interval),
+                _row("Pool Target", self._pool_target),
+            ],
+        )
 
-        self.setView_(_make_pane(rows))
+        self.setView_(_make_pane([connection, storage, behavior]))
 
     @objc.typedSelector(b"v@:@")
     def browseDir_(self, sender):
@@ -204,14 +244,43 @@ class WallhavenPane(NSViewController):
 
         self._ai_filter = _checkbox("Filter AI-generated art", wh.ai_art_filter == 1)
 
-        rows = [
-            _row("Categories", cat_stack),
-            _row("Sorting", self._sorting),
-            _row("Top Range", self._top_range),
-            _row("AI Art", self._ai_filter),
-        ]
+        # Exclude Tags
+        self._exclude_tags = _text_field(", ".join(wh.exclude_tags), "e.g. MetArt, watermarked")
 
-        self.setView_(_make_pane(rows))
+        # Exclude Combos (multi-line text view)
+        combo_scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(0, 0, _FIELD_W, 80))
+        combo_scroll.setHasVerticalScroller_(True)
+        combo_scroll.setBorderType_(1)  # NSBezelBorder
+
+        self._exclude_combos_tv = NSTextView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, _FIELD_W - 4, 76)
+        )
+        self._exclude_combos_tv.setFont_(NSFont.systemFontOfSize_(13))
+        self._exclude_combos_tv.setTextColor_(C_TEXT)
+        self._exclude_combos_tv.setBackgroundColor_(C_SURFACE)
+        self._exclude_combos_tv.setRichText_(False)
+        combo_text = "\n".join(" + ".join(combo) for combo in wh.exclude_combos)
+        self._exclude_combos_tv.setString_(combo_text)
+        combo_scroll.setDocumentView_(self._exclude_combos_tv)
+
+        categories_box = make_section_box(
+            "Categories",
+            [
+                _row("Categories", cat_stack),
+                _row("Sorting", self._sorting),
+                _row("Top Range", self._top_range),
+            ],
+        )
+        filtering_box = make_section_box(
+            "Filtering",
+            [
+                _row("AI Art", self._ai_filter),
+                _row("Exclude Tags", self._exclude_tags),
+                _row("Exclude Combos", combo_scroll),
+            ],
+        )
+
+        self.setView_(_make_pane([categories_box, filtering_box]))
 
     def applyToConfig_(self, config):
         cats = (
@@ -223,6 +292,17 @@ class WallhavenPane(NSViewController):
         config.wallhaven.sorting = self._sorting.titleOfSelectedItem()
         config.wallhaven.top_range = self._top_range.titleOfSelectedItem()
         config.wallhaven.ai_art_filter = 1 if self._ai_filter.state() else 0
+
+        raw_tags = self._exclude_tags.stringValue().strip()
+        config.wallhaven.exclude_tags = (
+            [t.strip() for t in raw_tags.split(",") if t.strip()] if raw_tags else []
+        )
+        combo_text = self._exclude_combos_tv.string()
+        config.wallhaven.exclude_combos = [
+            [t.strip() for t in line.split("+") if t.strip()]
+            for line in combo_text.strip().splitlines()
+            if line.strip()
+        ]
 
 
 # ── Monitors Pane ──
@@ -306,21 +386,23 @@ class MonitorsPane(NSViewController):
         scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(0, 0, 480, 200))
         scroll.setDocumentView_(self._tv)
         scroll.setHasVerticalScroller_(True)
+        scroll.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        scroll.addConstraint_(scroll.heightAnchor().constraintGreaterThanOrEqualToConstant_(200))
+        self._tv.setColumnAutoresizingStyle_(1)  # Uniform column auto-resizing
 
         add_btn = NSButton.buttonWithTitle_target_action_("+", self, "addMonitor:")
         add_btn.setBezelStyle_(NSBezelStyleRounded)
+        add_btn.setContentTintColor_(C_GREEN)
         remove_btn = NSButton.buttonWithTitle_target_action_("-", self, "removeMonitor:")
         remove_btn.setBezelStyle_(NSBezelStyleRounded)
+        remove_btn.setContentTintColor_(C_RED)
 
         btn_stack = NSStackView.stackViewWithViews_([add_btn, remove_btn])
         btn_stack.setSpacing_(6)
 
-        outer = NSStackView.stackViewWithViews_([scroll, btn_stack])
-        outer.setOrientation_(NSUserInterfaceLayoutOrientationVertical)
-        outer.setSpacing_(8)
-        outer.setEdgeInsets_(NSEdgeInsets(_PAD, _PAD, _PAD, _PAD))
+        monitors_box = make_section_box("Configured Monitors", [scroll, btn_stack])
 
-        self.setView_(outer)
+        self.setView_(_make_pane([monitors_box]))
 
     @objc.typedSelector(b"v@:@")
     def addMonitor_(self, sender):
@@ -379,12 +461,13 @@ class SettingsWindowController(NSObject):
             | NSWindowStyleMaskResizable
         )
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(200, 200, 560, 400),
+            NSMakeRect(200, 200, 560, 480),
             style,
             NSBackingStoreBuffered,
             False,
         )
         self.window.setTitle_("Wayper Settings")
+        self.window.setReleasedWhenClosed_(False)
         self.window.setBackgroundColor_(C_BASE)
         self.window.setMinSize_(NSMakeSize(480, 320))
         self.window.setDelegate_(self)
@@ -396,23 +479,28 @@ class SettingsWindowController(NSObject):
         tvc = NSTabViewController.alloc().init()
         tvc.setTabStyle_(2)  # NSTabViewControllerTabStyleToolbar
 
-        for pane, label in [
-            (self._general, "General"),
-            (self._wallhaven, "Wallhaven"),
-            (self._monitors, "Monitors"),
+        for pane, label, symbol in [
+            (self._general, "General", "gearshape"),
+            (self._wallhaven, "Wallhaven", "photo.on.rectangle"),
+            (self._monitors, "Monitors", "display"),
         ]:
             item = NSTabViewItem.alloc().initWithIdentifier_(label)
             item.setLabel_(label)
+            item.setImage_(
+                NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, label)
+            )
             item.setViewController_(pane)
             tvc.addTabViewItem_(item)
 
         self.window.setContentViewController_(tvc)
+        self._tvc = tvc
         if hasattr(self.window, "setToolbarStyle_"):
-            self.window.setToolbarStyle_(3)  # NSWindowToolbarStylePreference
+            self.window.setToolbarStyle_(2)  # NSWindowToolbarStylePreference
 
-        # Save button pinned to bottom-right
+        # Save button pinned to bottom-right of the tab content area
         save_btn = NSButton.buttonWithTitle_target_action_("Save", self, "saveSettings:")
         save_btn.setBezelStyle_(NSBezelStyleRounded)
+        save_btn.setBezelColor_(C_BLUE)
         save_btn.setKeyEquivalent_("\r")
 
         content = self.window.contentView()
@@ -426,7 +514,7 @@ class SettingsWindowController(NSObject):
                 ),
                 save_btn.bottomAnchor().constraintEqualToAnchor_constant_(
                     content.bottomAnchor(),
-                    -_PAD,
+                    -12,
                 ),
             ]
         )
@@ -443,6 +531,10 @@ class SettingsWindowController(NSObject):
     def windowWillClose_(self, notification):
         global _shared_controller
         _shared_controller = None
+
+    @objc.typedSelector(b"v@:@")
+    def cancelOperation_(self, sender):
+        self.window.close()
 
     def showWindow(self):
         self.window.makeKeyAndOrderFront_(None)
