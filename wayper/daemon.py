@@ -10,7 +10,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .backend import ensure_ready, set_wallpaper
+from .backend import ensure_ready, is_locked, set_wallpaper
 from .config import WayperConfig
 from .history import push_many
 from .pool import (
@@ -157,6 +157,17 @@ async def run_daemon(config: WayperConfig) -> None:
             if _reload_mode:
                 _reload_mode = False
 
+            # Check lock state at start of cycle
+            if config.pause_on_lock and is_locked():
+                log.info("Session locked, waiting before rotation")
+                while config.pause_on_lock and is_locked():
+                    if _change_now or _reload_mode:
+                        break
+                    await asyncio.sleep(5)
+
+                if _change_now or _reload_mode:
+                    continue
+
             mode = read_mode(config)
 
             # Set wallpapers immediately
@@ -165,10 +176,8 @@ async def run_daemon(config: WayperConfig) -> None:
 
             # Download if needed
             if should_download(config, mode):
-                await asyncio.gather(
-                    client.download_for("landscape", mode),
-                    client.download_for("portrait", mode),
-                )
+                orientations = {m.orientation for m in config.monitors}
+                await asyncio.gather(*(client.download_for(o, mode) for o in orientations))
 
             enforce_quota(config)
             prune_blacklist(config)
@@ -180,10 +189,25 @@ async def run_daemon(config: WayperConfig) -> None:
                 greeter_count = 0
 
             # Interruptible sleep
-            for _ in range(config.interval):
+            remaining = config.interval
+            while remaining > 0:
                 if _change_now or _reload_mode:
                     break
+
+                # Pause if locked
+                if config.pause_on_lock and is_locked():
+                    log.info("Session locked, pausing timer")
+                    while config.pause_on_lock and is_locked():
+                        if _change_now or _reload_mode:
+                            break
+                        await asyncio.sleep(5)
+                    log.info("Session unlocked, resuming timer")
+
+                    if _change_now or _reload_mode:
+                        break
+
                 await asyncio.sleep(1)
+                remaining -= 1
     except (KeyboardInterrupt, SystemExit):
         log.info("Daemon shutting down")
     finally:

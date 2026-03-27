@@ -35,7 +35,8 @@ from ..actions import (
     do_undislike,
     do_unfavorite,
 )
-from .colors import C_BLUE, C_GREEN, C_SURFACE_CG, C_TEXT
+from ._style_helpers import apply_card_shadow, fade_in
+from .colors import C_BLUE, C_GREEN, C_MANTLE_CG, C_PEACH, C_RED, C_TEXT
 
 
 class ActionsPanelController(NSObject):
@@ -67,13 +68,36 @@ class ActionsPanelController(NSObject):
         self._preview.setImageScaling_(NSImageScaleProportionallyUpOrDown)
         self._preview.setWantsLayer_(True)
         self._preview.layer().setCornerRadius_(12)
-        self._preview.layer().setBackgroundColor_(C_SURFACE_CG)
-        self._preview.setContentHuggingPriority_forOrientation_(1, 1)
-        self._preview.setContentHuggingPriority_forOrientation_(1, 0)
-        self._preview.setContentCompressionResistancePriority_forOrientation_(1, 1)
-        self._preview.setContentCompressionResistancePriority_forOrientation_(1, 0)
+        self._preview.layer().setMasksToBounds_(True)
+        self._preview.layer().setBackgroundColor_(C_MANTLE_CG)
         self._preview.setTranslatesAutoresizingMaskIntoConstraints_(False)
-        stack.addView_inGravity_(self._preview, NSStackViewGravityLeading)
+
+        # Shadow wrapper — shadow on outer view, clipping on inner preview
+        self._shadow_wrap = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 700, 400))
+        self._shadow_wrap.setWantsLayer_(True)
+        self._shadow_wrap.layer().setCornerRadius_(12)
+        apply_card_shadow(self._shadow_wrap)
+        self._shadow_wrap.setContentHuggingPriority_forOrientation_(1, 1)
+        self._shadow_wrap.setContentHuggingPriority_forOrientation_(1, 0)
+        self._shadow_wrap.setContentCompressionResistancePriority_forOrientation_(1, 1)
+        self._shadow_wrap.setContentCompressionResistancePriority_forOrientation_(1, 0)
+        self._shadow_wrap.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        self._shadow_wrap.addSubview_(self._preview)
+        self._shadow_wrap.addConstraints_(
+            [
+                self._preview.topAnchor().constraintEqualToAnchor_(self._shadow_wrap.topAnchor()),
+                self._preview.leadingAnchor().constraintEqualToAnchor_(
+                    self._shadow_wrap.leadingAnchor()
+                ),
+                self._preview.trailingAnchor().constraintEqualToAnchor_(
+                    self._shadow_wrap.trailingAnchor()
+                ),
+                self._preview.bottomAnchor().constraintEqualToAnchor_(
+                    self._shadow_wrap.bottomAnchor()
+                ),
+            ]
+        )
+        stack.addView_inGravity_(self._shadow_wrap, NSStackViewGravityLeading)
 
         # Info labels
         info_bar = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 600, 24))
@@ -98,15 +122,19 @@ class ActionsPanelController(NSObject):
         info_bar.setContentHuggingPriority_forOrientation_(999, 1)
         stack.addView_inGravity_(info_bar, NSStackViewGravityLeading)
 
-        # Action buttons — grouped by function
-        self._btn_prev = self._make_btn("Prev", "doPrev:")
-        self._btn_next = self._make_btn("Next", "doNext:")
+        # Action buttons — grouped by function, SF Symbols + semantic colors
+        self._btn_prev = self._make_btn("Prev", "doPrev:", symbol="chevron.left", tint=C_TEXT)
+        self._btn_next = self._make_btn("Next", "doNext:", symbol="chevron.right", tint=C_BLUE)
         self._btn_next.setKeyEquivalent_("\r")
-        self._btn_fav = self._make_btn("Fav", "doFav:")
-        self._btn_unfav = self._make_btn("Unfav", "doUnfav:")
-        self._btn_dislike = self._make_btn("Dislike", "doDislike:")
-        self._btn_undo = self._make_btn("Undo Dislike", "doUndislike:")
-        self._btn_open = self._make_btn("Open", "doOpen:")
+        self._btn_fav = self._make_btn("Fav", "doFav:", symbol="heart", tint=C_GREEN)
+        self._btn_unfav = self._make_btn("Unfav", "doUnfav:", symbol="heart.slash", tint=C_PEACH)
+        self._btn_dislike = self._make_btn(
+            "Dislike", "doDislike:", symbol="hand.thumbsdown", tint=C_RED
+        )
+        self._btn_undo = self._make_btn(
+            "Undo Dislike", "doUndislike:", symbol="arrow.uturn.left", tint=C_PEACH
+        )
+        self._btn_open = self._make_btn("Open", "doOpen:", symbol="safari", tint=C_BLUE)
 
         # Navigation group
         nav_group = NSStackView.alloc().initWithFrame_(NSMakeRect(0, 0, 150, 36))
@@ -149,17 +177,31 @@ class ActionsPanelController(NSObject):
                     root.trailingAnchor(), -20
                 ),
                 stack.bottomAnchor().constraintEqualToAnchor_constant_(root.bottomAnchor(), -20),
-                self._preview.leadingAnchor().constraintEqualToAnchor_(stack.leadingAnchor()),
-                self._preview.trailingAnchor().constraintEqualToAnchor_(stack.trailingAnchor()),
-                self._preview.heightAnchor().constraintGreaterThanOrEqualToConstant_(200),
+                self._shadow_wrap.leadingAnchor().constraintEqualToAnchor_(stack.leadingAnchor()),
+                self._shadow_wrap.trailingAnchor().constraintEqualToAnchor_(stack.trailingAnchor()),
+                self._shadow_wrap.heightAnchor().constraintGreaterThanOrEqualToConstant_(200),
             ]
         )
 
         return root
 
-    def _make_btn(self, title: str, action: str) -> NSButton:
-        btn = NSButton.buttonWithTitle_target_action_(title, self, action)
+    def _make_btn(
+        self,
+        title: str,
+        action: str,
+        *,
+        symbol: str | None = None,
+        tint: NSImage | None = None,
+    ) -> NSButton:
+        if symbol:
+            img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, title)
+            btn = NSButton.buttonWithImage_target_action_(img, self, action)
+            btn.setToolTip_(title)
+        else:
+            btn = NSButton.buttonWithTitle_target_action_(title, self, action)
         btn.setBezelStyle_(NSBezelStyleRounded)
+        if tint:
+            btn.setContentTintColor_(tint)
         return btn
 
     # ── Refresh with change detection ──
@@ -185,6 +227,7 @@ class ActionsPanelController(NSObject):
         if img and img.exists():
             ns_img = NSImage.alloc().initByReferencingFile_(str(img))
             self._preview.setImage_(ns_img)
+            fade_in(self._preview, 0.3)
         else:
             self._preview.setImage_(None)
 
@@ -257,6 +300,11 @@ class ActionsPanelController(NSObject):
     @objc.typedSelector(b"v@:@")
     def doOpen_(self, sender):
         do_open_wallhaven(self._current_path)
+
+    def forceRefresh(self):
+        """Force a full UI refresh (e.g. after settings change)."""
+        self._current_path = None
+        self._refresh()
 
     # ── Keyboard ──
 

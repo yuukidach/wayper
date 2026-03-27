@@ -27,6 +27,10 @@ class WallpaperBackend(ABC):
     def notify(self, title: str, message: str, timeout_ms: int = 2000) -> None:
         """Send a desktop notification."""
 
+    @abstractmethod
+    def is_locked(self) -> bool:
+        """Check if the session is locked."""
+
     def ensure_ready(self) -> None:
         """Ensure the backend is ready (e.g. start required daemons). No-op by default."""
 

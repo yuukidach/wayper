@@ -15,6 +15,13 @@ try:
 except ImportError:
     _HAS_APPKIT = False
 
+try:
+    import Quartz
+
+    _HAS_QUARTZ = True
+except ImportError:
+    _HAS_QUARTZ = False
+
 
 def _display_id(screen) -> str:
     return str(screen.deviceDescription()["NSScreenNumber"])
@@ -62,6 +69,14 @@ class MacOSBackend(WallpaperBackend):
             if _display_id(screen) == monitor:
                 return screen
         return None
+
+    def is_locked(self) -> bool:
+        """Check if the session is locked."""
+        if _HAS_QUARTZ:
+            d = Quartz.CGSessionCopyCurrentDictionary()
+            # CGSSessionScreenIsLocked is 1 if locked, usually absent if not
+            return bool(d and d.get("CGSSessionScreenIsLocked"))
+        return False
 
     def notify(self, title: str, message: str, timeout_ms: int = 2000) -> None:
         safe_msg = message.replace("\\", "\\\\").replace('"', '\\"')

@@ -78,6 +78,11 @@ def ensure_ready() -> None:
     _backend.ensure_ready()
 
 
+def is_locked() -> bool:
+    """Check if the session is locked."""
+    return _backend.is_locked()
+
+
 __all__ = [
     "ensure_ready",
     "FileLock",
@@ -85,6 +90,7 @@ __all__ = [
     "find_monitor",
     "get_context",
     "get_focused_monitor",
+    "is_locked",
     "notify",
     "query_current",
     "set_wallpaper",
