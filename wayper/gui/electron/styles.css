@@ -227,11 +227,32 @@ aside {
   color: var(--subtext0);
   font-size: 14px;
   width: 100%;
+  display: flex; /* Ensure flex for badge alignment */
+  align-items: center; /* Vertically center */
 }
 
 .nav-item .icon {
   margin-right: 8px;
   font-size: 16px;
+}
+
+.nav-item .badge {
+  margin-left: auto; /* Push to right */
+  background-color: var(--surface1);
+  color: var(--text);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  min-width: 20px;
+  text-align: center;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.nav-item.active .badge {
+  background-color: var(--blue);
+  color: var(--base);
+  opacity: 1;
 }
 
 .nav-item:hover {

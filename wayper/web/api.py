@@ -42,6 +42,8 @@ config = load_config()
 class StatusResponse(BaseModel):
     running: bool
     pid: int | None = None
+    pool_count: int = 0
+    favorites_count: int = 0
 
 
 class ImageItem(BaseModel):
@@ -87,7 +89,7 @@ class ConfigResponse(BaseModel):
 def get_config_route():
     return {
         "download_dir": str(config.download_dir),
-        "interval_min": config.interval_min,
+        "interval_min": config.interval // 60,
         "mode": str(read_mode(config) or "pool"),
         "pool_target": config.pool_target,
         "quota_mb": config.quota_mb,
@@ -105,7 +107,7 @@ def get_config_route():
 def update_config_route(updates: dict = Body(...)):
     # Update root config
     if "interval_min" in updates:
-        config.interval_min = updates["interval_min"]
+        config.interval = updates["interval_min"] * 60
         # Convert min to sec for internal storage if needed,
         # but config.py stores interval in seconds?
         # Let's check config.py: interval: int = 300 (seconds)
@@ -192,8 +194,19 @@ def control_action(action: str, monitor: str | None = None):
 
 @app.get("/api/status", response_model=StatusResponse)
 def get_status():
+    from wayper.pool import count_images
+
     running, pid = is_daemon_running(config)
-    return StatusResponse(running=running, pid=pid)
+    mode = read_mode(config)
+
+    # Calculate counts for current mode across all orientations
+    pool_c = 0
+    fav_c = 0
+    for orient in ["landscape", "portrait"]:
+        pool_c += count_images(pool_dir(config, mode, orient))
+        fav_c += count_images(favorites_dir(config, mode, orient))
+
+    return StatusResponse(running=running, pid=pid, pool_count=pool_c, favorites_count=fav_c)
 
 
 @app.get("/api/monitors", response_model=list[MonitorInfo])

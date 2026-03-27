@@ -43,6 +43,8 @@ const els = {
     daemonDot: document.getElementById('daemon-dot'),
     daemonStatus: document.getElementById('daemon-status'),
     diskUsage: document.getElementById('disk-usage'),
+    countPool: document.getElementById('count-pool'),
+    countFavorites: document.getElementById('count-favorites'),
 };
 
 // Init
@@ -108,6 +110,12 @@ function handleGlobalKeydown(e) {
             break;
         case 'd':
             controlAction('dislike');
+            break;
+        case '1':
+            setViewMode('pool');
+            break;
+        case '2':
+            setViewMode('favorites');
             break;
         case ' ':
             e.preventDefault();
@@ -371,6 +379,14 @@ function updateUI() {
 
 function updateStatusUI() {
     const running = appState.status.running;
+
+    // Update counts
+    if (appState.status.pool_count !== undefined) {
+        els.countPool.innerText = appState.status.pool_count;
+    }
+    if (appState.status.favorites_count !== undefined) {
+        els.countFavorites.innerText = appState.status.favorites_count;
+    }
 
     if (running) {
         els.daemonDot.classList.add('running');
