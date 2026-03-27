@@ -4,27 +4,24 @@ import logging
 import signal
 import subprocess
 import sys
-from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Body
-from fastapi.staticfiles import StaticFiles
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from wayper.config import load_config, save_config, WayperConfig, NO_TRANSITION
+from wayper.backend import query_current, set_wallpaper
+from wayper.config import load_config, save_config
 from wayper.daemon import (
     is_daemon_running,
     signal_daemon,
 )
 from wayper.pool import (
+    favorites_dir,
     list_images,
     pool_dir,
-    favorites_dir,
-    add_to_blacklist,
-    remove_from_blacklist,
 )
 from wayper.state import read_mode, write_mode
-from wayper.backend import set_wallpaper, query_current
 
 log = logging.getLogger("wayper.api")
 
@@ -40,28 +37,34 @@ app.add_middleware(
 
 config = load_config()
 
+
 # Define Pydantic models for API responses
 class StatusResponse(BaseModel):
     running: bool
     pid: int | None = None
+
 
 class ImageItem(BaseModel):
     path: str
     name: str
     is_favorite: bool = False
 
+
 class MonitorInfo(BaseModel):
     name: str
     orientation: str
     current_image: str | None = None
 
+
 class SetWallpaperRequest(BaseModel):
     monitor: str
     image_path: str
 
+
 class ActionRequest(BaseModel):
     image_path: str
     monitor: str | None = None
+
 
 class WallhavenConfigModel(BaseModel):
     categories: str
@@ -70,6 +73,7 @@ class WallhavenConfigModel(BaseModel):
     ai_art_filter: int
     exclude_tags: list[str]
 
+
 class ConfigResponse(BaseModel):
     download_dir: str
     interval_min: int
@@ -77,6 +81,7 @@ class ConfigResponse(BaseModel):
     pool_target: int
     quota_mb: int
     wallhaven: WallhavenConfigModel
+
 
 @app.get("/api/config", response_model=ConfigResponse)
 def get_config_route():
@@ -91,9 +96,10 @@ def get_config_route():
             "top_range": config.wallhaven.top_range,
             "sorting": config.wallhaven.sorting,
             "ai_art_filter": config.wallhaven.ai_art_filter,
-            "exclude_tags": config.wallhaven.exclude_tags
-        }
+            "exclude_tags": config.wallhaven.exclude_tags,
+        },
     }
+
 
 @app.patch("/api/config")
 def update_config_route(updates: dict = Body(...)):
@@ -106,11 +112,14 @@ def update_config_route(updates: dict = Body(...)):
         # But api returns interval_min? No, config.interval_min property exists?
         # Let's check config.py again.
         # config.py has `interval` (seconds). It does NOT have `interval_min` property.
-        # Ah, the original code had `interval_min` in the response dict: `"interval_min": config.interval_min`.
-        # Wait, I might have hallucinated `interval_min` property on config object if it's not in the file I read.
+        # Ah, the original code had `interval_min` in the response dict:
+        # `"interval_min": config.interval_min`.
+        # Wait, I might have hallucinated `interval_min` property on config object if
+        # it's not in the file I read.
         # The Read output of config.py showed `interval: int = 300`.
         # It did NOT show a property `interval_min`.
-        # So `config.interval_min` in the previous `api.py` (line 70) would have failed if it doesn't exist.
+        # So `config.interval_min` in the previous `api.py` (line 70) would have failed
+        # if it doesn't exist.
         # Let's assume it was a mistake in my previous Write or I missed it.
         # Actually I wrote `config.interval_min` in the previous turn. It might have been broken!
         # Let's fix it to use `interval` (seconds) or calculate min.
@@ -148,8 +157,10 @@ def update_config_route(updates: dict = Body(...)):
 
     return {"status": "ok"}
 
+
 class SetModeRequest(BaseModel):
     mode: str
+
 
 @app.post("/api/mode")
 def set_mode_route(req: SetModeRequest):
@@ -159,13 +170,13 @@ def set_mode_route(req: SetModeRequest):
     signal_daemon(config, signal.SIGUSR2)
     return {"status": "ok", "mode": req.mode}
 
+
 @app.get("/api/disk")
 def get_disk_usage():
     from wayper.pool import disk_usage_mb
-    return {
-        "used_mb": round(disk_usage_mb(config), 1),
-        "quota_mb": config.quota_mb
-    }
+
+    return {"used_mb": round(disk_usage_mb(config), 1), "quota_mb": config.quota_mb}
+
 
 @app.post("/api/control/{action}")
 def control_action(action: str, monitor: str | None = None):
@@ -178,10 +189,12 @@ def control_action(action: str, monitor: str | None = None):
     subprocess.run(cmd, check=False)
     return {"status": "ok"}
 
+
 @app.get("/api/status", response_model=StatusResponse)
 def get_status():
     running, pid = is_daemon_running(config)
     return StatusResponse(running=running, pid=pid)
+
 
 @app.get("/api/monitors", response_model=list[MonitorInfo])
 def get_monitors():
@@ -195,12 +208,9 @@ def get_monitors():
                 img_rel = str(img_path.relative_to(config.download_dir))
             except ValueError:
                 pass
-        monitors.append(MonitorInfo(
-            name=m.name,
-            orientation=m.orientation,
-            current_image=img_rel
-        ))
+        monitors.append(MonitorInfo(name=m.name, orientation=m.orientation, current_image=img_rel))
     return monitors
+
 
 @app.get("/api/images", response_model=list[ImageItem])
 def get_images(mode: str = "pool", purity: str = "sfw", orient: str = "landscape"):
@@ -215,15 +225,13 @@ def get_images(mode: str = "pool", purity: str = "sfw", orient: str = "landscape
     images = list_images(path)
     images.sort(key=lambda p: p.stat().st_mtime, reverse=True)
 
-    is_fav = (mode == "favorites")
+    is_fav = mode == "favorites"
 
     return [
-        ImageItem(
-            path=str(p.relative_to(config.download_dir)),
-            name=p.name,
-            is_favorite=is_fav
-        ) for p in images
+        ImageItem(path=str(p.relative_to(config.download_dir)), name=p.name, is_favorite=is_fav)
+        for p in images
     ]
+
 
 @app.post("/api/wallpaper/set")
 def set_wallpaper_route(req: SetWallpaperRequest):
@@ -237,6 +245,7 @@ def set_wallpaper_route(req: SetWallpaperRequest):
 
     set_wallpaper(req.monitor, img_full, config.transition)
     return {"status": "ok"}
+
 
 @app.post("/api/image/favorite")
 def favorite_image(req: ActionRequest):
@@ -253,7 +262,7 @@ def favorite_image(req: ActionRequest):
             rel_path = img_full.relative_to(config.download_dir / "favorites")
             dest = config.download_dir / rel_path
         except ValueError:
-             raise HTTPException(400, "Invalid file structure for favorite")
+            raise HTTPException(400, "Invalid file structure for favorite")
     else:
         # Move to favorites
         rel_path = img_full.relative_to(config.download_dir)
@@ -264,6 +273,7 @@ def favorite_image(req: ActionRequest):
 
     return {"status": "ok", "new_path": str(dest.relative_to(config.download_dir))}
 
+
 @app.post("/api/daemon/{action}")
 def daemon_action(action: str):
     if action not in ["start", "stop"]:
@@ -273,10 +283,26 @@ def daemon_action(action: str):
     subprocess.Popen([sys.executable, "-m", "wayper.cli", "daemon", action])
     return {"status": "ok"}
 
+
 # Mount images directory
 app.mount("/images", StaticFiles(directory=config.download_dir), name="images")
 
+
 def run():
     import uvicorn
+
     # Use 0.0.0.0 to allow access, though 127.0.0.1 is safer for local
+    uvicorn.run(app, host="127.0.0.1", port=8080, log_level="info")
+
+
+if __name__ == "__main__":
+    # When running as a PyInstaller bundle, we need to run uvicorn programmatically
+    # because the 'uvicorn' command line tool isn't available.
+
+    import uvicorn
+
+    # Simple port finding or just stick to 8080 for now
+    # Ideally pass port 0 to let OS pick, print it, and Electron reads it.
+    # For now, stick to 8080 to match frontend hardcoding.
+    # Using 127.0.0.1 explicitly.
     uvicorn.run(app, host="127.0.0.1", port=8080, log_level="info")
