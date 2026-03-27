@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import objc
 from AppKit import (
+    NSAppearance,
     NSApplication,
     NSApplicationActivationPolicyRegular,
     NSEventModifierFlagCommand,
@@ -50,6 +51,7 @@ class WayperApp:
 
         app = NSApplication.sharedApplication()
         app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+        app.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
 
         controller = MainWindowController.alloc().initWithConfig_(config)
 
@@ -104,6 +106,11 @@ def _build_menu(app: NSApplication, controller: MainWindowController) -> None:
         "Quick Actions", "showActions:", "2"
     )
     actions_item.setTarget_(controller)
+
+    wallhaven_item = view_menu.addItemWithTitle_action_keyEquivalent_(
+        "Wallhaven", "showWallhaven:", "3"
+    )
+    wallhaven_item.setTarget_(controller)
 
     view_mi = NSMenuItem.alloc().init()
     view_mi.setSubmenu_(view_menu)

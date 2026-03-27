@@ -8,6 +8,7 @@ from AppKit import (
     NSBezelStyleAccessoryBarAction,
     NSButton,
     NSEventTypeKeyDown,
+    NSImage,
     NSMakeRect,
     NSMakeSize,
     NSSegmentedControl,
@@ -28,12 +29,14 @@ from Foundation import NSObject
 from ...state import read_mode
 from .actions_view import ActionsPanelController
 from .browse_view import CATEGORIES, LABELS, BrowsePanelController
-from .colors import C_BASE
+from .colors import C_BASE, C_RED, C_SUBTEXT, C_TEXT
 from .daemon_control import DaemonControlBar
+from .settings_window import SettingsWindowController
 
 CATEGORY_ID = "category"
 VIEW_SELECTOR_ID = "viewSelector"
 MODE_TOGGLE_ID = "modeToggle"
+SETTINGS_ID = "settings"
 FLEXIBLE_SPACE_ID = "NSToolbarFlexibleSpaceItem"
 TOOLBAR_ITEMS = [
     CATEGORY_ID,
@@ -41,7 +44,12 @@ TOOLBAR_ITEMS = [
     VIEW_SELECTOR_ID,
     FLEXIBLE_SPACE_ID,
     MODE_TOGGLE_ID,
+    SETTINGS_ID,
 ]
+
+
+def _mode_tint(mode: str):
+    return C_RED if mode == "nsfw" else C_TEXT
 
 
 class MainWindow(NSWindow):
@@ -64,12 +72,13 @@ class MainWindowController(NSObject):
         if self is None:
             return None
         self.config = config
-        self._active_tab = 0  # 0=Browse, 1=Quick Actions
+        self._active_tab = 0  # 0=Browse, 1=Quick Actions, 2=Wallhaven
         self._mode = read_mode(config)
 
         self._browse = BrowsePanelController.alloc().initWithConfig_category_(config, "pool")
         self._actions = ActionsPanelController.alloc().initWithConfig_(config)
         self._daemon = DaemonControlBar.alloc().initWithConfig_(config)
+        self._wallhaven = None  # Lazy init
 
         self._build_window()
         self._show_tab(0)
@@ -96,8 +105,7 @@ class MainWindowController(NSObject):
         self.window.setTitlebarAppearsTransparent_(True)
         self.window.setTitleVisibility_(NSWindowTitleHidden)
         self.window.setCollectionBehavior_(
-            NSWindowCollectionBehaviorFullScreenPrimary
-            | NSWindowCollectionBehaviorManaged
+            NSWindowCollectionBehaviorFullScreenPrimary | NSWindowCollectionBehaviorManaged
         )
 
         # Toolbar
@@ -140,11 +148,19 @@ class MainWindowController(NSObject):
                     content.trailingAnchor(), -12
                 ),
                 footer.bottomAnchor().constraintEqualToAnchor_constant_(content.bottomAnchor(), -6),
-                footer.heightAnchor().constraintEqualToConstant_(32),
+                footer.heightAnchor().constraintGreaterThanOrEqualToConstant_(32),
             ]
         )
 
     # ── Tab switching ──
+
+    def _ensure_wallhaven_view(self):
+        """Lazy-init the Wallhaven panel."""
+        if self._wallhaven is not None:
+            return
+        from .wallhaven_view import WallhavenPanelController
+
+        self._wallhaven = WallhavenPanelController.alloc().initWithConfig_(self.config)
 
     def _show_tab(self, idx: int):
         self._active_tab = idx
@@ -160,7 +176,13 @@ class MainWindowController(NSObject):
         for sub in self._content_container.subviews():
             sub.removeFromSuperview()
 
-        view = self._browse.view if idx == 0 else self._actions.view
+        if idx == 0:
+            view = self._browse.view
+        elif idx == 1:
+            view = self._actions.view
+        else:
+            self._ensure_wallhaven_view()
+            view = self._wallhaven.view
         view.setTranslatesAutoresizingMaskIntoConstraints_(False)
         self._content_container.addSubview_(view)
         self._content_container.addConstraints_(
@@ -196,14 +218,22 @@ class MainWindowController(NSObject):
 
         if self._active_tab == 0:
             return self._browse.handleKeyDown_(event)
-        return self._actions.handleKeyDown_(event)
+        if self._active_tab == 1:
+            return self._actions.handleKeyDown_(event)
+        if self._active_tab == 2 and self._wallhaven:
+            return self._wallhaven.handleKeyDown_(event)
+        return False
 
     # ── Mode toggle ──
 
-    def _toggle_mode(self):
-        self._mode = "sfw" if self._mode == "nsfw" else "nsfw"
+    def _sync_mode_btn(self):
         if hasattr(self, "_mode_btn"):
             self._mode_btn.setTitle_("NSFW" if self._mode == "nsfw" else "SFW")
+            self._mode_btn.setContentTintColor_(_mode_tint(self._mode))
+
+    def _toggle_mode(self):
+        self._mode = "sfw" if self._mode == "nsfw" else "nsfw"
+        self._sync_mode_btn()
         self._browse.setMode_(self._mode)
         self._daemon.forceRefresh()
 
@@ -220,6 +250,12 @@ class MainWindowController(NSObject):
         self._show_tab(1)
         if hasattr(self, "_tab_seg"):
             self._tab_seg.setSelectedSegment_(1)
+
+    @objc.typedSelector(b"v@:@")
+    def showWallhaven_(self, sender):
+        self._show_tab(2)
+        if hasattr(self, "_tab_seg"):
+            self._tab_seg.setSelectedSegment_(2)
 
     @objc.typedSelector(b"v@:@")
     def menuNext_(self, sender):
@@ -258,7 +294,7 @@ class MainWindowController(NSObject):
 
         elif identifier == VIEW_SELECTOR_ID:
             seg = NSSegmentedControl.segmentedControlWithLabels_trackingMode_target_action_(
-                ["Browse", "Quick Actions"],
+                ["Browse", "Quick Actions", "Wallhaven"],
                 0,
                 self,
                 "tabChanged:",
@@ -275,9 +311,23 @@ class MainWindowController(NSObject):
                 "modeToggled:",
             )
             btn.setBezelStyle_(NSBezelStyleAccessoryBarAction)
+            btn.setContentTintColor_(_mode_tint(self._mode))
             item.setView_(btn)
             item.setLabel_("Mode")
             self._mode_btn = btn
+
+        elif identifier == SETTINGS_ID:
+            btn = NSButton.buttonWithImage_target_action_(
+                NSImage.imageWithSystemSymbolName_accessibilityDescription_(
+                    "gearshape", "Settings"
+                ),
+                self,
+                "openSettings:",
+            )
+            btn.setBezelStyle_(NSBezelStyleAccessoryBarAction)
+            btn.setContentTintColor_(C_SUBTEXT)
+            item.setView_(btn)
+            item.setLabel_("Settings")
 
         return item
 
@@ -294,17 +344,21 @@ class MainWindowController(NSObject):
     def modeToggled_(self, sender):
         self._toggle_mode()
 
+    @objc.typedSelector(b"v@:@")
+    def openSettings_(self, sender):
+        SettingsWindowController.sharedWithConfig_onSave_(
+            self.config, self._on_settings_saved
+        ).showWindow()
+
     # ── Settings ──
 
     def _on_settings_saved(self):
         """Reload views after settings change."""
         self._mode = read_mode(self.config)
-        if hasattr(self, "_mode_btn"):
-            self._mode_btn.setTitle_("NSFW" if self._mode == "nsfw" else "SFW")
+        self._sync_mode_btn()
         self._browse.setMode_(self._mode)
         self._browse.setCategory_(self._browse.category)
-        self._actions._current_path = None
-        self._actions._refresh()
+        self._actions.forceRefresh()
         self._daemon.forceRefresh()
 
     # ── Cleanup ──
@@ -312,3 +366,6 @@ class MainWindowController(NSObject):
     def cleanup(self):
         self._actions.stopPolling()
         self._daemon.stopPolling()
+        self._browse.shutdown()
+        if self._wallhaven:
+            self._wallhaven.shutdown()
