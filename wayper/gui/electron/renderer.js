@@ -13,11 +13,40 @@ let appState = {
 
     // Pagination
     batchSize: 50,
-    currentBatchIndex: 0
+    currentBatchIndex: 0,
+
+    // Layout
+    gridColumns: 1
 };
 
 let observer = null;
 let sentinel = null;
+
+// Global Loader
+const loader = document.createElement('div');
+loader.className = 'global-loader';
+loader.innerHTML = '<div class="spinner"></div>';
+document.body.appendChild(loader);
+
+const loaderStyle = document.createElement('style');
+loaderStyle.textContent = `
+.global-loader {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
+    z-index: 9999; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+}
+.global-loader.visible { opacity: 1; pointer-events: auto; }
+.spinner {
+    width: 40px; height: 40px; border: 4px solid var(--surface0);
+    border-top-color: var(--blue); border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+`;
+document.head.appendChild(loaderStyle);
+
+function showLoader() { loader.classList.add('visible'); }
+function hideLoader() { loader.classList.remove('visible'); }
 
 // DOM Elements
 const els = {
@@ -61,13 +90,27 @@ const els = {
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
+    // Platform detection for UI adjustments
+    if (typeof process !== 'undefined' && process.platform === 'darwin') {
+        document.body.classList.add('is-macos');
+    }
+
     setupEventListeners();
     setupInfiniteScroll();
+
+    // Resize listener for grid layout
+    window.addEventListener('resize', debounce(() => {
+        updateGridMetrics();
+    }, 200));
+
     await fetchConfig(); // to get initial mode & settings
     await fetchMonitors();
     await fetchStatus();
     await fetchDiskUsage();
     await refreshImages();
+
+    // Initial metrics update after images loaded (or attempted)
+    setTimeout(updateGridMetrics, 500);
 
     // Poll status
     setInterval(fetchStatus, 3000);
@@ -137,6 +180,10 @@ function handleGlobalKeydown(e) {
         case 'z':
             undoDislike();
             break;
+        case 'm':
+            const nextMode = appState.purity === 'sfw' ? 'nsfw' : 'sfw';
+            setPurity(nextMode);
+            break;
         case '1':
             setViewMode('pool');
             break;
@@ -180,12 +227,46 @@ function handleGlobalKeydown(e) {
     }
 }
 
+// Debounce helper
+function debounce(func, wait) {
+    let timeout;
+    return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), wait);
+    };
+}
+
+function updateGridMetrics() {
+    const cards = document.getElementsByClassName('wallpaper-card');
+    if (cards.length < 2) {
+        // Fallback calculation if no cards to measure
+        const containerWidth = els.wallpaperGrid.clientWidth;
+        // minmax(260px, 1fr) + gap 24px (approx)
+        const cardWidth = 260 + 24;
+        appState.gridColumns = Math.max(1, Math.floor((containerWidth + 24) / cardWidth));
+        return;
+    }
+
+    const firstTop = cards[0].getBoundingClientRect().top;
+    for (let i = 1; i < cards.length; i++) {
+        if (cards[i].getBoundingClientRect().top > firstTop) {
+            appState.gridColumns = i;
+            return;
+        }
+    }
+    appState.gridColumns = cards.length; // All in one row
+}
+
 function navigateGrid(direction) {
-    const cards = Array.from(document.querySelectorAll('.wallpaper-card'));
+    const cards = document.getElementsByClassName('wallpaper-card'); // Live collection
     if (cards.length === 0) return;
 
     const focused = document.activeElement;
-    let index = cards.indexOf(focused);
+    // Check if focused element is actually a card
+    let index = -1;
+    if (focused && focused.classList.contains('wallpaper-card')) {
+        index = Array.prototype.indexOf.call(cards, focused);
+    }
 
     // If no card focused, start at 0
     if (index === -1) {
@@ -193,20 +274,9 @@ function navigateGrid(direction) {
         return;
     }
 
-    // Calculate columns by comparing top position of first two cards
-    let cols = 1;
-    if (cards.length > 1) {
-        const firstTop = cards[0].getBoundingClientRect().top;
-        for (let i = 1; i < cards.length; i++) {
-            if (cards[i].getBoundingClientRect().top > firstTop) {
-                // This card is on a new row, so the index is the number of columns
-                cols = i;
-                break;
-            }
-        }
-    }
-
+    const cols = appState.gridColumns || 1;
     let nextIndex = index;
+
     switch(direction) {
         case 'ArrowRight': nextIndex = index + 1; break;
         case 'ArrowLeft': nextIndex = index - 1; break;
@@ -216,7 +286,7 @@ function navigateGrid(direction) {
 
     if (nextIndex >= 0 && nextIndex < cards.length) {
         cards[nextIndex].focus();
-        cards[nextIndex].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        cards[nextIndex].scrollIntoView({ block: 'nearest' });
     }
 }
 
@@ -348,6 +418,8 @@ async function toggleDaemon() {
 async function setWallpaper(path) {
     if (!appState.selectedMonitor) return;
 
+    showLoader();
+
     // Optimistic UI update
     const card = document.querySelector(`[data-path="${path}"]`);
     if (card) {
@@ -371,6 +443,8 @@ async function setWallpaper(path) {
     } catch (e) {
         console.error("Set wallpaper failed", e);
         if (card) card.style.opacity = '1';
+    } finally {
+        hideLoader();
     }
 }
 
@@ -649,6 +723,7 @@ function renderImages() {
     }
 
     renderNextBatch();
+    setTimeout(updateGridMetrics, 100);
 }
 
 function renderNextBatch() {

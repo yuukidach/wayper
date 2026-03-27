@@ -149,10 +149,14 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-left: 80px;
+  padding-left: 20px;
   padding-right: 20px;
   -webkit-app-region: drag;
   z-index: 100;
+}
+
+body.is-macos header {
+  padding-left: 80px;
 }
 
 .brand {

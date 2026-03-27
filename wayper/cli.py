@@ -79,6 +79,13 @@ def start(ctx):
         click.echo(f"Daemon already running (PID {pid})")
         return
 
+    if config.pid_file.exists():
+        try:
+            config.pid_file.unlink()
+            click.echo("Removed stale PID file.")
+        except OSError as e:
+            click.echo(f"Warning: Could not remove stale PID file: {e}", err=True)
+
     # Spawn the bare 'daemon' command detached
     # We use Popen with start_new_session=True to detach fully
     if getattr(sys, "frozen", False):
