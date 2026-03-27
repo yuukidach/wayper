@@ -93,6 +93,23 @@ class LinuxBackend(WallpaperBackend):
                 current[monitor] = Path(img_path) if img_path else None
         return current
 
+    def is_locked(self) -> bool:
+        """Check if the session is locked."""
+        lockers = ["hyprlock", "swaylock", "gtklock", "waylock", "i3lock"]
+        for locker in lockers:
+            try:
+                res = subprocess.run(
+                    ["pgrep", "-x", locker],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                if res.returncode == 0:
+                    return True
+            except FileNotFoundError:
+                continue
+        return False
+
     def notify(self, title: str, message: str, timeout_ms: int = 2000) -> None:
         subprocess.Popen(
             ["notify-send", "-t", str(timeout_ms), title, message],

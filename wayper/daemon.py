@@ -10,7 +10,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .backend import ensure_ready, set_wallpaper
+from .backend import ensure_ready, is_locked, set_wallpaper
 from .config import WayperConfig
 from .history import push_many
 from .pool import (
@@ -159,9 +159,13 @@ async def run_daemon(config: WayperConfig) -> None:
 
             mode = read_mode(config)
 
-            # Set wallpapers immediately
-            set_all_wallpapers(config, mode)
-            (config.download_dir / ".last_rotation").write_text(str(time.time()))
+            # Check lock state
+            if config.pause_on_lock and is_locked():
+                log.info("Session locked, skipping rotation")
+            else:
+                # Set wallpapers immediately
+                set_all_wallpapers(config, mode)
+                (config.download_dir / ".last_rotation").write_text(str(time.time()))
 
             # Download if needed
             if should_download(config, mode):
