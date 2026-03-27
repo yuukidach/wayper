@@ -165,9 +165,9 @@ async def run_daemon(config: WayperConfig) -> None:
 
             # Download if needed
             if should_download(config, mode):
+                orientations = {m.orientation for m in config.monitors}
                 await asyncio.gather(
-                    client.download_for("landscape", mode),
-                    client.download_for("portrait", mode),
+                    *(client.download_for(o, mode) for o in orientations)
                 )
 
             enforce_quota(config)
