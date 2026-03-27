@@ -1,0 +1,15 @@
+{
+  "name": "wayper-electron",
+  "version": "1.0.0",
+  "description": "Wayper Electron GUI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "electron": "^29.0.0"
+  }
+}
