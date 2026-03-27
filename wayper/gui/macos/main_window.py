@@ -15,8 +15,9 @@ from AppKit import (
     NSToolbarItem,
     NSView,
     NSWindow,
+    NSWindowCollectionBehaviorFullScreenPrimary,
+    NSWindowCollectionBehaviorManaged,
     NSWindowStyleMaskClosable,
-    NSWindowStyleMaskFullSizeContentView,
     NSWindowStyleMaskMiniaturizable,
     NSWindowStyleMaskResizable,
     NSWindowStyleMaskTitled,
@@ -81,7 +82,6 @@ class MainWindowController(NSObject):
             | NSWindowStyleMaskClosable
             | NSWindowStyleMaskMiniaturizable
             | NSWindowStyleMaskResizable
-            | NSWindowStyleMaskFullSizeContentView
         )
         self.window = MainWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(150, 150, 1200, 750),
@@ -92,9 +92,13 @@ class MainWindowController(NSObject):
         self.window._controller = self
         self.window.setTitle_("Wayper")
         self.window.setBackgroundColor_(C_BASE)
-        self.window.setMinSize_(NSMakeSize(900, 550))
+        self.window.setMinSize_(NSMakeSize(600, 400))
         self.window.setTitlebarAppearsTransparent_(True)
         self.window.setTitleVisibility_(NSWindowTitleHidden)
+        self.window.setCollectionBehavior_(
+            NSWindowCollectionBehaviorFullScreenPrimary
+            | NSWindowCollectionBehaviorManaged
+        )
 
         # Toolbar
         toolbar = NSToolbar.alloc().initWithIdentifier_("WayperToolbar")
