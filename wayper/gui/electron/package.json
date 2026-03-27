@@ -13,7 +13,7 @@
     "extraResources": [
       {
         "from": "../../../dist/wayper-backend",
-        "to": "."
+        "to": "wayper-backend"
       }
     ],
     "mac": {

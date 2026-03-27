@@ -8,20 +8,25 @@ import sys
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel
 
-from wayper.backend import query_current, set_wallpaper
+from wayper.backend import FileLock, query_current, set_wallpaper
 from wayper.config import load_config, save_config
 from wayper.daemon import (
     is_daemon_running,
     signal_daemon,
 )
 from wayper.pool import (
+    add_to_blacklist,
     favorites_dir,
+    list_blacklist,
     list_images,
+    pick_random,
     pool_dir,
+    remove_from_blacklist,
 )
-from wayper.state import read_mode, write_mode
+from wayper.state import push_undo, read_mode, write_mode
 
 log = logging.getLogger("wayper.api")
 
@@ -44,6 +49,8 @@ class StatusResponse(BaseModel):
     pid: int | None = None
     pool_count: int = 0
     favorites_count: int = 0
+    blocklist_count: int = 0
+    mode: str = "sfw"
 
 
 class ImageItem(BaseModel):
@@ -182,19 +189,23 @@ def get_disk_usage():
 
 @app.post("/api/control/{action}")
 def control_action(action: str, monitor: str | None = None):
-    # Action: next, prev, dislike, fav, unfav
-    if action not in ["next", "prev", "dislike", "fav", "unfav"]:
+    # Action: next, prev, dislike, fav, unfav, undislike
+    if action not in ["next", "prev", "dislike", "fav", "unfav", "undislike"]:
         raise HTTPException(400, "Invalid action")
 
     # Use CLI logic via subprocess to ensure consistency
-    cmd = [sys.executable, "-m", "wayper.cli", action]
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, action]
+    else:
+        cmd = [sys.executable, "-m", "wayper.cli", action]
+
     subprocess.run(cmd, check=False)
     return {"status": "ok"}
 
 
 @app.get("/api/status", response_model=StatusResponse)
 def get_status():
-    from wayper.pool import count_images
+    from wayper.pool import count_images, list_blacklist
 
     running, pid = is_daemon_running(config)
     mode = read_mode(config)
@@ -206,7 +217,16 @@ def get_status():
         pool_c += count_images(pool_dir(config, mode, orient))
         fav_c += count_images(favorites_dir(config, mode, orient))
 
-    return StatusResponse(running=running, pid=pid, pool_count=pool_c, favorites_count=fav_c)
+    blocklist_c = len(list_blacklist(config))
+
+    return StatusResponse(
+        running=running,
+        pid=pid,
+        pool_count=pool_c,
+        favorites_count=fav_c,
+        blocklist_count=blocklist_c,
+        mode=mode or "pool",
+    )
 
 
 @app.get("/api/monitors", response_model=list[MonitorInfo])
@@ -227,6 +247,30 @@ def get_monitors():
 
 @app.get("/api/images", response_model=list[ImageItem])
 def get_images(mode: str = "pool", purity: str = "sfw", orient: str = "landscape"):
+    if mode == "trash":
+        # Return blacklisted images that exist in trash
+        # We ignore 'orient' because trash is not separated by orientation
+        trash_path = config.trash_dir / purity
+        if not trash_path.exists():
+            return []
+
+        # Get blacklist sorted by time
+        entries = list_blacklist(config)
+        images = []
+        for _, filename in entries:
+            # Check if file exists in trash/purity
+            f = trash_path / filename
+            if f.exists():
+                images.append(f)
+
+        # Also include any files in trash not in blacklist (orphans)?
+        # For now, just stick to blacklist for correct ordering.
+
+        return [
+            ImageItem(path=str(p.relative_to(config.download_dir)), name=p.name, is_favorite=False)
+            for p in images
+        ]
+
     if mode == "pool":
         path = pool_dir(config, purity, orient)
     else:
@@ -244,6 +288,44 @@ def get_images(mode: str = "pool", purity: str = "sfw", orient: str = "landscape
         ImageItem(path=str(p.relative_to(config.download_dir)), name=p.name, is_favorite=is_fav)
         for p in images
     ]
+
+
+@app.post("/api/image/restore")
+def restore_image(req: ActionRequest):
+    img_full = config.download_dir / req.image_path
+    if not img_full.exists():
+        raise HTTPException(404, "Image not found")
+
+    # Verify it is in trash
+    # Path could be .trash/sfw/image.jpg or .trash/image.jpg
+    if ".trash" not in img_full.parts:
+        raise HTTPException(400, "Image is not in trash")
+
+    # Remove from blacklist
+    remove_from_blacklist(config, img_full.name)
+
+    # Determine purity from path
+    purity = "sfw"
+    if "nsfw" in img_full.parts:
+        purity = "nsfw"
+
+    # Determine orientation from image dimensions
+    try:
+        with Image.open(img_full) as img:
+            width, height = img.size
+            orientation = "landscape" if width >= height else "portrait"
+    except Exception:
+        # Fallback if image is broken
+        orientation = "landscape"
+
+    # Move to pool
+    dest_dir = pool_dir(config, purity, orientation)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / img_full.name
+
+    img_full.rename(dest)
+
+    return {"status": "ok", "new_path": str(dest.relative_to(config.download_dir))}
 
 
 @app.post("/api/wallpaper/set")
@@ -287,13 +369,50 @@ def favorite_image(req: ActionRequest):
     return {"status": "ok", "new_path": str(dest.relative_to(config.download_dir))}
 
 
+@app.post("/api/image/dislike")
+def dislike_image_route(req: ActionRequest):
+    img_full = config.download_dir / req.image_path
+    if not img_full.exists():
+        raise HTTPException(404, "Image not found")
+
+    if "favorites" in req.image_path:
+        raise HTTPException(400, "Can't dislike a favorite")
+
+    # Check if currently set
+    try:
+        current_wallpapers = query_current()
+    except Exception:
+        current_wallpapers = {}
+
+    with FileLock(blocking=False):
+        # If it's the current wallpaper on any monitor, switch it first
+        mode = read_mode(config)
+        for mon in config.monitors:
+            current_path = current_wallpapers.get(mon.name)
+            if current_path and current_path.resolve() == img_full.resolve():
+                next_img = pick_random(config, mode, mon.orientation)
+                if next_img:
+                    set_wallpaper(mon.name, next_img, config.transition)
+
+        # Blacklist & Trash
+        add_to_blacklist(config, img_full.name)
+        push_undo(config, img_full.name, img_full.parent)
+
+    return {"status": "ok"}
+
+
 @app.post("/api/daemon/{action}")
 def daemon_action(action: str):
     if action not in ["start", "stop"]:
         raise HTTPException(status_code=400, detail="Invalid action")
 
     # Run CLI command
-    subprocess.Popen([sys.executable, "-m", "wayper.cli", "daemon", action])
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "daemon", action]
+    else:
+        cmd = [sys.executable, "-m", "wayper.cli", "daemon", action]
+
+    subprocess.Popen(cmd)
     return {"status": "ok"}
 
 

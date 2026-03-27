@@ -2,6 +2,7 @@ const { app, BrowserWindow } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const http = require('http')
+const fs = require('fs')
 
 let backendProcess = null
 let mainWindow = null
@@ -10,14 +11,28 @@ let mainWindow = null
 const BACKEND_BINARY = process.platform === 'win32' ? 'wayper-backend.exe' : 'wayper-backend'
 
 function getBackendPath() {
-  if (app.isPackaged) {
-    // In production, binary is in resources/extraResources
-    // electron-builder puts extraResources in resources/ (macOS) or root (Linux) sometimes?
-    // Standard path: process.resourcesPath
-    return path.join(process.resourcesPath, BACKEND_BINARY)
+  console.log('isPackaged:', app.isPackaged)
+  console.log('defaultApp:', process.defaultApp)
+  console.log('resourcesPath:', process.resourcesPath)
+
+  if (process.env.WAYPER_DEV) {
+    return null
+  }
+
+  // If defaultApp is true, we are running via electron executable (dev mode)
+  // If isPackaged is true AND defaultApp is undefined/false, we are packaged
+  const isDev = process.defaultApp || /node_modules[\\/]electron[\\/]/.test(process.execPath)
+
+  if (!isDev && app.isPackaged) {
+    // In production, binary is in resources/wayper-backend/wayper-backend
+    return path.join(process.resourcesPath, 'wayper-backend', BACKEND_BINARY)
   } else {
-    // In dev, we assume separate launch or manual launch.
-    // Return null to indicate "don't spawn"
+    // In dev, try to find locally built binary in onedir dist
+    const localBuild = path.join(__dirname, '../../../dist/wayper-backend', BACKEND_BINARY)
+    console.log('Checking local build:', localBuild)
+    if (fs.existsSync(localBuild)) {
+      return localBuild
+    }
     return null
   }
 }
@@ -59,23 +74,40 @@ function createWindow () {
     titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      webSecurity: false
+      webSecurity: false,
+      sandbox: false,
+      nodeIntegration: true, // Allow require in renderer for debugging if needed
+      contextIsolation: false // Simpler dev setup
     }
   })
 
   mainWindow.loadFile('index.html')
 }
 
-app.whenReady().then(() => {
-  startBackend()
-  createWindow()
+const gotTheLock = app.requestSingleInstanceLock()
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on('second-instance', (event, commandLine, workingDirectory) => {
+    // Someone tried to run a second instance, we should focus our window.
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
     }
   })
-})
+
+  app.whenReady().then(() => {
+    startBackend()
+    createWindow()
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow()
+      }
+    })
+  })
+}
 
 app.on('will-quit', () => {
   killBackend()
