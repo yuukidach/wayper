@@ -39,6 +39,9 @@ jobs:
           echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" >> /root/.ssh/known_hosts
           ssh-keygen -lf /root/.ssh/id_ed25519
 
+      - name: Test SSH connection
+        run: ssh -Tv aur@aur.archlinux.org help 2>&1 || true
+
       - name: Clone AUR repo and update
         run: |
           git clone ssh://aur@aur.archlinux.org/wayper.git aur
