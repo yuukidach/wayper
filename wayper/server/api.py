@@ -198,12 +198,20 @@ def get_disk_usage():
 
 
 @app.post("/api/control/{action}")
-def control_action(action: str):
+def control_action(action: str, monitor_name: str | None = Body(None, embed=True)):
     if action not in ["next", "prev", "dislike", "fav", "unfav", "undislike"]:
         raise HTTPException(400, "Invalid action")
 
     config = get_config()
-    monitor, mon_cfg, current_img = get_context(config)
+    if monitor_name:
+        from wayper.backend import find_monitor, query_current
+
+        mon_cfg = find_monitor(config, monitor_name)
+        monitor = monitor_name
+        current = query_current()
+        current_img = current.get(monitor)
+    else:
+        monitor, mon_cfg, current_img = get_context(config)
     if not mon_cfg:
         raise HTTPException(400, "No monitor config found")
 

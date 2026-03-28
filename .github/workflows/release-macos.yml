@@ -11,6 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -31,9 +32,23 @@ jobs:
           uv pip install -e .
           uv pip install pyinstaller
 
+      - name: Cache Electron binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+          key: electron-cache-macos-${{ hashFiles('wayper/electron/package-lock.json') }}
+          restore-keys: electron-cache-macos-
+
       - name: Install Electron dependencies
         working-directory: wayper/electron
-        run: npm install
+        run: |
+          for i in 1 2 3; do
+            npm ci --fetch-timeout=300000 && break
+            echo "Attempt $i failed, retrying in 15s..."
+            sleep 15
+          done
 
       - name: Build backend + Electron app
         working-directory: wayper/electron

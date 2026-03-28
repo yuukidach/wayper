@@ -455,7 +455,9 @@ async function saveSettings() {
 async function controlAction(action) {
     try {
         await fetch(`${API_URL}/api/control/${action}`, {
-            method: 'POST'
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ monitor_name: appState.selectedMonitor })
         });
         // Wait a bit then refresh monitors to show new current image
         setTimeout(fetchMonitors, 500);
