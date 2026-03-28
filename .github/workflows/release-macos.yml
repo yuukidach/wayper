@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -44,17 +45,25 @@ jobs:
       - name: Install Electron dependencies
         working-directory: wayper/electron
         run: |
-          for i in 1 2 3; do
+          for i in 1 2 3 4 5; do
             npm ci --fetch-timeout=300000 && break
             echo "Attempt $i failed, retrying in 15s..."
             sleep 15
           done
 
-      - name: Build backend + Electron app
+      - name: Verify node_modules
         working-directory: wayper/electron
-        run: npm run dist
+        run: ls -la node_modules/.bin/electron-builder || echo "NOT FOUND"
+
+      - name: Build Python backend
+        run: uv run pyinstaller --clean wayper.spec
+
+      - name: Build Electron app
+        working-directory: wayper/electron
+        run: ./node_modules/.bin/electron-builder
 
       - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: wayper/electron/dist/*.dmg
