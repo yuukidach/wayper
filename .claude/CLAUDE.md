@@ -46,24 +46,19 @@ wayper/
 │   ├── base.py      #   WallpaperBackend protocol
 │   ├── macos.py     #   macOS (AppKit/osascript)
 │   └── linux.py     #   Linux (awww/dbus)
-├── browse/          # Shared browse helpers
-│   └── _common.py   #   get_images, wallhaven_url, etc.
-├── web/             # Backend API for Electron GUI
+├── server/          # API server for Electron GUI
 │   ├── api.py       #   FastAPI server (status, images, config, etc.)
 │   ├── entry.py     #   PyInstaller entry point (CLI + API dual-mode)
 │   └── launcher.py  #   Starts API server + spawns Electron
-└── gui/
-    ├── __init__.py  #   Entry point → Electron launcher
-    └── electron/    #   Electron GUI (cross-platform)
-        ├── main.js, preload.js
-        ├── index.html, renderer.js, styles.css
-        └── package.json  # electron-builder config
+└── electron/        # Electron GUI (cross-platform)
+    ├── main.js, preload.js
+    ├── index.html, renderer.js, styles.css
+    └── package.json  # electron-builder config
 ```
 
 **Key patterns:**
 - Platform code is isolated in `backend/` — shared logic lives in top-level modules
-- CLI and GUI both share the same backend logic; `browse/_common.py` has shared browse helpers
-- GUI is Electron-based: Python FastAPI backend (`web/api.py`) + Electron frontend (`gui/electron/`)
+- GUI is Electron-based: Python FastAPI backend (`server/api.py`) + Electron frontend (`electron/`)
 - PyInstaller bundles the Python backend; electron-builder packages the full app
 - File-based state: TOML config, plain text blacklist/undo, JSON history
 - File locks (`flock`) prevent concurrent state modifications
