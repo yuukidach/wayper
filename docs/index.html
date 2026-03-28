@@ -260,8 +260,8 @@ footer .links a { color: var(--subtext); }
       <p>Like/dislike with undo. Favorites stay in rotation.</p>
     </div>
     <div class="feature">
-      <strong>Native GUI</strong>
-      <p>Browse, search, filter, multi-select, drag-and-drop, right-click menus. GTK4 on Linux, AppKit on macOS.</p>
+      <strong>Cross-platform GUI</strong>
+      <p>Browse, search, filter, and manage your collection. Works on Linux and macOS.</p>
     </div>
     <div class="feature">
       <strong>AI-native</strong>
@@ -278,23 +278,15 @@ footer .links a { color: var(--subtext); }
   <h2>Install</h2>
   <div class="tabs">
     <div class="tab active" onclick="switchTab(event, 'tab-aur')">Arch (AUR)</div>
-    <div class="tab" onclick="switchTab(event, 'tab-macos')">macOS</div>
     <div class="tab" onclick="switchTab(event, 'tab-source')">From source</div>
   </div>
   <div id="tab-aur" class="tab-content active">
     <pre><code>paru -S wayper     # or: yay -S wayper</code></pre>
   </div>
-  <div id="tab-macos" class="tab-content">
-    <div style="padding:18px 22px;background:var(--mantle);border:1px solid var(--surface0);border-radius:0 10px 10px 10px">
-      <p style="margin-bottom:12px">Download the DMG, open it, and drag <code>Wayper.app</code> to Applications.</p>
-      <a class="btn btn-primary" href="https://github.com/yuukidach/wayper/releases/latest/download/Wayper.dmg" style="font-size:.88em;padding:8px 20px">Download Wayper.dmg</a>
-    </div>
-  </div>
   <div id="tab-source" class="tab-content">
     <pre><code>git clone https://github.com/yuukidach/wayper.git
 cd wayper
-uv venv && uv pip install -e '.[macos]'   # macOS
-uv venv && uv pip install -e .            # Linux</code></pre>
+uv venv && uv pip install -e .</code></pre>
   </div>
 </section>
 
@@ -319,7 +311,7 @@ wayper-gui                  # GUI app</code></pre>
          style="width:100%;max-width:740px;border-radius:12px;border:1px solid var(--surface0);box-shadow:0 4px 24px rgba(0,0,0,.3)">
   </p>
   <p style="margin-bottom:16px;color:var(--subtext);font-size:.92em">
-    <code>wayper-gui</code> — browse your pool, favorites, and disliked wallpapers with search, filter, and sort. Multi-select with <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click, drag-and-drop import, right-click context menus, preview zoom (<kbd>Ctrl</kbd>+scroll). Includes a Wallhaven online search tab, quick actions panel, and live daemon control with quota monitoring. GTK4 on Linux, AppKit on macOS.
+    <code>wayper-gui</code> — browse your pool, favorites, and disliked wallpapers. Includes quick actions panel, daemon control with quota monitoring, and settings. Cross-platform.
   </p>
   <div class="kbd-grid">
     <div><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <span class="label">switch category</span></div>
@@ -355,8 +347,8 @@ wayper-gui                  # GUI app</code></pre>
   <ul style="list-style:none;padding:0;line-height:2.2">
     <li>Python 3.12+</li>
     <li><a href="https://wallhaven.cc/settings/account">Wallhaven API key</a></li>
-    <li><strong>Linux:</strong> <a href="https://codeberg.org/LGFae/awww">awww</a>, <a href="https://hyprland.org/">Hyprland</a>, GTK4 + PyGObject</li>
-    <li><strong>macOS:</strong> PyObjC (<code>pip install 'wayper[macos]'</code>)</li>
+    <li><strong>Linux:</strong> <a href="https://codeberg.org/LGFae/awww">awww</a>, <a href="https://hyprland.org/">Hyprland</a></li>
+    <li><strong>macOS:</strong> Python 3.12+, Node.js</li>
   </ul>
 </section>
 
