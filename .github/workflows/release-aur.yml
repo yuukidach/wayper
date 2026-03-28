@@ -34,7 +34,7 @@ jobs:
           mkdir -p /root/.ssh
           echo "${{ secrets.AUR_SSH_KEY }}" > /root/.ssh/id_ed25519
           chmod 600 /root/.ssh/id_ed25519
-          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIhd" >> /root/.ssh/known_hosts
+          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" >> /root/.ssh/known_hosts
 
       - name: Clone AUR repo and update
         run: |
