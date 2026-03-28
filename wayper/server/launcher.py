@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from wayper.web.api import run as run_api
+from wayper.server.api import run as run_api
 
 
 def _wait_for_api(url: str = "http://127.0.0.1:8080/api/status", timeout: float = 10) -> None:
@@ -32,7 +32,7 @@ def run_app():
     _wait_for_api()
 
     # Electron directory
-    electron_dir = Path(__file__).parent.parent / "gui" / "electron"
+    electron_dir = Path(__file__).parent.parent / "electron"
 
     # Check dependencies first
     if not (electron_dir / "node_modules").exists():

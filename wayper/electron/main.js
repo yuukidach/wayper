@@ -28,7 +28,7 @@ function getBackendPath() {
     return path.join(process.resourcesPath, 'wayper-backend', BACKEND_BINARY)
   } else {
     // In dev, try to find locally built binary in onedir dist
-    const localBuild = path.join(__dirname, '../../../dist/wayper-backend', BACKEND_BINARY)
+    const localBuild = path.join(__dirname, '../../dist/wayper-backend', BACKEND_BINARY)
     console.log('Checking local build:', localBuild)
     if (fs.existsSync(localBuild)) {
       return localBuild

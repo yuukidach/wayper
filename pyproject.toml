@@ -16,7 +16,7 @@ dependencies = [
 
 [project.scripts]
 wayper = "wayper.cli:cli"
-wayper-gui = "wayper.web.launcher:run_app"
+wayper-gui = "wayper.server.launcher:run_app"
 wayper-mcp = "wayper.mcp_server:main"
 
 [build-system]

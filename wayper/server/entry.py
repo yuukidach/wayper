@@ -2,7 +2,7 @@ import multiprocessing
 import sys
 
 from wayper.cli import cli
-from wayper.web.api import run as run_api
+from wayper.server.api import run as run_api
 
 
 def main():

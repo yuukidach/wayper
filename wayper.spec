@@ -7,7 +7,7 @@ block_cipher = None
 hidden_imports = collect_submodules('uvicorn') + collect_submodules('fastapi') + ['_socket', 'socket', 'logging.config']
 
 a = Analysis(
-    ['wayper/web/entry.py'],
+    ['wayper/server/entry.py'],
     pathex=[],
     binaries=[],
     datas=[],
