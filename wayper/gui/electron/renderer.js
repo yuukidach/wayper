@@ -16,6 +16,8 @@ let appState = {
     images: [],
     config: null, // Full config object
     view: 'grid', // grid, settings
+    blocklistTab: 'recoverable', // recoverable, blocked
+    blocklistData: null, // cached blocklist data
 
     // Pagination
     batchSize: 50,
@@ -66,8 +68,9 @@ const els = {
     btnFavorites: document.getElementById('btn-favorites'),
     btnBlocklist: document.getElementById('btn-blocklist'),
 
-    btnSfw: document.getElementById('btn-sfw'),
-    btnNsfw: document.getElementById('btn-nsfw'),
+    modeToggle: document.getElementById('mode-toggle'),
+    labelSfw: document.getElementById('label-sfw'),
+    labelNsfw: document.getElementById('label-nsfw'),
 
     btnDaemon: document.getElementById('btn-daemon'),
     btnSettings: document.getElementById('btn-settings'),
@@ -136,9 +139,10 @@ function setupEventListeners() {
     els.btnFavorites.onclick = () => setViewMode('favorites');
     els.btnBlocklist.onclick = () => setViewMode('trash');
 
-    // Sidebar: Mode
-    els.btnSfw.onclick = () => setPurity('sfw');
-    els.btnNsfw.onclick = () => setPurity('nsfw');
+    // Sidebar: Mode switch
+    els.modeToggle.onclick = () => togglePurity();
+    els.labelSfw.onclick = () => setPurity('sfw');
+    els.labelNsfw.onclick = () => setPurity('nsfw');
 
     // Sidebar: Daemon
     els.btnDaemon.onclick = toggleDaemon;
@@ -187,8 +191,7 @@ function handleGlobalKeydown(e) {
             undoDislike();
             break;
         case 'm':
-            const nextMode = appState.purity === 'sfw' ? 'nsfw' : 'sfw';
-            setPurity(nextMode);
+            togglePurity();
             break;
         case '1':
             setViewMode('pool');
@@ -291,8 +294,10 @@ function navigateGrid(direction) {
     }
 
     if (nextIndex >= 0 && nextIndex < cards.length) {
-        cards[nextIndex].focus();
-        cards[nextIndex].scrollIntoView({ block: 'nearest' });
+        cards[nextIndex].focus({ preventScroll: true });
+        requestAnimationFrame(() => {
+            cards[nextIndex].scrollIntoView({ block: 'nearest', behavior: 'auto' });
+        });
     }
 }
 
@@ -389,6 +394,10 @@ async function setViewMode(mode) {
     switchView('grid'); // Ensure we are in grid view
     updateUI();
     refreshImages();
+}
+
+function togglePurity() {
+    setPurity(appState.purity === 'sfw' ? 'nsfw' : 'sfw');
 }
 
 async function setPurity(purity) {
@@ -490,6 +499,34 @@ async function undoDislike() {
         refreshImages();
     } catch (e) {
         console.error("Undo failed", e);
+    }
+}
+
+async function fetchBlocklist() {
+    try {
+        const res = await fetch(`${API_URL}/api/blocklist`);
+        appState.blocklistData = await res.json();
+    } catch (e) {
+        console.error("Failed to fetch blocklist", e);
+        appState.blocklistData = { entries: [], total: 0, recoverable_count: 0 };
+    }
+}
+
+async function unblockImage(filename) {
+    try {
+        await fetch(`${API_URL}/api/blocklist/remove`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename })
+        });
+        // Remove from local state
+        if (appState.blocklistData) {
+            appState.blocklistData.entries = appState.blocklistData.entries.filter(e => e.filename !== filename);
+            appState.blocklistData.total--;
+        }
+        renderBlocklistView();
+    } catch (e) {
+        console.error("Unblock failed", e);
     }
 }
 
@@ -613,12 +650,25 @@ async function refreshImages() {
     const monitor = appState.monitors.find(m => m.name === appState.selectedMonitor);
     const orient = monitor ? monitor.orientation : 'landscape';
 
-    try {
-        const url = `${API_URL}/api/images?mode=${appState.mode}&purity=${appState.purity}&orient=${orient}`;
-        const res = await fetch(url);
-        appState.images = await res.json();
-        renderImages();
-    } catch (e) { console.error(e); }
+    if (appState.mode === 'trash') {
+        // Fetch both image grid and blocklist data
+        const url = `${API_URL}/api/images?mode=trash&purity=${appState.purity}&orient=${orient}`;
+        try {
+            const [imgRes] = await Promise.all([
+                fetch(url),
+                fetchBlocklist(),
+            ]);
+            appState.images = await imgRes.json();
+            renderImages();
+        } catch (e) { console.error(e); }
+    } else {
+        try {
+            const url = `${API_URL}/api/images?mode=${appState.mode}&purity=${appState.purity}&orient=${orient}`;
+            const res = await fetch(url);
+            appState.images = await res.json();
+            renderImages();
+        } catch (e) { console.error(e); }
+    }
 }
 
 // --- Rendering ---
@@ -637,13 +687,15 @@ function updateUI() {
         els.btnBlocklist.classList.add('active');
     }
 
-    // Purity
-    if (appState.purity === 'sfw') {
-        els.btnSfw.classList.add('primary');
-        els.btnNsfw.classList.remove('primary');
+    // Mode switch
+    if (appState.purity === 'nsfw') {
+        els.modeToggle.classList.add('on');
+        els.labelNsfw.classList.add('active');
+        els.labelSfw.classList.remove('active');
     } else {
-        els.btnSfw.classList.remove('primary');
-        els.btnNsfw.classList.add('primary');
+        els.modeToggle.classList.remove('on');
+        els.labelSfw.classList.add('active');
+        els.labelNsfw.classList.remove('active');
     }
 }
 
@@ -658,7 +710,9 @@ function updateStatusUI() {
         els.countFavorites.innerText = appState.status.favorites_count;
     }
     if (appState.status.blocklist_count !== undefined) {
-        els.countBlocklist.innerText = appState.status.blocklist_count;
+        const r = appState.status.recoverable_count || 0;
+        const t = appState.status.blocklist_count;
+        els.countBlocklist.innerText = r > 0 ? `${r}/${t}` : t;
     }
 
     if (running) {
@@ -703,13 +757,15 @@ function renderMonitors() {
         el.className = `monitor-item ${m.name === appState.selectedMonitor ? 'active' : ''}`;
 
         const isLandscape = m.orientation === 'landscape';
-        const icon = isLandscape ? '🖥️' : '📱';
+        const monitorIcon = isLandscape
+            ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>'
+            : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>';
         const key = index + 4;
         const shortcut = key <= 9 ? `<kbd>${key}</kbd>` : '';
 
         el.innerHTML = `
-            <h4>${icon} ${esc(m.name)} ${shortcut}</h4>
-            <p>${esc(m.orientation)} • ${m.current_image ? 'Has Wallpaper' : 'Empty'}</p>
+            <h4>${monitorIcon} ${esc(m.name)} ${shortcut}</h4>
+            <p>${esc(m.orientation)} • ${m.current_image ? 'Active' : 'Empty'}</p>
         `;
 
         el.onclick = () => {
@@ -726,11 +782,16 @@ function renderImages() {
     els.wallpaperGrid.innerHTML = '';
     appState.currentBatchIndex = 0;
 
+    if (appState.mode === 'trash') {
+        renderBlocklistView();
+        return;
+    }
+
     if (appState.images.length === 0) {
         els.wallpaperGrid.innerHTML = `
             <div class="empty-state">
-                <div class="empty-state-icon">🏜️</div>
-                <p>No wallpapers found in ${esc(appState.mode)} / ${esc(appState.purity)}.</p>
+                <div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
+                <p>No wallpapers in ${esc(appState.mode)} / ${esc(appState.purity)}</p>
             </div>
         `;
         return;
@@ -738,6 +799,91 @@ function renderImages() {
 
     renderNextBatch();
     setTimeout(updateGridMetrics, 100);
+}
+
+function renderBlocklistView() {
+    els.wallpaperGrid.innerHTML = '';
+    appState.currentBatchIndex = 0;
+
+    const bl = appState.blocklistData || { entries: [], total: 0, recoverable_count: 0 };
+    const recoverableCount = appState.images.length;
+    const blockedCount = bl.total;
+
+    // Tabs
+    const tabs = document.createElement('div');
+    tabs.className = 'blocklist-tabs';
+
+    const tabRecoverable = document.createElement('button');
+    tabRecoverable.className = `blocklist-tab ${appState.blocklistTab === 'recoverable' ? 'active' : ''}`;
+    tabRecoverable.innerHTML = `Recoverable <span class="tab-count">${recoverableCount}</span>`;
+    tabRecoverable.onclick = () => { appState.blocklistTab = 'recoverable'; renderBlocklistView(); };
+
+    const tabBlocked = document.createElement('button');
+    tabBlocked.className = `blocklist-tab ${appState.blocklistTab === 'blocked' ? 'active' : ''}`;
+    tabBlocked.innerHTML = `All Blocked <span class="tab-count">${blockedCount}</span>`;
+    tabBlocked.onclick = () => { appState.blocklistTab = 'blocked'; renderBlocklistView(); };
+
+    tabs.appendChild(tabRecoverable);
+    tabs.appendChild(tabBlocked);
+    els.wallpaperGrid.appendChild(tabs);
+
+    if (appState.blocklistTab === 'recoverable') {
+        if (appState.images.length === 0) {
+            els.wallpaperGrid.innerHTML += `
+                <div class="empty-state">
+                    <div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div>
+                    <p>No recoverable images in trash</p>
+                </div>
+            `;
+            return;
+        }
+        renderNextBatch();
+        setTimeout(updateGridMetrics, 100);
+    } else {
+        renderBlockedList(bl.entries);
+    }
+}
+
+function renderBlockedList(entries) {
+    if (entries.length === 0) {
+        els.wallpaperGrid.innerHTML += `
+            <div class="empty-state">
+                <div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+                <p>No blocked images</p>
+            </div>
+        `;
+        return;
+    }
+
+    const list = document.createElement('div');
+    list.className = 'blocklist-list';
+
+    entries.forEach(entry => {
+        const row = document.createElement('div');
+        row.className = 'blocklist-entry';
+
+        const date = new Date(entry.timestamp * 1000);
+        const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        const statusClass = entry.recoverable ? 'recoverable' : 'permanent';
+        const statusText = entry.recoverable ? 'In Trash' : 'Deleted';
+
+        row.innerHTML = `
+            <span class="entry-name" title="${esc(entry.filename)}">${esc(entry.filename)}</span>
+            <span class="entry-status ${statusClass}">${statusText}</span>
+            <span class="entry-date">${esc(dateStr)}</span>
+            <button class="entry-action">Unblock</button>
+        `;
+
+        row.querySelector('.entry-action').onclick = (e) => {
+            e.stopPropagation();
+            unblockImage(entry.filename);
+        };
+
+        list.appendChild(row);
+    });
+
+    els.wallpaperGrid.appendChild(list);
 }
 
 function renderNextBatch() {
@@ -765,6 +911,13 @@ function renderNextBatch() {
     }
 }
 
+function imageUrl(path) {
+    if (path.startsWith('__trash/')) {
+        return `${API_URL}/trash/${encodeURIComponent(path.slice(8))}`;
+    }
+    return `${API_URL}/images/${encodeURI(path)}`;
+}
+
 function createCard(img) {
     const card = document.createElement('div');
     card.className = 'wallpaper-card';
@@ -775,11 +928,11 @@ function createCard(img) {
         card.classList.add('portrait');
     }
 
-    const imgUrl = `${API_URL}/images/${encodeURI(img.path)}`;
+    const imgUrl = imageUrl(img.path);
 
     if (appState.mode === 'trash') {
         card.innerHTML = `
-            <img src="${imgUrl}" loading="lazy" alt="${esc(img.name)}">
+            <img class="loading" src="${imgUrl}" loading="lazy" alt="${esc(img.name)}">
             <div class="overlay">
                 <button class="action-btn restore" title="Restore to Pool">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -789,11 +942,13 @@ function createCard(img) {
                 </button>
             </div>
         `;
+        const cardImg = card.querySelector('img');
+        cardImg.onload = () => cardImg.classList.remove('loading');
         const btn = card.querySelector('button');
         btn.onclick = (e) => { e.stopPropagation(); restoreImage(img.path); };
     } else {
         card.innerHTML = `
-            <img src="${imgUrl}" loading="lazy" alt="${esc(img.name)}">
+            <img class="loading" src="${imgUrl}" loading="lazy" alt="${esc(img.name)}">
             <div class="overlay">
                 <button class="action-btn" title="Set Wallpaper">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -813,6 +968,9 @@ function createCard(img) {
                 </button>
             </div>
         `;
+
+        const cardImg = card.querySelector('img');
+        cardImg.onload = () => cardImg.classList.remove('loading');
 
         // Click on card -> Set wallpaper
         card.onclick = () => setWallpaper(img.path);

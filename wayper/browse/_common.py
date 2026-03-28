@@ -67,7 +67,12 @@ def get_images(category: str, mode: str, config: WayperConfig) -> list[Path]:
         for orient in ("landscape", "portrait"):
             images.extend(list_images(favorites_dir(config, mode, orient)))
     elif category == "disliked":
-        images.extend(list_images(config.trash_dir / mode))
+        from ..state import find_in_trash
+
+        for _ts, filename in list_blacklist(config):
+            trashed = find_in_trash(config, filename)
+            if trashed:
+                images.append(trashed)
     else:
         for orient in ("landscape", "portrait"):
             images.extend(list_images(pool_dir(config, mode, orient)))

@@ -216,5 +216,4 @@ def ensure_directories(config: WayperConfig) -> None:
         for orient in ("portrait", "landscape"):
             pool_dir(config, purity, orient).mkdir(parents=True, exist_ok=True)
             favorites_dir(config, purity, orient).mkdir(parents=True, exist_ok=True)
-    for purity in ("sfw", "nsfw"):
-        (config.trash_dir / purity).mkdir(parents=True, exist_ok=True)
+    # System trash is managed by the OS — no need to create trash directories

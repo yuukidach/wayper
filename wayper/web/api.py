@@ -28,7 +28,7 @@ from wayper.pool import (
     pool_dir,
     remove_from_blacklist,
 )
-from wayper.state import push_undo, read_mode, write_mode
+from wayper.state import find_in_trash, push_undo, read_mode, restore_from_trash, write_mode
 
 log = logging.getLogger("wayper.api")
 
@@ -69,6 +69,7 @@ class StatusResponse(BaseModel):
     pool_count: int = 0
     favorites_count: int = 0
     blocklist_count: int = 0
+    recoverable_count: int = 0
     mode: str = "sfw"
 
 
@@ -248,14 +249,9 @@ def control_action(action: str):
             return {"status": "nothing_to_undo"}
         filename, orig_dir = undo
         remove_from_blacklist(config, filename)
-        # Try to move file back from trash
-        for trash_sub in (config.trash_dir / "sfw", config.trash_dir / "nsfw", config.trash_dir):
-            trashed = trash_sub / filename
-            if trashed.exists():
-                dest = Path(orig_dir) / filename
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                trashed.rename(dest)
-                return {"status": "ok", "restored": str(dest)}
+        restored = restore_from_trash(config, filename, Path(orig_dir))
+        if restored:
+            return {"status": "ok", "restored": str(restored)}
         return {"status": "ok", "note": "blacklist entry removed but file not found in trash"}
 
     # dislike
@@ -286,7 +282,9 @@ def get_status():
         pool_c += count_images(pool_dir(config, mode, orient))
         fav_c += count_images(favorites_dir(config, mode, orient))
 
-    blocklist_c = len(list_blacklist(config))
+    entries = list_blacklist(config)
+    blocklist_c = len(entries)
+    recoverable_c = sum(1 for _, fn in entries if find_in_trash(config, fn))
 
     return StatusResponse(
         running=running,
@@ -294,6 +292,7 @@ def get_status():
         pool_count=pool_c,
         favorites_count=fav_c,
         blocklist_count=blocklist_c,
+        recoverable_count=recoverable_c,
         mode=mode or "sfw",
     )
 
@@ -320,25 +319,19 @@ def get_images(mode: str = "pool", purity: str = "sfw", orient: str = "landscape
     config = get_config()
 
     if mode == "trash":
-        trash_path = config.trash_dir / purity
-        if not trash_path.exists():
-            return []
-
         entries = list_blacklist(config)
-        images = []
+        items = []
         for _, filename in entries:
-            f = trash_path / filename
-            if f.exists():
-                images.append(f)
-
-        return [
-            ImageItem(
-                path=str(p.relative_to(config.download_dir)),
-                name=p.name,
-                is_favorite=False,
-            )
-            for p in images
-        ]
+            trashed = find_in_trash(config, filename)
+            if trashed:
+                items.append(
+                    ImageItem(
+                        path=f"__trash/{filename}",
+                        name=filename,
+                        is_favorite=False,
+                    )
+                )
+        return items
 
     if mode == "pool":
         path = pool_dir(config, purity, orient)
@@ -361,36 +354,52 @@ def get_images(mode: str = "pool", purity: str = "sfw", orient: str = "landscape
 @app.post("/api/image/restore")
 def restore_image(req: ActionRequest):
     config = get_config()
-    img_full = _resolve_image(config, req.image_path)
+    filename = Path(req.image_path).name
 
-    # Verify it is in trash
-    if ".trash" not in img_full.parts:
-        raise HTTPException(400, "Image is not in trash")
+    trashed = find_in_trash(config, filename)
+    if not trashed:
+        raise HTTPException(404, "Image not found in trash")
 
-    # Remove from blacklist
-    remove_from_blacklist(config, img_full.name)
-
-    # Determine purity from path
-    purity = "sfw"
-    if "nsfw" in img_full.parts:
-        purity = "nsfw"
+    remove_from_blacklist(config, filename)
 
     # Determine orientation from image dimensions
     try:
-        with Image.open(img_full) as img:
+        with Image.open(trashed) as img:
             width, height = img.size
             orientation = "landscape" if width >= height else "portrait"
     except Exception:
         orientation = "landscape"
 
-    # Move to pool
-    dest_dir = pool_dir(config, purity, orientation)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / img_full.name
-
-    img_full.rename(dest)
+    mode = read_mode(config)
+    dest_dir = pool_dir(config, mode, orientation)
+    dest = restore_from_trash(config, filename, dest_dir)
+    if not dest:
+        raise HTTPException(500, "Failed to restore image")
 
     return {"status": "ok", "new_path": str(dest.relative_to(config.download_dir))}
+
+
+@app.get("/api/blocklist")
+def get_blocklist():
+    config = get_config()
+    entries = list_blacklist(config)
+    result = []
+    for ts, filename in entries:
+        recoverable = find_in_trash(config, filename) is not None
+        result.append({"filename": filename, "timestamp": ts, "recoverable": recoverable})
+    recoverable_count = sum(1 for e in result if e["recoverable"])
+    return {"entries": result, "total": len(result), "recoverable_count": recoverable_count}
+
+
+class UnblockRequest(BaseModel):
+    filename: str
+
+
+@app.post("/api/blocklist/remove")
+def remove_blocklist_entry(req: UnblockRequest):
+    config = get_config()
+    remove_from_blacklist(config, req.filename)
+    return {"status": "ok"}
 
 
 @app.post("/api/wallpaper/set")
@@ -480,6 +489,18 @@ def daemon_action(action: str):
         return {"status": "not_running"}
     os.kill(pid, signal.SIGTERM)
     return {"status": "ok"}
+
+
+@app.get("/trash/{filename}")
+def serve_trash_image(filename: str):
+    """Serve an image from system trash (not under download_dir)."""
+    from fastapi.responses import FileResponse
+
+    config = get_config()
+    trashed = find_in_trash(config, filename)
+    if not trashed:
+        raise HTTPException(404, "Image not found in trash")
+    return FileResponse(trashed)
 
 
 # Mount images directory

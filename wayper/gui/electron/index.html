@@ -3,16 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <title>Wayper</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <header>
         <div class="brand">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--mauve)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                <circle cx="8.5" cy="8.5" r="1.5"/>
-                <polyline points="21 15 16 10 5 21"/>
-            </svg>
             <h1>Wayper</h1>
         </div>
 
@@ -65,13 +63,13 @@
                 <h3>Library</h3>
                 <div class="nav-group">
                      <button id="btn-pool" class="nav-item active">
-                        <span class="icon">🌊</span> Pool <span id="count-pool" class="badge"></span><kbd>1</kbd>
+                        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span> Pool <span id="count-pool" class="badge"></span><kbd>1</kbd>
                      </button>
                      <button id="btn-favorites" class="nav-item">
-                        <span class="icon">⭐</span> Favorites <span id="count-favorites" class="badge"></span><kbd>2</kbd>
+                        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></span> Favorites <span id="count-favorites" class="badge"></span><kbd>2</kbd>
                      </button>
                      <button id="btn-blocklist" class="nav-item">
-                        <span class="icon">🚫</span> Blocklist <span id="count-blocklist" class="badge"></span><kbd>3</kbd>
+                        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg></span> Blocklist <span id="count-blocklist" class="badge"></span><kbd>3</kbd>
                      </button>
                 </div>
             </div>
@@ -84,10 +82,13 @@
             </div>
 
             <div class="sidebar-section">
-                <h3>Mode</h3>
-                <div class="mode-toggle">
-                    <button id="btn-sfw" class="mode-btn">SFW</button>
-                    <button id="btn-nsfw" class="mode-btn">NSFW</button>
+                <h3>Mode <kbd>M</kbd></h3>
+                <div class="mode-switch">
+                    <span id="label-sfw" class="mode-switch-label active">SFW</span>
+                    <div id="mode-toggle" class="switch-track">
+                        <div class="switch-thumb"></div>
+                    </div>
+                    <span id="label-nsfw" class="mode-switch-label">NSFW</span>
                 </div>
             </div>
 
@@ -98,7 +99,7 @@
                     Start Daemon
                 </button>
                 <button id="btn-settings" class="nav-item settings-btn">
-                    <span class="icon">⚙️</span> Settings
+                    <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span> Settings
                 </button>
             </div>
         </aside>
@@ -107,7 +108,7 @@
             <!-- Wallpaper Grid -->
             <div id="wallpaper-grid" class="wallpaper-grid">
                 <div class="empty-state">
-                    <div class="empty-state-icon">🖼️</div>
+                    <div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
                     <p>Loading wallpapers...</p>
                 </div>
             </div>

@@ -1,12 +1,13 @@
-"""Persistent state: mode, undo log, trash."""
+"""Persistent state: mode, undo log, system trash integration."""
 
 from __future__ import annotations
 
+import os
+import shutil
+import sys
 from pathlib import Path
 
 from .config import WayperConfig
-
-MAX_UNDO = 5
 
 
 def read_mode(config: WayperConfig) -> str:
@@ -21,41 +22,69 @@ def write_mode(config: WayperConfig, mode: str) -> None:
     config.state_file.write_text(mode)
 
 
-def _trash_for_dir(config: WayperConfig, original_dir: Path) -> Path:
-    """Determine mode-specific trash dir from an original pool directory."""
+# ---------------------------------------------------------------------------
+# System trash helpers
+# ---------------------------------------------------------------------------
+
+
+def _system_trash_dirs() -> list[Path]:
+    """Return system trash file directories to search, in priority order."""
+    if sys.platform == "darwin":
+        return [Path.home() / ".Trash"]
+    xdg_data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
+    return [xdg_data / "Trash" / "files"]
+
+
+def _trash_search_dirs(config: WayperConfig) -> list[Path]:
+    """All directories to search for trashed files: system + legacy."""
+    dirs = _system_trash_dirs()
+    # Legacy .trash/ fallback
+    dirs.extend([config.trash_dir / "sfw", config.trash_dir / "nsfw", config.trash_dir])
+    return dirs
+
+
+def _cleanup_trashinfo(filename: str) -> None:
+    """Remove .trashinfo metadata for a restored file (Linux/freedesktop only)."""
+    if sys.platform == "darwin":
+        return
+    xdg_data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
+    trashinfo = xdg_data / "Trash" / "info" / f"{filename}.trashinfo"
     try:
-        rel = original_dir.relative_to(config.download_dir)
-        mode = rel.parts[0]  # "sfw" or "nsfw"
-        if mode in ("sfw", "nsfw"):
-            return config.trash_dir / mode
-    except (ValueError, IndexError):
+        trashinfo.unlink(missing_ok=True)
+    except OSError:
         pass
-    return config.trash_dir
+
+
+def find_in_trash(config: WayperConfig, filename: str) -> Path | None:
+    """Find a file in system trash or legacy .trash/ directory."""
+    for d in _trash_search_dirs(config):
+        candidate = d / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Undo / trash operations
+# ---------------------------------------------------------------------------
 
 
 def push_undo(config: WayperConfig, filename: str, original_dir: Path) -> None:
-    """Move file to trash and record in undo log. Trim to MAX_UNDO entries."""
-    trash = _trash_for_dir(config, original_dir)
-    trash.mkdir(parents=True, exist_ok=True)
+    """Send file to system trash and record in undo log."""
+    import send2trash
+
     src = original_dir / filename
     if src.exists():
-        src.rename(trash / filename)
+        try:
+            send2trash.send2trash(src)
+        except Exception:
+            # Fallback: move to legacy .trash/ if system trash fails (e.g. cross-mount)
+            trash = config.trash_dir
+            trash.mkdir(parents=True, exist_ok=True)
+            src.rename(trash / filename)
 
     with open(config.undo_file, "a") as f:
         f.write(f"{filename} {original_dir}\n")
-
-    # Trim old entries
-    lines = config.undo_file.read_text().splitlines()
-    if len(lines) > MAX_UNDO:
-        for old_line in lines[:-MAX_UNDO]:
-            old_name = old_line.split(maxsplit=1)[0]
-            # Check both mode-specific and legacy trash
-            for d in (config.trash_dir / "sfw", config.trash_dir / "nsfw", config.trash_dir):
-                f = d / old_name
-                if f.is_file():
-                    f.unlink()
-                    break
-        config.undo_file.write_text("\n".join(lines[-MAX_UNDO:]) + "\n")
 
 
 def pop_undo(config: WayperConfig) -> tuple[str, Path] | None:
@@ -77,14 +106,12 @@ def pop_undo(config: WayperConfig) -> tuple[str, Path] | None:
 
 
 def restore_from_trash(config: WayperConfig, filename: str, dest_dir: Path) -> Path | None:
-    """Move file from trash back to dest_dir. Returns final path or None."""
-    # Check mode-specific trash first, then legacy flat trash
-    trash = _trash_for_dir(config, dest_dir)
-    trashed = trash / filename
-    if not trashed.exists():
-        trashed = config.trash_dir / filename  # legacy fallback
-    if not trashed.exists():
+    """Restore file from system trash or legacy .trash/ to dest_dir."""
+    trashed = find_in_trash(config, filename)
+    if not trashed:
         return None
     dest = dest_dir / filename
-    trashed.rename(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(trashed), str(dest))
+    _cleanup_trashinfo(filename)
     return dest
