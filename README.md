@@ -23,7 +23,7 @@
 <details>
 <summary>GUI screenshot</summary>
 <p align="center">
-  <img src="assets/browse.png" alt="GTK4 GUI browse view" width="720">
+  <img src="assets/browse.png" alt="GUI browse view" width="720">
 </p>
 </details>
 
@@ -35,7 +35,7 @@
 - **SFW/NSFW toggle** — one key to switch. Persistent across sessions.
 - **History navigation** — prev/next through your wallpaper history. Browser-style back/forward per monitor.
 - **Favorites & blacklist** — like/dislike with undo. Favorites stay in rotation.
-- **Native GUI** — browse, preview, and manage your collection with daemon control and settings. GTK4 on Linux, AppKit on macOS. Keyboard-driven.
+- **Electron GUI** — browse, preview, and manage your collection with daemon control and settings. Cross-platform. Keyboard-driven.
 - **AI-native** — built-in MCP server lets AI assistants (Claude Code, etc.) control your wallpapers directly. Ask your AI to "delete this broken wallpaper" or "favorite this one" — it just works.
 - **JSON output** — `--json` flag on every command for scripting and automation.
 
@@ -47,17 +47,12 @@
 paru -S wayper     # or: yay -S wayper
 ```
 
-### macOS
-
-Download [`Wayper.dmg`](https://github.com/yuukidach/wayper/releases/latest/download/Wayper.dmg), open it, and drag to Applications.
-
 ### From source
 
 ```bash
 git clone https://github.com/yuukidach/wayper.git
 cd wayper
-uv venv && uv pip install -e '.[macos]'
-wayper setup   # install Wayper.app to ~/Applications
+uv venv && uv pip install -e .
 ```
 
 ## Usage
@@ -73,13 +68,13 @@ wayper undislike            # undo last dislike
 wayper mode [sfw|nsfw]      # toggle or set mode
 wayper status               # show current state
 wayper-gui                  # GUI app (browse, actions, daemon, settings)
-wayper setup                # install .app bundle (macOS) or .desktop entry (Linux)
+wayper setup                # install .desktop entry (Linux)
 wayper --json status        # machine-readable output
 ```
 
 ### GUI App
 
-`wayper-gui` launches a standalone app with browse, quick actions (next/prev/fav/dislike), daemon control, and settings — all in one window. Uses GTK4 on Linux, AppKit on macOS.
+`wayper-gui` launches a standalone Electron app with browse, quick actions (next/prev/fav/dislike), daemon control, and settings — all in one window.
 
 ```
 1/2/3    switch category        Enter    set as wallpaper
@@ -87,8 +82,6 @@ f        favorite               x        remove/reject/restore
 o        open on Wallhaven      d        delete
 n/p      next/prev wallpaper    m        toggle SFW/NSFW
 ```
-
-On macOS, run `wayper setup` to install `Wayper.app` in `~/Applications` for Spotlight/Alfred access.
 
 ### Keybindings
 
@@ -150,9 +143,9 @@ See [`example-config.toml`](example-config.toml) for all options — monitors, A
 - Python 3.12+
 - [Wallhaven API key](https://wallhaven.cc/settings/account)
 
-**Linux:** [awww](https://codeberg.org/LGFae/awww), [Hyprland](https://hyprland.org/), GTK4 + PyGObject (`sudo pacman -S python-gobject gtk4`)
+**Linux:** [awww](https://codeberg.org/LGFae/awww), [Hyprland](https://hyprland.org/)
 
-**macOS:** `pip install 'wayper[macos]'` (installs PyObjC)
+**macOS:** Python 3.12+, Node.js (for Electron GUI)
 
 ## License
 

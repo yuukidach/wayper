@@ -23,7 +23,7 @@
 <details>
 <summary>GUI 截图</summary>
 <p align="center">
-  <img src="assets/browse.png" alt="GTK4 GUI 浏览界面" width="720">
+  <img src="assets/browse.png" alt="GUI 浏览界面" width="720">
 </p>
 </details>
 
@@ -35,7 +35,7 @@
 - **SFW/NSFW 切换** — 一键切换，跨会话持久化。
 - **历史导航** — 前进/后退浏览壁纸历史，按显示器独立记录。
 - **收藏与黑名单** — 喜欢/不喜欢，支持撤销。收藏的壁纸继续参与轮换。
-- **原生 GUI** — 浏览、预览和管理壁纸集合，集成 daemon 控制和设置。Linux 使用 GTK4，macOS 使用 AppKit。
+- **Electron GUI** — 浏览、预览和管理壁纸集合，集成 daemon 控制和设置。跨平台。
 - **AI 原生** — 内置 MCP 服务器，AI 助手（Claude Code 等）可以直接控制壁纸。对 AI 说"删掉这张坏壁纸"或"收藏这张"就能执行。
 - **JSON 输出** — 所有命令支持 `--json`，方便脚本和自动化。
 
@@ -47,17 +47,12 @@
 paru -S wayper     # 或: yay -S wayper
 ```
 
-### macOS
-
-下载 [`Wayper.dmg`](https://github.com/yuukidach/wayper/releases/latest/download/Wayper.dmg)，打开后拖入 Applications。
-
 ### 从源码安装
 
 ```bash
 git clone https://github.com/yuukidach/wayper.git
 cd wayper
-uv venv && uv pip install -e '.[macos]'
-wayper setup   # 安装 Wayper.app 到 ~/Applications
+uv venv && uv pip install -e .
 ```
 
 ## 使用
@@ -73,13 +68,13 @@ wayper undislike            # 撤销上次拉黑
 wayper mode [sfw|nsfw]      # 切换模式
 wayper status               # 查看当前状态
 wayper-gui                  # GUI 应用（浏览、操作、daemon、设置）
-wayper setup                # 安装 .app（macOS）或 .desktop（Linux）
+wayper setup                # 安装 .desktop（Linux）
 wayper --json status        # JSON 格式输出
 ```
 
 ### GUI 应用
 
-`wayper-gui` 启动独立应用，集成浏览、快捷操作（下一张/上一张/收藏/拉黑）、daemon 控制和设置。Linux 使用 GTK4，macOS 使用 AppKit。
+`wayper-gui` 启动 Electron 应用，集成浏览、快捷操作（下一张/上一张/收藏/拉黑）、daemon 控制和设置。
 
 ```
 1/2/3      切换分类               Enter    设为壁纸
@@ -87,8 +82,6 @@ f          收藏                   x        移除/拒绝/恢复
 o          在 Wallhaven 打开      d        删除
 n/p        下一张/上一张          m        切换 SFW/NSFW
 ```
-
-macOS 上运行 `wayper setup` 将 `Wayper.app` 安装到 `~/Applications`，即可通过 Spotlight/Alfred 启动。
 
 ### Hyprland 快捷键示例
 
@@ -136,9 +129,9 @@ cp example-config.toml ~/.config/wayper/config.toml
 - Python 3.12+
 - [Wallhaven API key](https://wallhaven.cc/settings/account)
 
-**Linux:** [awww](https://codeberg.org/LGFae/awww)、[Hyprland](https://hyprland.org/)、GTK4 + PyGObject（`sudo pacman -S python-gobject gtk4`）
+**Linux:** [awww](https://codeberg.org/LGFae/awww)、[Hyprland](https://hyprland.org/)
 
-**macOS:** `pip install 'wayper[macos]'`（安装 PyObjC）
+**macOS:** Python 3.12+、Node.js（用于 Electron GUI）
 
 ## 许可
 
