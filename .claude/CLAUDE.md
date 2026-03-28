@@ -1,13 +1,12 @@
 # Wayper
 
-Cross-platform wallpaper manager with Wallhaven integration. Supports macOS (AppKit) and Linux (awww/dbus + GTK4).
+Cross-platform wallpaper manager with Wallhaven integration. Supports macOS and Linux with platform-specific backends and a unified Electron GUI.
 
 ## Quick Reference
 
 ```bash
 # Install (dev)
-uv venv && uv pip install -e '.[macos]'   # macOS
-uv venv && uv pip install -e .             # Linux
+uv venv && uv pip install -e .
 
 # Run
 wayper daemon start  # Start background rotation
@@ -15,7 +14,7 @@ wayper daemon stop   # Stop daemon
 wayper next          # Set next wallpaper
 wayper prev          # Go back to previous wallpaper
 wayper status        # Show current state, daemon, disk usage
-wayper-gui           # Launch GUI app (GTK4 on Linux, AppKit on macOS)
+wayper-gui           # Launch Electron GUI
 wayper-mcp           # Start MCP server
 
 # Lint
@@ -28,7 +27,7 @@ ruff format --check wayper/
 - Config: `~/.config/wayper/config.toml` (see `example-config.toml`)
 - PID file: `~/.config/wayper/wayper.pid`
 - State files live inside `download_dir`: `.mode`, `.blacklist`, `.undo`, `.history`
-- Version: managed in `pyproject.toml` — keep `wayper/__init__.py` and `wayper.spec` (CFBundleVersion) in sync
+- Version: managed in `pyproject.toml` — keep `wayper/__init__.py` in sync
 
 ## Architecture
 
@@ -49,26 +48,26 @@ wayper/
 │   └── linux.py     #   Linux (awww/dbus)
 ├── browse/          # Shared browse helpers
 │   └── _common.py   #   get_images, wallhaven_url, etc.
-└── gui/             # GUI app (platform-dispatched)
-    ├── macos/       #   macOS AppKit GUI
-    │   ├── app.py, main_window.py, browse_view.py
-    │   ├── actions_view.py, daemon_control.py
-    │   ├── settings_window.py, colors.py
-    │   └── __init__.py
-    └── gtk/         #   Linux GTK4 GUI
-        ├── app.py, main_window.py, browse_view.py
-        ├── actions_view.py, daemon_control.py
-        ├── settings_window.py, wallhaven_view.py, css.py
-        └── __init__.py
+├── web/             # Backend API for Electron GUI
+│   ├── api.py       #   FastAPI server (status, images, config, etc.)
+│   ├── entry.py     #   PyInstaller entry point (CLI + API dual-mode)
+│   └── launcher.py  #   Starts API server + spawns Electron
+└── gui/
+    ├── __init__.py  #   Entry point → Electron launcher
+    └── electron/    #   Electron GUI (cross-platform)
+        ├── main.js, preload.js
+        ├── index.html, renderer.js, styles.css
+        └── package.json  # electron-builder config
 ```
 
 **Key patterns:**
-- Platform code is isolated in `backend/` and `gui/` — shared logic lives in top-level modules
+- Platform code is isolated in `backend/` — shared logic lives in top-level modules
 - CLI and GUI both share the same backend logic; `browse/_common.py` has shared browse helpers
+- GUI is Electron-based: Python FastAPI backend (`web/api.py`) + Electron frontend (`gui/electron/`)
+- PyInstaller bundles the Python backend; electron-builder packages the full app
 - File-based state: TOML config, plain text blacklist/undo, JSON history
 - File locks (`flock`) prevent concurrent state modifications
 - Daemon uses SIGUSR1 (force rotation) and SIGUSR2 (mode reload); `daemon start` runs in background, bare `daemon` runs in foreground
-- UI uses Catppuccin Mocha palette across GTK4 and macOS GUI
 
 ## Code Conventions
 
@@ -83,9 +82,9 @@ wayper/
 
 ## Release Checklist
 
-1. Bump version in `pyproject.toml`, `wayper/__init__.py`, `wayper.spec`
+1. Bump version in `pyproject.toml`, `wayper/__init__.py`
 2. Commit and tag: `git tag v{version}`
-3. Push with tags: `git push origin main --tags` (triggers macOS DMG build)
+3. Push with tags: `git push origin main --tags` (triggers macOS DMG build via GitHub Actions)
 4. Update AUR: edit `~/projects/wayper-aur/PKGBUILD` (pkgver, sha256sums), regenerate `.SRCINFO` via `makepkg --printsrcinfo > .SRCINFO`, commit and push to `ssh://aur@aur.archlinux.org/wayper.git`
 
 ## Guidelines
@@ -93,7 +92,4 @@ wayper/
 - No tests exist yet — do not add test infrastructure unless asked
 - Pool directory structure: `download_dir/[sfw|nsfw]/[portrait|landscape]` + `favorites/` + `.trash/`
 - All CLI commands support `--json` flag for machine-readable output
-- macOS GUI uses PyObjC (AppKit bindings) — no SwiftUI or Interface Builder
-- Linux GUI uses GTK4/PyGObject — no libadwaita
-- `gui/__init__.py` dispatches by platform: darwin → AppKit, else → GTK4
-- Keep platform-specific code in `backend/` or `gui/` — never in shared modules
+- Keep platform-specific code in `backend/` — never in shared modules
