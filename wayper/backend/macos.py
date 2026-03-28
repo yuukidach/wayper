@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from ..config import TransitionConfig
+from ..config import MonitorConfig, TransitionConfig
 from .base import WallpaperBackend
 
 try:
@@ -42,6 +42,24 @@ class MacOSBackend(WallpaperBackend):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+    def detect_monitors(self) -> list[MonitorConfig]:
+        """Detect current monitor configuration using AppKit."""
+        if not _HAS_APPKIT:
+            return []
+
+        monitors = []
+        for screen in NSScreen.screens():
+            frame = screen.frame()
+            width = int(frame.size.width)
+            height = int(frame.size.height)
+            # NSScreen coordinates are points, not pixels, but orientation is correct
+            orientation = "portrait" if height > width else "landscape"
+            name = _display_id(screen)
+            monitors.append(
+                MonitorConfig(name=name, width=width, height=height, orientation=orientation)
+            )
+        return monitors
 
     def get_focused_monitor(self) -> str | None:
         if not _HAS_APPKIT:

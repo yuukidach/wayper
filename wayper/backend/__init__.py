@@ -27,6 +27,7 @@ class FileLock:
             flags = fcntl.LOCK_EX if self._blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
             fcntl.flock(self._fd, flags)
         except OSError:
+            print("Failed to acquire lock (OSError). Exiting.")
             os.close(self._fd)
             self._fd = None
             raise SystemExit(0)
@@ -66,6 +67,11 @@ def query_current() -> dict[str, Path | None]:
     return _backend.query_current()
 
 
+def detect_monitors() -> list[MonitorConfig]:
+    """Detect current monitor configuration."""
+    return _backend.detect_monitors()
+
+
 def get_context(config: WayperConfig) -> tuple[str | None, MonitorConfig | None, Path | None]:
     return _get_context(_backend, config)
 
@@ -87,6 +93,7 @@ __all__ = [
     "ensure_ready",
     "FileLock",
     "WallpaperBackend",
+    "detect_monitors",
     "find_monitor",
     "get_context",
     "get_focused_monitor",

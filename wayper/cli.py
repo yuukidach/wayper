@@ -6,6 +6,7 @@ import asyncio
 import json as json_mod
 import logging
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -45,19 +46,82 @@ def cli(ctx, use_json, config_path):
     ctx.obj["json"] = use_json
 
 
-@cli.command()
+@cli.group(invoke_without_command=True)
 @click.pass_context
 def daemon(ctx):
-    """Run the wallpaper daemon (download loop + rotation)."""
-    config = ctx.obj["config"]
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    from .daemon import run_daemon
+    """Run the wallpaper daemon (download loop + rotation).
 
-    asyncio.run(run_daemon(config))
+    Bare 'wayper daemon' runs in foreground.
+    'wayper daemon start' runs in background.
+    'wayper daemon stop' stops the background daemon.
+    """
+    if ctx.invoked_subcommand is None:
+        config = ctx.obj["config"]
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%H:%M:%S",
+        )
+        from .daemon import run_daemon
+
+        asyncio.run(run_daemon(config))
+
+
+@daemon.command()
+@click.pass_context
+def start(ctx):
+    """Start the daemon in the background."""
+    config = ctx.obj["config"]
+    from .daemon import is_daemon_running
+
+    running, pid = is_daemon_running(config)
+    if running:
+        click.echo(f"Daemon already running (PID {pid})")
+        return
+
+    if config.pid_file.exists():
+        try:
+            config.pid_file.unlink()
+            click.echo("Removed stale PID file.")
+        except OSError as e:
+            click.echo(f"Warning: Could not remove stale PID file: {e}", err=True)
+
+    # Spawn the bare 'daemon' command detached
+    # We use Popen with start_new_session=True to detach fully
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "daemon"]
+    else:
+        cmd = [sys.executable, "-m", "wayper.cli", "daemon"]
+
+    with open("/tmp/wayper-daemon.log", "w") as f:
+        subprocess.Popen(cmd, start_new_session=True, stdout=f, stderr=f, stdin=subprocess.DEVNULL)
+    click.echo("Daemon started in background.")
+
+
+@daemon.command()
+@click.pass_context
+def stop(ctx):
+    """Stop the background daemon."""
+    config = ctx.obj["config"]
+    from .daemon import is_daemon_running
+
+    running, pid = is_daemon_running(config)
+    if not running:
+        click.echo("Daemon is not running")
+        return
+
+    if pid:
+        try:
+            import os
+
+            os.kill(pid, signal.SIGTERM)
+            click.echo(f"Stopped daemon (PID {pid})")
+        except ProcessLookupError:
+            click.echo("Daemon process not found (stale PID file?)")
+            # Cleanup stale pid file?
+            # The next run will overwrite it, or is_daemon_running handles it.
+            # remove_pid_file is in daemon.py, not easily accessible here without import.
+            pass
 
 
 @cli.command("next")
@@ -398,3 +462,7 @@ def _setup_macos_app() -> None:
         shutil.copy2(icon_src, resources / "icon.icns")
 
     click.echo(f"Installed {app_dir}")
+
+
+if __name__ == "__main__":
+    cli()

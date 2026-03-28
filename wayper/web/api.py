@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel
 
 from wayper.backend import FileLock, get_context, query_current, set_wallpaper
@@ -19,10 +20,13 @@ from wayper.history import go_prev, pick_next
 from wayper.history import push as push_history
 from wayper.pool import (
     add_to_blacklist,
+    count_images,
     favorites_dir,
+    list_blacklist,
     list_images,
     pick_random,
     pool_dir,
+    remove_from_blacklist,
 )
 from wayper.state import push_undo, read_mode, write_mode
 
@@ -62,6 +66,10 @@ def get_config() -> WayperConfig:
 class StatusResponse(BaseModel):
     running: bool
     pid: int | None = None
+    pool_count: int = 0
+    favorites_count: int = 0
+    blocklist_count: int = 0
+    mode: str = "sfw"
 
 
 class ImageItem(BaseModel):
@@ -190,7 +198,7 @@ def get_disk_usage():
 
 @app.post("/api/control/{action}")
 def control_action(action: str):
-    if action not in ["next", "prev", "dislike", "fav", "unfav"]:
+    if action not in ["next", "prev", "dislike", "fav", "unfav", "undislike"]:
         raise HTTPException(400, "Invalid action")
 
     config = get_config()
@@ -232,6 +240,24 @@ def control_action(action: str):
             set_wallpaper(monitor, dest, NO_TRANSITION)
         return {"status": "ok", "image": str(dest)}
 
+    if action == "undislike":
+        from wayper.state import pop_undo
+
+        undo = pop_undo(config)
+        if not undo:
+            return {"status": "nothing_to_undo"}
+        filename, orig_dir = undo
+        remove_from_blacklist(config, filename)
+        # Try to move file back from trash
+        for trash_sub in (config.trash_dir / "sfw", config.trash_dir / "nsfw", config.trash_dir):
+            trashed = trash_sub / filename
+            if trashed.exists():
+                dest = Path(orig_dir) / filename
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                trashed.rename(dest)
+                return {"status": "ok", "restored": str(dest)}
+        return {"status": "ok", "note": "blacklist entry removed but file not found in trash"}
+
     # dislike
     if not current_img:
         raise HTTPException(400, "No current wallpaper")
@@ -251,7 +277,25 @@ def control_action(action: str):
 def get_status():
     config = get_config()
     running, pid = is_daemon_running(config)
-    return StatusResponse(running=running, pid=pid)
+    mode = read_mode(config)
+
+    # Calculate counts for current mode across all orientations
+    pool_c = 0
+    fav_c = 0
+    for orient in ["landscape", "portrait"]:
+        pool_c += count_images(pool_dir(config, mode, orient))
+        fav_c += count_images(favorites_dir(config, mode, orient))
+
+    blocklist_c = len(list_blacklist(config))
+
+    return StatusResponse(
+        running=running,
+        pid=pid,
+        pool_count=pool_c,
+        favorites_count=fav_c,
+        blocklist_count=blocklist_c,
+        mode=mode or "sfw",
+    )
 
 
 @app.get("/api/monitors", response_model=list[MonitorInfo])
@@ -274,6 +318,28 @@ def get_monitors():
 @app.get("/api/images", response_model=list[ImageItem])
 def get_images(mode: str = "pool", purity: str = "sfw", orient: str = "landscape"):
     config = get_config()
+
+    if mode == "trash":
+        trash_path = config.trash_dir / purity
+        if not trash_path.exists():
+            return []
+
+        entries = list_blacklist(config)
+        images = []
+        for _, filename in entries:
+            f = trash_path / filename
+            if f.exists():
+                images.append(f)
+
+        return [
+            ImageItem(
+                path=str(p.relative_to(config.download_dir)),
+                name=p.name,
+                is_favorite=False,
+            )
+            for p in images
+        ]
+
     if mode == "pool":
         path = pool_dir(config, purity, orient)
     else:
@@ -290,6 +356,41 @@ def get_images(mode: str = "pool", purity: str = "sfw", orient: str = "landscape
         ImageItem(path=str(p.relative_to(config.download_dir)), name=p.name, is_favorite=is_fav)
         for p in images
     ]
+
+
+@app.post("/api/image/restore")
+def restore_image(req: ActionRequest):
+    config = get_config()
+    img_full = _resolve_image(config, req.image_path)
+
+    # Verify it is in trash
+    if ".trash" not in img_full.parts:
+        raise HTTPException(400, "Image is not in trash")
+
+    # Remove from blacklist
+    remove_from_blacklist(config, img_full.name)
+
+    # Determine purity from path
+    purity = "sfw"
+    if "nsfw" in img_full.parts:
+        purity = "nsfw"
+
+    # Determine orientation from image dimensions
+    try:
+        with Image.open(img_full) as img:
+            width, height = img.size
+            orientation = "landscape" if width >= height else "portrait"
+    except Exception:
+        orientation = "landscape"
+
+    # Move to pool
+    dest_dir = pool_dir(config, purity, orientation)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / img_full.name
+
+    img_full.rename(dest)
+
+    return {"status": "ok", "new_path": str(dest.relative_to(config.download_dir))}
 
 
 @app.post("/api/wallpaper/set")
@@ -326,6 +427,34 @@ def favorite_image(req: ActionRequest):
     return {"status": "ok", "new_path": str(dest.relative_to(config.download_dir))}
 
 
+@app.post("/api/image/dislike")
+def dislike_image_route(req: ActionRequest):
+    config = get_config()
+    img_full = _resolve_image(config, req.image_path)
+
+    if "favorites" in req.image_path:
+        raise HTTPException(400, "Can't dislike a favorite")
+
+    try:
+        current_wallpapers = query_current()
+    except Exception:
+        current_wallpapers = {}
+
+    with FileLock(blocking=False):
+        mode = read_mode(config)
+        for mon in config.monitors:
+            current_path = current_wallpapers.get(mon.name)
+            if current_path and current_path.resolve() == img_full.resolve():
+                next_img = pick_random(config, mode, mon.orientation)
+                if next_img:
+                    set_wallpaper(mon.name, next_img, config.transition)
+
+        add_to_blacklist(config, img_full.name)
+        push_undo(config, img_full.name, img_full.parent)
+
+    return {"status": "ok"}
+
+
 @app.post("/api/daemon/{action}")
 def daemon_action(action: str):
     if action not in ["start", "stop"]:
@@ -358,6 +487,12 @@ app.mount("/images", StaticFiles(directory=get_config().download_dir), name="ima
 
 
 def run():
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=8080, log_level="info")
+
+
+if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(app, host="127.0.0.1", port=8080, log_level="info")

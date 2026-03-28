@@ -149,10 +149,14 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-left: 80px;
+  padding-left: 20px;
   padding-right: 20px;
   -webkit-app-region: drag;
   z-index: 100;
+}
+
+body.is-macos header {
+  padding-left: 80px;
 }
 
 .brand {
@@ -173,6 +177,10 @@ h1 {
   gap: 8px;
   align-items: center;
   -webkit-app-region: no-drag;
+}
+
+.controls button {
+  min-width: 110px;
 }
 
 .divider {
@@ -227,11 +235,32 @@ aside {
   color: var(--subtext0);
   font-size: 14px;
   width: 100%;
+  display: flex; /* Ensure flex for badge alignment */
+  align-items: center; /* Vertically center */
 }
 
 .nav-item .icon {
   margin-right: 8px;
   font-size: 16px;
+}
+
+.nav-item .badge {
+  margin-left: auto; /* Push to right */
+  background-color: var(--surface1);
+  color: var(--text);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  min-width: 20px;
+  text-align: center;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.nav-item.active .badge {
+  background-color: var(--blue);
+  color: var(--base);
+  opacity: 1;
 }
 
 .nav-item:hover {
@@ -371,14 +400,17 @@ main {
   transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.wallpaper-card:hover {
+.wallpaper-card:hover,
+.wallpaper-card:focus-visible {
   transform: translateY(-6px) scale(1.01);
   box-shadow: var(--shadow-lg);
   z-index: 5;
   border-color: var(--blue);
+  outline: none;
 }
 
-.wallpaper-card:hover img {
+.wallpaper-card:hover img,
+.wallpaper-card:focus-visible img {
   transform: scale(1.08);
 }
 
@@ -396,7 +428,8 @@ main {
   backdrop-filter: blur(0px); /* Transition to blur(2px) maybe? */
 }
 
-.wallpaper-card:hover .overlay {
+.wallpaper-card:hover .overlay,
+.wallpaper-card:focus-visible .overlay {
   opacity: 1;
 }
 
@@ -432,6 +465,11 @@ main {
   background: var(--yellow);
   border-color: var(--yellow);
   color: var(--base);
+}
+
+.action-btn.dislike:hover {
+  background: var(--red);
+  border-color: var(--red);
 }
 
 /* Settings View */

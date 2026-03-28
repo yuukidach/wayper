@@ -8,25 +8,63 @@ function esc(str) {
 
 // State
 let appState = {
-    mode: 'pool', // pool, favorites
+    mode: 'pool', // pool, favorites, trash
     purity: 'sfw', // sfw, nsfw
     monitors: [],
     selectedMonitor: null, // monitor name
     status: { running: false, pid: null },
     images: [],
     config: null, // Full config object
-    view: 'grid' // grid, settings
+    view: 'grid', // grid, settings
+
+    // Pagination
+    batchSize: 50,
+    currentBatchIndex: 0,
+
+    // Layout
+    gridColumns: 1
 };
+
+let observer = null;
+let sentinel = null;
+
+// Global Loader
+const loader = document.createElement('div');
+loader.className = 'global-loader';
+loader.innerHTML = '<div class="spinner"></div>';
+document.body.appendChild(loader);
+
+const loaderStyle = document.createElement('style');
+loaderStyle.textContent = `
+.global-loader {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
+    z-index: 9999; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+}
+.global-loader.visible { opacity: 1; pointer-events: auto; }
+.spinner {
+    width: 40px; height: 40px; border: 4px solid var(--surface0);
+    border-top-color: var(--blue); border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+`;
+document.head.appendChild(loaderStyle);
+
+function showLoader() { loader.classList.add('visible'); }
+function hideLoader() { loader.classList.remove('visible'); }
 
 // DOM Elements
 const els = {
     btnPrev: document.getElementById('btn-prev'),
     btnNext: document.getElementById('btn-next'),
+    btnUndo: document.getElementById('btn-undo'),
     btnFav: document.getElementById('btn-fav-current'),
     btnDislike: document.getElementById('btn-dislike-current'),
 
     btnPool: document.getElementById('btn-pool'),
     btnFavorites: document.getElementById('btn-favorites'),
+    btnBlocklist: document.getElementById('btn-blocklist'),
 
     btnSfw: document.getElementById('btn-sfw'),
     btnNsfw: document.getElementById('btn-nsfw'),
@@ -49,18 +87,36 @@ const els = {
     daemonDot: document.getElementById('daemon-dot'),
     daemonStatus: document.getElementById('daemon-status'),
     diskUsage: document.getElementById('disk-usage'),
+    countPool: document.getElementById('count-pool'),
+    countFavorites: document.getElementById('count-favorites'),
+    countBlocklist: document.getElementById('count-blocklist'),
 };
 
 // Init
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
+    // Platform detection for UI adjustments
+    if (typeof process !== 'undefined' && process.platform === 'darwin') {
+        document.body.classList.add('is-macos');
+    }
+
     setupEventListeners();
+    setupInfiniteScroll();
+
+    // Resize listener for grid layout
+    window.addEventListener('resize', debounce(() => {
+        updateGridMetrics();
+    }, 200));
+
     await fetchConfig(); // to get initial mode & settings
     await fetchMonitors();
     await fetchStatus();
     await fetchDiskUsage();
     await refreshImages();
+
+    // Initial metrics update after images loaded (or attempted)
+    setTimeout(updateGridMetrics, 500);
 
     // Poll status
     setInterval(fetchStatus, 3000);
@@ -71,12 +127,14 @@ function setupEventListeners() {
     // Top Controls
     els.btnPrev.onclick = () => controlAction('prev');
     els.btnNext.onclick = () => controlAction('next');
+    els.btnUndo.onclick = () => undoDislike();
     els.btnFav.onclick = () => controlAction('fav');
     els.btnDislike.onclick = () => controlAction('dislike');
 
     // Sidebar: Library
     els.btnPool.onclick = () => setViewMode('pool');
     els.btnFavorites.onclick = () => setViewMode('favorites');
+    els.btnBlocklist.onclick = () => setViewMode('trash');
 
     // Sidebar: Mode
     els.btnSfw.onclick = () => setPurity('sfw');
@@ -100,25 +158,141 @@ function handleGlobalKeydown(e) {
     // Ignore if typing in an input
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
 
+    // Check if a card is focused
+    const focusedCard = document.activeElement && document.activeElement.classList.contains('wallpaper-card') ? document.activeElement : null;
+
     switch(e.key) {
-        case 'ArrowRight':
         case 'l':
             controlAction('next');
             break;
-        case 'ArrowLeft':
         case 'h':
             controlAction('prev');
             break;
         case 'f':
-            controlAction('fav');
+            if (focusedCard) {
+                toggleFavoriteImage(focusedCard.dataset.path);
+            } else {
+                controlAction('fav');
+            }
             break;
-        case 'd':
-            controlAction('dislike');
+        case 'x':
+        case 'Delete':
+            if (focusedCard) {
+                dislikeImage(focusedCard.dataset.path);
+            } else {
+                controlAction('dislike');
+            }
+            break;
+        case 'z':
+            undoDislike();
+            break;
+        case 'm':
+            const nextMode = appState.purity === 'sfw' ? 'nsfw' : 'sfw';
+            setPurity(nextMode);
+            break;
+        case '1':
+            setViewMode('pool');
+            break;
+        case '2':
+            setViewMode('favorites');
+            break;
+        case '3':
+            setViewMode('trash');
+            break;
+        case 'Enter':
+            if (focusedCard) {
+                setWallpaper(focusedCard.dataset.path);
+            } else {
+                controlAction('next');
+            }
             break;
         case ' ':
             e.preventDefault();
-            controlAction('next');
+            if (focusedCard) {
+                setWallpaper(focusedCard.dataset.path);
+            } else {
+                controlAction('next');
+            }
             break;
+    }
+
+    // Grid Navigation
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault();
+        navigateGrid(e.key);
+    }
+
+    // Monitor shortcuts (4-9)
+    if (e.key >= '4' && e.key <= '9') {
+        const idx = parseInt(e.key) - 4;
+        if (appState.monitors[idx]) {
+            appState.selectedMonitor = appState.monitors[idx].name;
+            renderMonitors();
+            refreshImages();
+        }
+    }
+}
+
+// Debounce helper
+function debounce(func, wait) {
+    let timeout;
+    return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), wait);
+    };
+}
+
+function updateGridMetrics() {
+    const cards = document.getElementsByClassName('wallpaper-card');
+    if (cards.length < 2) {
+        // Fallback calculation if no cards to measure
+        const containerWidth = els.wallpaperGrid.clientWidth;
+        // minmax(260px, 1fr) + gap 24px (approx)
+        const cardWidth = 260 + 24;
+        appState.gridColumns = Math.max(1, Math.floor((containerWidth + 24) / cardWidth));
+        return;
+    }
+
+    const firstTop = cards[0].getBoundingClientRect().top;
+    for (let i = 1; i < cards.length; i++) {
+        if (cards[i].getBoundingClientRect().top > firstTop) {
+            appState.gridColumns = i;
+            return;
+        }
+    }
+    appState.gridColumns = cards.length; // All in one row
+}
+
+function navigateGrid(direction) {
+    const cards = document.getElementsByClassName('wallpaper-card'); // Live collection
+    if (cards.length === 0) return;
+
+    const focused = document.activeElement;
+    // Check if focused element is actually a card
+    let index = -1;
+    if (focused && focused.classList.contains('wallpaper-card')) {
+        index = Array.prototype.indexOf.call(cards, focused);
+    }
+
+    // If no card focused, start at 0
+    if (index === -1) {
+        cards[0].focus();
+        return;
+    }
+
+    const cols = appState.gridColumns || 1;
+    let nextIndex = index;
+
+    switch(direction) {
+        case 'ArrowRight': nextIndex = index + 1; break;
+        case 'ArrowLeft': nextIndex = index - 1; break;
+        case 'ArrowDown': nextIndex = index + cols; break;
+        case 'ArrowUp': nextIndex = index - cols; break;
+    }
+
+    if (nextIndex >= 0 && nextIndex < cards.length) {
+        cards[nextIndex].focus();
+        cards[nextIndex].scrollIntoView({ block: 'nearest' });
     }
 }
 
@@ -250,6 +424,8 @@ async function toggleDaemon() {
 async function setWallpaper(path) {
     if (!appState.selectedMonitor) return;
 
+    showLoader();
+
     // Optimistic UI update
     const card = document.querySelector(`[data-path="${path}"]`);
     if (card) {
@@ -273,19 +449,91 @@ async function setWallpaper(path) {
     } catch (e) {
         console.error("Set wallpaper failed", e);
         if (card) card.style.opacity = '1';
+    } finally {
+        hideLoader();
     }
 }
 
 async function toggleFavoriteImage(path) {
+    removeImageFromState(path);
     try {
         await fetch(`${API_URL}/api/image/favorite`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ image_path: path })
         });
-        refreshImages();
     } catch (e) {
         console.error("Favorite toggle failed", e);
+        refreshImages();
+    }
+}
+
+async function dislikeImage(path) {
+    removeImageFromState(path);
+    try {
+        await fetch(`${API_URL}/api/image/dislike`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_path: path })
+        });
+        setTimeout(fetchMonitors, 500);
+    } catch (e) {
+        console.error("Dislike failed", e);
+        refreshImages();
+    }
+}
+
+async function undoDislike() {
+    try {
+        await controlAction('undislike');
+        // Refresh grid to show restored image
+        refreshImages();
+    } catch (e) {
+        console.error("Undo failed", e);
+    }
+}
+
+async function restoreImage(path) {
+    removeImageFromState(path);
+    try {
+        await fetch(`${API_URL}/api/image/restore`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_path: path })
+        });
+    } catch (e) {
+        console.error("Restore failed", e);
+        refreshImages();
+    }
+}
+
+function removeImageFromState(path) {
+    const idx = appState.images.findIndex(img => img.path === path);
+    if (idx !== -1) {
+        appState.images.splice(idx, 1);
+        // If we removed an item before the current batch index, shift the index back
+        if (idx < appState.currentBatchIndex) {
+            appState.currentBatchIndex--;
+        }
+    }
+
+    const card = document.querySelector(`.wallpaper-card[data-path="${path}"]`);
+    if (card) {
+        // Preserve focus
+        if (document.activeElement === card) {
+            const next = card.nextElementSibling;
+            const prev = card.previousElementSibling;
+            if (next && next.classList.contains('wallpaper-card')) {
+                next.focus();
+            } else if (prev && prev.classList.contains('wallpaper-card')) {
+                prev.focus();
+            }
+        }
+        card.remove();
+    }
+
+    if (appState.images.length === 0) {
+        renderImages(); // Show empty state
     }
 }
 
@@ -309,7 +557,20 @@ async function fetchStatus() {
     try {
         const res = await fetch(`${API_URL}/api/status`);
         const data = await res.json();
+
+        // Check for external mode change (e.g. via CLI)
+        if (data.mode && data.mode !== appState.purity) {
+             console.log(`Mode changed externally: ${appState.purity} -> ${data.mode}`);
+             appState.purity = data.mode;
+             updateUI();
+             refreshImages();
+        }
+
         if (data.running !== appState.status.running) {
+            appState.status = data;
+            updateStatusUI();
+        } else {
+            // Update counts even if running state hasn't changed
             appState.status = data;
             updateStatusUI();
         }
@@ -364,12 +625,16 @@ async function refreshImages() {
 
 function updateUI() {
     // Mode
+    els.btnPool.classList.remove('active');
+    els.btnFavorites.classList.remove('active');
+    els.btnBlocklist.classList.remove('active');
+
     if (appState.mode === 'pool') {
         els.btnPool.classList.add('active');
-        els.btnFavorites.classList.remove('active');
-    } else {
-        els.btnPool.classList.remove('active');
+    } else if (appState.mode === 'favorites') {
         els.btnFavorites.classList.add('active');
+    } else if (appState.mode === 'trash') {
+        els.btnBlocklist.classList.add('active');
     }
 
     // Purity
@@ -384,6 +649,17 @@ function updateUI() {
 
 function updateStatusUI() {
     const running = appState.status.running;
+
+    // Update counts
+    if (appState.status.pool_count !== undefined) {
+        els.countPool.innerText = appState.status.pool_count;
+    }
+    if (appState.status.favorites_count !== undefined) {
+        els.countFavorites.innerText = appState.status.favorites_count;
+    }
+    if (appState.status.blocklist_count !== undefined) {
+        els.countBlocklist.innerText = appState.status.blocklist_count;
+    }
 
     if (running) {
         els.daemonDot.classList.add('running');
@@ -402,18 +678,37 @@ function updateStatusUI() {
     }
 }
 
+function setupInfiniteScroll() {
+    sentinel = document.createElement('div');
+    sentinel.className = 'scroll-sentinel';
+    sentinel.style.width = '100%';
+    sentinel.style.height = '100px';
+
+    observer = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+            renderNextBatch();
+        }
+    }, {
+        root: null, // viewport
+        rootMargin: '600px', // Load more well before reaching bottom
+        threshold: 0.01
+    });
+}
+
 function renderMonitors() {
     els.monitorsList.innerHTML = '';
 
-    appState.monitors.forEach(m => {
+    appState.monitors.forEach((m, index) => {
         const el = document.createElement('div');
         el.className = `monitor-item ${m.name === appState.selectedMonitor ? 'active' : ''}`;
 
         const isLandscape = m.orientation === 'landscape';
         const icon = isLandscape ? '🖥️' : '📱';
+        const key = index + 4;
+        const shortcut = key <= 9 ? `<kbd>${key}</kbd>` : '';
 
         el.innerHTML = `
-            <h4>${icon} ${esc(m.name)}</h4>
+            <h4>${icon} ${esc(m.name)} ${shortcut}</h4>
             <p>${esc(m.orientation)} • ${m.current_image ? 'Has Wallpaper' : 'Empty'}</p>
         `;
 
@@ -429,28 +724,74 @@ function renderMonitors() {
 
 function renderImages() {
     els.wallpaperGrid.innerHTML = '';
+    appState.currentBatchIndex = 0;
 
     if (appState.images.length === 0) {
         els.wallpaperGrid.innerHTML = `
             <div class="empty-state">
                 <div class="empty-state-icon">🏜️</div>
-                <p>No wallpapers found in ${appState.mode} / ${appState.purity}.</p>
+                <p>No wallpapers found in ${esc(appState.mode)} / ${esc(appState.purity)}.</p>
             </div>
         `;
         return;
     }
 
-    appState.images.forEach(img => {
-        const card = document.createElement('div');
-        card.className = 'wallpaper-card';
-        card.dataset.path = img.path;
+    renderNextBatch();
+    setTimeout(updateGridMetrics, 100);
+}
 
-        if (img.path.includes('/portrait/')) {
-            card.classList.add('portrait');
-        }
+function renderNextBatch() {
+    if (appState.currentBatchIndex >= appState.images.length) return;
 
-        const imgUrl = `${API_URL}/images/${encodeURI(img.path)}`;
+    const start = appState.currentBatchIndex;
+    const end = Math.min(start + appState.batchSize, appState.images.length);
+    const batch = appState.images.slice(start, end);
 
+    if (sentinel.parentNode) sentinel.remove();
+
+    const fragment = document.createDocumentFragment();
+    batch.forEach(img => {
+        fragment.appendChild(createCard(img));
+    });
+
+    els.wallpaperGrid.appendChild(fragment);
+    appState.currentBatchIndex = end;
+
+    if (appState.currentBatchIndex < appState.images.length) {
+        els.wallpaperGrid.appendChild(sentinel);
+        observer.observe(sentinel);
+    } else {
+        observer.unobserve(sentinel);
+    }
+}
+
+function createCard(img) {
+    const card = document.createElement('div');
+    card.className = 'wallpaper-card';
+    card.dataset.path = img.path;
+    card.tabIndex = 0; // Make focusable
+
+    if (img.path.includes('/portrait/')) {
+        card.classList.add('portrait');
+    }
+
+    const imgUrl = `${API_URL}/images/${encodeURI(img.path)}`;
+
+    if (appState.mode === 'trash') {
+        card.innerHTML = `
+            <img src="${imgUrl}" loading="lazy" alt="${esc(img.name)}">
+            <div class="overlay">
+                <button class="action-btn restore" title="Restore to Pool">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                         <path d="M3 7v6h6"></path>
+                         <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>
+                    </svg>
+                </button>
+            </div>
+        `;
+        const btn = card.querySelector('button');
+        btn.onclick = (e) => { e.stopPropagation(); restoreImage(img.path); };
+    } else {
         card.innerHTML = `
             <img src="${imgUrl}" loading="lazy" alt="${esc(img.name)}">
             <div class="overlay">
@@ -464,6 +805,12 @@ function renderImages() {
                         <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
                     </svg>
                 </button>
+                <button class="action-btn dislike" title="Dislike">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
             </div>
         `;
 
@@ -474,7 +821,8 @@ function renderImages() {
         const btns = card.querySelectorAll('button');
         btns[0].onclick = (e) => { e.stopPropagation(); setWallpaper(img.path); };
         btns[1].onclick = (e) => { e.stopPropagation(); toggleFavoriteImage(img.path); };
+        btns[2].onclick = (e) => { e.stopPropagation(); dislikeImage(img.path); };
+    }
 
-        els.wallpaperGrid.appendChild(card);
-    });
+    return card;
 }

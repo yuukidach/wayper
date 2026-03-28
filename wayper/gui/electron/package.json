@@ -5,11 +5,17 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder",
-    "dist": "electron-builder"
+    "build:backend": "cd ../../.. && uv run pyinstaller --clean wayper.spec",
+    "dist": "npm run build:backend && electron-builder"
   },
   "build": {
     "appId": "com.wayper.electron",
+    "extraResources": [
+      {
+        "from": "../../../dist/wayper-backend",
+        "to": "wayper-backend"
+      }
+    ],
     "mac": {
       "target": "dmg",
       "category": "public.app-category.utilities"
