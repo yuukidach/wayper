@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "build:backend": "cd ../.. && uv run pyinstaller --clean wayper.spec",
-    "dist": "npm run build:backend && electron-builder"
+    "dist": "npm run build:backend && ./node_modules/.bin/electron-builder"
   },
   "build": {
     "appId": "com.wayper.electron",
