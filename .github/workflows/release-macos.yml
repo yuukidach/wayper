@@ -1,0 +1,45 @@
+name: Build macOS Electron App
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Python dependencies
+        run: |
+          uv venv
+          uv pip install -e .
+          uv pip install pyinstaller
+
+      - name: Install Electron dependencies
+        working-directory: wayper/gui/electron
+        run: npm install
+
+      - name: Build backend + Electron app
+        working-directory: wayper/gui/electron
+        run: npm run dist
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: wayper/gui/electron/dist/*.dmg
