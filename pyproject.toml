@@ -14,13 +14,9 @@ dependencies = [
     "send2trash>=1.8",
 ]
 
-[project.optional-dependencies]
-linux = ["PyGObject>=3.42"]
-
 [project.scripts]
 wayper = "wayper.cli:cli"
-wayper-gui = "wayper.gui:run_app"
-wayper-electron = "wayper.web.launcher:run_app"
+wayper-gui = "wayper.web.launcher:run_app"
 wayper-mcp = "wayper.mcp_server:main"
 
 [build-system]
@@ -38,5 +34,3 @@ extend-exclude = [".claude"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 
-[tool.ruff.lint.per-file-ignores]
-"wayper/gui/gtk/*.py" = ["E402"]
