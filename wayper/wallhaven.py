@@ -43,7 +43,9 @@ class WallhavenClient:
     def _exclude_query(self) -> str:
         """Build exclusion query fragment from exclude_tags config."""
         tags = self.config.wallhaven.exclude_tags
-        return " ".join(f"-{t}" for t in tags) if tags else ""
+        if not tags:
+            return ""
+        return " ".join(f'-"{t}"' if " " in t else f"-{t}" for t in tags)
 
     def _matches_exclude_combo(self, tag_names: list[str]) -> bool:
         """Return True if tag_names matches any exclude combo rule."""
@@ -73,7 +75,15 @@ class WallhavenClient:
         try:
             resp = await self.client.get(SEARCH_URL, params=params)
             resp.raise_for_status()
-            return resp.json().get("data", [])
+            data = resp.json()
+            results = data.get("data", [])
+            # If random page exceeded actual last page, retry with page 1
+            if not results and page > 1:
+                params["page"] = 1
+                resp = await self.client.get(SEARCH_URL, params=params)
+                resp.raise_for_status()
+                results = resp.json().get("data", [])
+            return results
         except Exception:
             return []
 
