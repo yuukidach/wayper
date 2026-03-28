@@ -37,15 +37,13 @@ jobs:
           printf '%s\n' "$AUR_SSH_KEY" > /root/.ssh/id_ed25519
           chmod 600 /root/.ssh/id_ed25519
           echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" >> /root/.ssh/known_hosts
-          ssh-keygen -lf /root/.ssh/id_ed25519
-
-      - name: Test SSH connection
-        run: ssh -Tv aur@aur.archlinux.org help 2>&1 || true
 
       - name: Clone AUR repo and update
         run: |
           git clone ssh://aur@aur.archlinux.org/wayper.git aur
           cd aur
+          git config user.name "Da Chen"
+          git config user.email "dachen@connect.hku.hk"
           sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
           sed -i "s/^sha256sums=.*/sha256sums=('$SHA256')/" PKGBUILD
 
@@ -53,9 +51,9 @@ jobs:
           useradd -m builder
           chown -R builder: .
           su builder -c "makepkg --printsrcinfo > .SRCINFO"
+          chown -R root: .
 
-          git config user.name "Da Chen"
-          git config user.email "dachen@connect.hku.hk"
           git add PKGBUILD .SRCINFO
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
           git commit -m "bump: v$VERSION"
           git push
