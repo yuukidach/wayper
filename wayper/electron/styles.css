@@ -499,6 +499,7 @@ main {
   cursor: pointer;
   aspect-ratio: 16 / 9;
   border: 1px solid rgba(255, 255, 255, 0.06);
+  scroll-margin: 24px;
   transition: transform var(--duration) var(--ease),
               border-color var(--duration) var(--ease),
               box-shadow 0.3s var(--ease);
