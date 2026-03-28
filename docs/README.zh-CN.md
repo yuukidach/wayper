@@ -92,9 +92,9 @@ wayper --json status        # JSON 格式输出
 
 | 按键 | 操作 | 按键 | 操作 |
 |------|------|------|------|
-| `←` / `→` | 上一张 / 下一张 | `Enter` / `Space` | 设为壁纸 |
+| `←` / `→` | 上一张 / 下一张 | `Enter` | 设为壁纸 |
 | `f` | 收藏 | `x` / `Del` | 拉黑 |
-| `o` | 在 Wallhaven 打开 | `Esc` | 关闭灯箱 |
+| `o` | 在 Wallhaven 打开 | `Space` / `Esc` | 关闭灯箱 |
 
 ### Hyprland 快捷键示例
 

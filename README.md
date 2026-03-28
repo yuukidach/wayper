@@ -92,9 +92,9 @@ wayper --json status        # machine-readable output
 
 | Key | Action | Key | Action |
 |-----|--------|-----|--------|
-| `←` / `→` | Previous / Next image | `Enter` / `Space` | Set as wallpaper |
+| `←` / `→` | Previous / Next image | `Enter` | Set as wallpaper |
 | `f` | Favorite | `x` / `Del` | Dislike |
-| `o` | Open on Wallhaven | `Esc` | Close lightbox |
+| `o` | Open on Wallhaven | `Space` / `Esc` | Close lightbox |
 
 ### Keybindings
 

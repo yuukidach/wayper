@@ -196,6 +196,7 @@ footer .links a { color: var(--subtext); }
       <a href="#install">Install</a>
       <a href="#usage">Usage</a>
       <a href="#browse">GUI</a>
+      <a href="#keybindings">Keys</a>
       <a href="#mcp">MCP</a>
     </div>
     <a class="gh-btn" href="https://github.com/yuukidach/wayper">GitHub</a>
@@ -278,10 +279,18 @@ footer .links a { color: var(--subtext); }
   <h2>Install</h2>
   <div class="tabs">
     <div class="tab active" onclick="switchTab(event, 'tab-aur')">Arch (AUR)</div>
+    <div class="tab" onclick="switchTab(event, 'tab-macos')">macOS</div>
     <div class="tab" onclick="switchTab(event, 'tab-source')">From source</div>
   </div>
   <div id="tab-aur" class="tab-content active">
     <pre><code>paru -S wayper     # or: yay -S wayper</code></pre>
+  </div>
+  <div id="tab-macos" class="tab-content">
+    <pre><code># Download the latest .dmg from GitHub Releases
+curl -LO https://github.com/yuukidach/wayper/releases/latest/download/wayper.dmg
+open wayper.dmg
+# Drag wayper.app to Applications, then run from Launchpad or:
+wayper-gui</code></pre>
   </div>
   <div id="tab-source" class="tab-content">
     <pre><code>git clone https://github.com/yuukidach/wayper.git
@@ -292,16 +301,18 @@ uv venv && uv pip install -e .</code></pre>
 
 <section id="usage">
   <h2>Usage</h2>
-  <pre><code>wayper daemon start         # start background rotation + downloads
-wayper daemon stop          # stop daemon
-wayper next                 # next wallpaper
-wayper prev                 # previous wallpaper
+  <pre><code>wayper daemon               # start background rotation + downloads
+wayper next                 # next wallpaper (forward or new random)
+wayper prev                 # previous wallpaper from history
 wayper fav [--open]         # favorite current wallpaper
+wayper unfav                # remove from favorites
 wayper dislike              # blacklist + switch
 wayper undislike            # undo last dislike
 wayper mode [sfw|nsfw]      # toggle or set mode
 wayper status               # show current state
-wayper-gui                  # GUI app</code></pre>
+wayper-gui                  # GUI app
+wayper setup                # install .desktop entry (Linux)
+wayper --json status        # machine-readable output</code></pre>
 </section>
 
 <section id="browse">
@@ -311,19 +322,31 @@ wayper-gui                  # GUI app</code></pre>
          style="width:100%;max-width:740px;border-radius:12px;border:1px solid var(--surface0);box-shadow:0 4px 24px rgba(0,0,0,.3)">
   </p>
   <p style="margin-bottom:16px;color:var(--subtext);font-size:.92em">
-    <code>wayper-gui</code> — browse your pool, favorites, and disliked wallpapers. Quick actions, daemon control, settings. Every action has a keyboard shortcut — no mouse required.
+    <code>wayper-gui</code> — browse your pool, favorites, and disliked wallpapers. Quick actions, daemon control, settings. Designed to be fully operable without a mouse.
   </p>
-  <div class="kbd-grid">
-    <div><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <span class="label">switch category</span></div>
-    <div><kbd>Enter</kbd> <span class="label">preview (lightbox)</span></div>
+  <p style="margin-bottom:8px;font-size:.88em;color:var(--overlay);font-weight:500">Grid view</p>
+  <div class="kbd-grid" style="margin-bottom:18px">
+    <div><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <span class="label">pool / fav / blocklist</span></div>
+    <div><kbd>Enter</kbd> / <kbd>Space</kbd> <span class="label">preview (lightbox)</span></div>
     <div><kbd>h</kbd> / <kbd>l</kbd> <span class="label">prev / next wallpaper</span></div>
     <div><kbd>f</kbd> <span class="label">favorite</span></div>
-    <div><kbd>x</kbd> <span class="label">dislike / remove</span></div>
+    <div><kbd>x</kbd> / <kbd>Del</kbd> <span class="label">dislike / remove</span></div>
     <div><kbd>z</kbd> <span class="label">undo dislike</span></div>
     <div><kbd>o</kbd> <span class="label">open on Wallhaven</span></div>
     <div><kbd>m</kbd> <span class="label">toggle SFW/NSFW</span></div>
     <div><kbd>s</kbd> <span class="label">settings</span></div>
-    <div><kbd>Esc</kbd> <span class="label">close / unfocus</span></div>
+    <div><kbd>Esc</kbd> <span class="label">unfocus card</span></div>
+    <div><kbd>Arrow keys</kbd> <span class="label">navigate grid</span></div>
+    <div><kbd>4</kbd>–<kbd>9</kbd> <span class="label">switch monitor</span></div>
+  </div>
+  <p style="margin-bottom:8px;font-size:.88em;color:var(--overlay);font-weight:500">Lightbox preview</p>
+  <div class="kbd-grid">
+    <div><kbd>←</kbd> / <kbd>→</kbd> <span class="label">previous / next image</span></div>
+    <div><kbd>Enter</kbd> <span class="label">set as wallpaper</span></div>
+    <div><kbd>f</kbd> <span class="label">favorite</span></div>
+    <div><kbd>x</kbd> / <kbd>Del</kbd> <span class="label">dislike</span></div>
+    <div><kbd>o</kbd> <span class="label">open on Wallhaven</span></div>
+    <div><kbd>Space</kbd> / <kbd>Esc</kbd> <span class="label">close lightbox</span></div>
   </div>
 </section>
 
@@ -340,6 +363,31 @@ wayper-gui                  # GUI app</code></pre>
   <p style="margin-top:14px;color:var(--subtext);font-size:.88em">
     Tools: <code>status</code> <code>next_wallpaper</code> <code>prev_wallpaper</code> <code>fav</code> <code>unfav</code> <code>dislike</code> <code>undislike</code> <code>set_mode</code> <code>delete_wallpaper</code>
   </p>
+</section>
+
+<section id="keybindings">
+  <h2>Keybindings</h2>
+  <p style="margin-bottom:14px;color:var(--subtext);font-size:.92em">Bind wayper commands to your compositor shortcuts for instant wallpaper control.</p>
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab(event, 'tab-hypr')">Hyprland</div>
+    <div class="tab" onclick="switchTab(event, 'tab-aero')">AeroSpace (macOS)</div>
+  </div>
+  <div id="tab-hypr" class="tab-content active">
+    <pre><code>bind = $mod, F9,       exec, wayper dislike
+bind = $mod SHIFT, F9, exec, wayper undislike
+bind = $mod, F10,      exec, wayper fav
+bind = $mod SHIFT, F10,exec, wayper unfav
+bind = $mod CTRL, F10, exec, wayper fav --open
+bind = $mod, F11,      exec, wayper next
+bind = $mod SHIFT, F11,exec, wayper prev
+bind = $mod, F12,      exec, wayper mode
+exec-once = wayper daemon</code></pre>
+  </div>
+  <div id="tab-aero" class="tab-content">
+    <pre><code>cmd-shift-n = 'exec-and-forget wayper next'
+cmd-shift-b = 'exec-and-forget wayper dislike'
+cmd-shift-f = 'exec-and-forget wayper fav'</code></pre>
+  </div>
 </section>
 
 <section>
@@ -366,8 +414,13 @@ wayper-gui                  # GUI app</code></pre>
 
 <script>
 function switchTab(e, id) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  var parent = e.target.parentElement;
+  parent.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+  var sibling = parent.nextElementSibling;
+  while (sibling && sibling.classList.contains('tab-content')) {
+    sibling.classList.remove('active');
+    sibling = sibling.nextElementSibling;
+  }
   e.target.classList.add('active');
   document.getElementById(id).classList.add('active');
 }

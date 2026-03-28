@@ -204,9 +204,12 @@ function handleGlobalKeydown(e) {
                 navigateLightbox(1);
                 return;
             case 'Enter':
-            case ' ':
                 e.preventDefault();
                 if (lightboxImg) { setWallpaper(lightboxImg.path); closeLightbox(); }
+                return;
+            case ' ':
+                e.preventDefault();
+                closeLightbox();
                 return;
             case 'f':
                 if (lightboxImg) { toggleFavoriteImage(lightboxImg.path); closeLightbox(); }
