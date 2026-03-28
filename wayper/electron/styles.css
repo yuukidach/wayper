@@ -305,20 +305,23 @@ aside {
 }
 
 .nav-item .badge {
-  margin-left: 8px;
+  margin-left: auto;
+  margin-right: 4px;
   background-color: var(--surface1);
   color: var(--subtext0);
   font-size: 10px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   padding: 1px 6px;
   border-radius: 10px;
-  min-width: 18px;
+  min-width: 28px;
   text-align: center;
 }
 
 .nav-item kbd {
-  margin-left: auto;
+  margin-left: 0;
   opacity: 0.4;
+  flex-shrink: 0;
 }
 
 .nav-item:hover {
@@ -939,6 +942,208 @@ footer {
 .blocklist-entry .entry-action:hover {
   border-color: var(--red);
   color: var(--red);
+}
+
+/* ---------- Lightbox ---------- */
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.25s var(--ease);
+}
+
+.lightbox.visible {
+  opacity: 1;
+}
+
+.lightbox.visible .lightbox-image {
+  transform: scale(1);
+  opacity: 1;
+}
+
+.lightbox.visible .lightbox-toolbar {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+
+.lightbox-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(17, 17, 27, 0.94);
+  backdrop-filter: blur(12px);
+}
+
+.lightbox-image {
+  position: relative;
+  max-width: calc(100vw - 120px);
+  max-height: calc(100vh - 100px);
+  object-fit: contain;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  z-index: 1;
+  transform: scale(0.92);
+  opacity: 0;
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.25s var(--ease);
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--overlay1);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background var(--duration) var(--ease),
+              color var(--duration) var(--ease);
+}
+
+.lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--text);
+}
+
+.lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--overlay0);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.3s var(--ease),
+              background var(--duration) var(--ease),
+              color var(--duration) var(--ease),
+              transform var(--duration) var(--ease);
+}
+
+.lightbox:hover .lightbox-nav {
+  opacity: 1;
+}
+
+.lightbox-nav:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--text);
+  transform: translateY(-50%) scale(1.08);
+}
+
+.lightbox-nav:active {
+  transform: translateY(-50%) scale(0.95);
+}
+
+.lightbox-nav.prev {
+  left: 20px;
+}
+
+.lightbox-nav.next {
+  right: 20px;
+}
+
+.lightbox-toolbar {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(12px);
+  opacity: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(24, 24, 37, 0.8);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 6px 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.3s var(--ease);
+  transition-delay: 0.08s;
+}
+
+.lb-btn {
+  background: transparent;
+  border: none;
+  color: var(--overlay1);
+  padding: 7px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background var(--duration) var(--ease),
+              color var(--duration) var(--ease),
+              transform 0.15s var(--ease);
+}
+
+.lb-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.lb-btn:active {
+  transform: scale(0.95);
+}
+
+.lb-btn[data-action="set"]:hover {
+  background: rgba(137, 180, 250, 0.12);
+  color: var(--blue);
+}
+
+.lb-btn[data-action="fav"]:hover,
+.lb-btn[data-action="fav"].active {
+  background: rgba(249, 226, 175, 0.1);
+  color: var(--yellow);
+}
+
+.lb-btn[data-action="dislike"]:hover {
+  background: rgba(243, 139, 168, 0.1);
+  color: var(--red);
+}
+
+.lb-btn[data-action="restore"]:hover {
+  background: rgba(166, 227, 161, 0.1);
+  color: var(--green);
+}
+
+.lb-btn[data-action="url"]:hover {
+  background: rgba(116, 199, 236, 0.1);
+  color: var(--sapphire);
+}
+
+.lb-spacer {
+  width: 1px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.06);
+  margin: 0 4px;
+}
+
+/* URL button on card overlay */
+.action-btn.url:hover {
+  background: var(--sapphire);
+  border-color: var(--sapphire);
+  color: var(--crust);
 }
 
 /* ---------- Utilities ---------- */

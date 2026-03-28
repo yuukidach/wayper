@@ -35,7 +35,8 @@
 - **SFW/NSFW toggle** — one key to switch. Persistent across sessions.
 - **History navigation** — prev/next through your wallpaper history. Browser-style back/forward per monitor.
 - **Favorites & blacklist** — like/dislike with undo. Favorites stay in rotation.
-- **Cross-platform GUI** — browse, preview, and manage your collection with daemon control and settings. Works on Linux and macOS. Keyboard-driven.
+- **Cross-platform GUI** — browse, preview, and manage your collection with daemon control and settings. Works on Linux and macOS.
+- **Keyboard-driven** — every action has a keyboard shortcut. Grid navigation, lightbox preview, favorites, dislike — all without touching the mouse.
 - **AI-native** — built-in MCP server lets AI assistants (Claude Code, etc.) control your wallpapers directly. Ask your AI to "delete this broken wallpaper" or "favorite this one" — it just works.
 - **JSON output** — `--json` flag on every command for scripting and automation.
 
@@ -74,14 +75,26 @@ wayper --json status        # machine-readable output
 
 ### GUI App
 
-`wayper-gui` launches a standalone app with browse, quick actions (next/prev/fav/dislike), daemon control, and settings — all in one window.
+`wayper-gui` launches a standalone app with browse, quick actions (next/prev/fav/dislike), daemon control, and settings — all in one window. Designed to be fully operable without a mouse.
 
-```
-1/2/3    switch category        Enter    set as wallpaper
-f        favorite               x        remove/reject/restore
-o        open on Wallhaven      d        delete
-n/p      next/prev wallpaper    m        toggle SFW/NSFW
-```
+**Grid view:**
+
+| Key | Action | Key | Action |
+|-----|--------|-----|--------|
+| `1` `2` `3` | Pool / Favorites / Blocklist | `m` | Toggle SFW/NSFW |
+| `h` / `l` | Prev / Next wallpaper | `f` | Favorite (focused card or current) |
+| `x` / `Del` | Dislike / Remove | `z` | Undo dislike |
+| `o` | Open on Wallhaven | `s` | Settings |
+| `Enter` / `Space` | Preview (lightbox) | `Esc` | Unfocus card |
+| Arrow keys | Navigate grid | `4`–`9` | Switch monitor |
+
+**Lightbox preview:**
+
+| Key | Action | Key | Action |
+|-----|--------|-----|--------|
+| `←` / `→` | Previous / Next image | `Enter` / `Space` | Set as wallpaper |
+| `f` | Favorite | `x` / `Del` | Dislike |
+| `o` | Open on Wallhaven | `Esc` | Close lightbox |
 
 ### Keybindings
 

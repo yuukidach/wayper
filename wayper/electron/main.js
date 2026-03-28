@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron')
+const { app, BrowserWindow, shell } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const http = require('http')
@@ -79,6 +79,12 @@ function createWindow () {
   })
 
   mainWindow.loadFile('index.html')
+
+  // Open external URLs in system browser instead of new Electron window
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url)
+    return { action: 'deny' }
+  })
 }
 
 const gotTheLock = app.requestSingleInstanceLock()

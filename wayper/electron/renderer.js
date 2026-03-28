@@ -6,6 +6,33 @@ function esc(str) {
     return _escDiv.innerHTML;
 }
 
+// SVG icon templates
+const ICONS = {
+    setWallpaper: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`,
+    favorite: (s = 16, filled = false) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`,
+    dislike: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`,
+    restore: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path></svg>`,
+    externalLink: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`,
+    chevronLeft: (s = 24) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>`,
+    chevronRight: (s = 24) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 6 15 12 9 18"/></svg>`,
+};
+
+// Wallhaven helpers
+function wallhavenId(name) {
+    const stem = name.includes('.') ? name.split('.').slice(0, -1).join('.') : name;
+    return stem.includes('-') ? stem.split('-').slice(1).join('-') : stem;
+}
+
+function openWallhavenUrl(name) {
+    window.open(`https://wallhaven.cc/w/${wallhavenId(name)}`, '_blank');
+}
+
+function focusedCardImage() {
+    const card = document.activeElement;
+    if (!card || !card.classList.contains('wallpaper-card')) return null;
+    return appState.images.find(i => i.path === card.dataset.path) || null;
+}
+
 // State
 let appState = {
     mode: 'pool', // pool, favorites, trash
@@ -162,10 +189,47 @@ function handleGlobalKeydown(e) {
     // Ignore if typing in an input
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
 
+    // Lightbox-specific shortcuts
+    if (lightboxEl) {
+        switch(e.key) {
+            case 'Escape':
+                closeLightbox();
+                return;
+            case 'ArrowLeft':
+                e.preventDefault();
+                navigateLightbox(-1);
+                return;
+            case 'ArrowRight':
+                e.preventDefault();
+                navigateLightbox(1);
+                return;
+            case 'Enter':
+            case ' ':
+                e.preventDefault();
+                if (lightboxImg) { setWallpaper(lightboxImg.path); closeLightbox(); }
+                return;
+            case 'f':
+                if (lightboxImg) { toggleFavoriteImage(lightboxImg.path); closeLightbox(); }
+                return;
+            case 'x':
+            case 'Delete':
+                if (lightboxImg) { dislikeImage(lightboxImg.path); closeLightbox(); }
+                return;
+            case 'o':
+                if (lightboxImg) openWallhavenUrl(lightboxImg.name);
+                return;
+        }
+        return;
+    }
+
     // Check if a card is focused
     const focusedCard = document.activeElement && document.activeElement.classList.contains('wallpaper-card') ? document.activeElement : null;
 
     switch(e.key) {
+        case 'Escape':
+            // Unfocus card
+            if (focusedCard) document.activeElement.blur();
+            break;
         case 'l':
             controlAction('next');
             break;
@@ -186,6 +250,9 @@ function handleGlobalKeydown(e) {
             } else {
                 controlAction('dislike');
             }
+            break;
+        case 'o':
+            { const img = focusedCardImage(); if (img) openWallhavenUrl(img.name); }
             break;
         case 'z':
             undoDislike();
@@ -218,19 +285,9 @@ function handleGlobalKeydown(e) {
             }
             break;
         case 'Enter':
-            if (focusedCard) {
-                setWallpaper(focusedCard.dataset.path);
-            } else {
-                controlAction('next');
-            }
-            break;
         case ' ':
             e.preventDefault();
-            if (focusedCard) {
-                setWallpaper(focusedCard.dataset.path);
-            } else {
-                controlAction('next');
-            }
+            { const img = focusedCardImage(); if (img) showLightbox(img); else controlAction('next'); }
             break;
     }
 
@@ -725,9 +782,7 @@ function updateStatusUI() {
         els.countFavorites.innerText = appState.status.favorites_count;
     }
     if (appState.status.blocklist_count !== undefined) {
-        const r = appState.status.recoverable_count || 0;
-        const t = appState.status.blocklist_count;
-        els.countBlocklist.innerText = r > 0 ? `${r}/${t}` : t;
+        els.countBlocklist.innerText = appState.status.blocklist_count;
     }
 
     if (running) {
@@ -949,53 +1004,122 @@ function createCard(img) {
         card.innerHTML = `
             <img class="loading" src="${imgUrl}" loading="lazy" alt="${esc(img.name)}">
             <div class="overlay">
-                <button class="action-btn restore" title="Restore to Pool">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                         <path d="M3 7v6h6"></path>
-                         <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>
-                    </svg>
-                </button>
+                <button class="action-btn restore" title="Restore to Pool">${ICONS.restore()}</button>
+                <button class="action-btn url" title="Open on Wallhaven">${ICONS.externalLink()}</button>
             </div>
         `;
         const cardImg = card.querySelector('img');
         cardImg.onload = () => cardImg.classList.remove('loading');
-        const btn = card.querySelector('button');
-        btn.onclick = (e) => { e.stopPropagation(); restoreImage(img.path); };
+        const btns = card.querySelectorAll('button');
+        btns[0].onclick = (e) => { e.stopPropagation(); restoreImage(img.path); };
+        btns[1].onclick = (e) => { e.stopPropagation(); openWallhavenUrl(img.name); };
+        card.onclick = () => showLightbox(img);
     } else {
         card.innerHTML = `
             <img class="loading" src="${imgUrl}" loading="lazy" alt="${esc(img.name)}">
             <div class="overlay">
-                <button class="action-btn" title="Set Wallpaper">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M5 12h14M12 5l7 7-7 7"/>
-                    </svg>
-                </button>
-                <button class="action-btn fav ${img.is_favorite ? 'active' : ''}" title="Favorite">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="${img.is_favorite ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2">
-                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
-                    </svg>
-                </button>
-                <button class="action-btn dislike" title="Dislike">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
+                <button class="action-btn" title="Set Wallpaper">${ICONS.setWallpaper()}</button>
+                <button class="action-btn fav ${img.is_favorite ? 'active' : ''}" title="Favorite">${ICONS.favorite(16, img.is_favorite)}</button>
+                <button class="action-btn dislike" title="Dislike">${ICONS.dislike()}</button>
+                <button class="action-btn url" title="Open on Wallhaven">${ICONS.externalLink()}</button>
             </div>
         `;
-
         const cardImg = card.querySelector('img');
         cardImg.onload = () => cardImg.classList.remove('loading');
-
-        // Click on card -> Set wallpaper
-        card.onclick = () => setWallpaper(img.path);
-
-        // Buttons
+        card.onclick = () => showLightbox(img);
         const btns = card.querySelectorAll('button');
         btns[0].onclick = (e) => { e.stopPropagation(); setWallpaper(img.path); };
         btns[1].onclick = (e) => { e.stopPropagation(); toggleFavoriteImage(img.path); };
         btns[2].onclick = (e) => { e.stopPropagation(); dislikeImage(img.path); };
+        btns[3].onclick = (e) => { e.stopPropagation(); openWallhavenUrl(img.name); };
     }
 
     return card;
+}
+
+// --- Lightbox ---
+
+let lightboxEl = null;
+let lightboxImg = null;
+
+function showLightbox(img) {
+    lightboxImg = img;
+    const isTrash = appState.mode === 'trash';
+
+    // If lightbox already exists, just swap the image (avoids DOM thrashing)
+    if (lightboxEl) {
+        lightboxEl.querySelector('.lightbox-image').src = imageUrl(img.path);
+        return;
+    }
+
+    lightboxEl = document.createElement('div');
+    lightboxEl.className = 'lightbox';
+    lightboxEl.innerHTML = `
+        <div class="lightbox-backdrop"></div>
+        <img class="lightbox-image" src="${imageUrl(img.path)}" alt="">
+        <div class="lightbox-toolbar">
+            ${isTrash ? `
+                <button class="lb-btn" data-action="restore" title="Restore to Pool">
+                    ${ICONS.restore(18)}<span>Restore</span>
+                </button>
+            ` : `
+                <button class="lb-btn" data-action="set" title="Set Wallpaper (Enter)">
+                    ${ICONS.setWallpaper(18)}<span>Set</span><kbd>Enter</kbd>
+                </button>
+                <button class="lb-btn" data-action="fav" title="Favorite (F)">
+                    ${ICONS.favorite(18)}<span>Fav</span><kbd>F</kbd>
+                </button>
+                <button class="lb-btn" data-action="dislike" title="Dislike (X)">
+                    ${ICONS.dislike(18)}<span>Dislike</span><kbd>X</kbd>
+                </button>
+            `}
+            <div class="lb-spacer"></div>
+            <button class="lb-btn" data-action="url" title="Open on Wallhaven (O)">
+                ${ICONS.externalLink(18)}<span>Wallhaven</span><kbd>O</kbd>
+            </button>
+        </div>
+        <button class="lightbox-close" title="Close (Esc)">${ICONS.dislike(20)}</button>
+        <button class="lightbox-nav prev" title="Previous image">${ICONS.chevronLeft()}</button>
+        <button class="lightbox-nav next" title="Next image">${ICONS.chevronRight()}</button>
+    `;
+
+    document.body.appendChild(lightboxEl);
+    requestAnimationFrame(() => lightboxEl.classList.add('visible'));
+
+    // All button actions read from lightboxImg (not closure) to stay current after navigation
+    lightboxEl.querySelector('.lightbox-backdrop').onclick = closeLightbox;
+    lightboxEl.querySelector('.lightbox-close').onclick = closeLightbox;
+    lightboxEl.querySelector('.lightbox-nav.prev').onclick = () => navigateLightbox(-1);
+    lightboxEl.querySelector('.lightbox-nav.next').onclick = () => navigateLightbox(1);
+
+    lightboxEl.querySelectorAll('.lb-btn').forEach(btn => {
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            if (!lightboxImg) return;
+            const action = btn.dataset.action;
+            if (action === 'set') { setWallpaper(lightboxImg.path); closeLightbox(); }
+            else if (action === 'fav') { toggleFavoriteImage(lightboxImg.path); closeLightbox(); }
+            else if (action === 'dislike') { dislikeImage(lightboxImg.path); closeLightbox(); }
+            else if (action === 'restore') { restoreImage(lightboxImg.path); closeLightbox(); }
+            else if (action === 'url') { openWallhavenUrl(lightboxImg.name); }
+        };
+    });
+}
+
+function closeLightbox() {
+    if (!lightboxEl) return;
+    lightboxEl.classList.remove('visible');
+    setTimeout(() => {
+        if (lightboxEl) { lightboxEl.remove(); lightboxEl = null; lightboxImg = null; }
+    }, 200);
+}
+
+function navigateLightbox(direction) {
+    if (!lightboxImg) return;
+    const idx = appState.images.findIndex(i => i.path === lightboxImg.path);
+    if (idx === -1) return;
+    const next = idx + direction;
+    if (next >= 0 && next < appState.images.length) {
+        showLightbox(appState.images[next]);
+    }
 }

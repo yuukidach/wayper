@@ -77,10 +77,11 @@ wayper/
 
 ## Release Checklist
 
-1. Bump version in `pyproject.toml`, `wayper/__init__.py`
-2. Commit and tag: `git tag v{version}`
-3. Push with tags: `git push origin main --tags` (triggers macOS DMG build via GitHub Actions)
-4. Update AUR: edit `~/projects/wayper-aur/PKGBUILD` (pkgver, sha256sums), regenerate `.SRCINFO` via `makepkg --printsrcinfo > .SRCINFO`, commit and push to `ssh://aur@aur.archlinux.org/wayper.git`
+1. Ensure all changes are committed and pushed — the tag snapshot is what CI builds
+2. Bump version in `pyproject.toml`, `wayper/__init__.py`
+3. Commit and tag: `git tag v{version}`
+4. Push with tags: `git push origin main --tags` (triggers macOS DMG build via GitHub Actions)
+5. Update AUR: edit `~/projects/wayper-aur/PKGBUILD` (pkgver, sha256sums via `curl -sL <tarball-url> | sha256sum`), regenerate `.SRCINFO` via `makepkg --printsrcinfo > .SRCINFO`, commit and push to `ssh://aur@aur.archlinux.org/wayper.git`
 
 ## Guidelines
 
