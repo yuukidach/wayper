@@ -401,67 +401,21 @@ def status(ctx):
 
 @cli.command()
 def setup():
-    """Install .app bundle (macOS) or .desktop entry (Linux)."""
-    import shutil
-
-    if sys.platform == "darwin":
-        _setup_macos_app()
-    else:
-        gui_bin = shutil.which("wayper-gui") or str(Path(sys.executable).parent / "wayper-gui")
-        desktop = Path.home() / ".local/share/applications/wayper.desktop"
-        desktop.parent.mkdir(parents=True, exist_ok=True)
-        desktop.write_text(
-            "[Desktop Entry]\n"
-            "Name=Wayper\n"
-            f"Exec={gui_bin}\n"
-            "Icon=preferences-desktop-wallpaper\n"
-            "Type=Application\n"
-            "Categories=Utility;\n"
-        )
-        click.echo(f"Installed {desktop}")
-
-
-def _setup_macos_app() -> None:
+    """Install .desktop entry (Linux)."""
     import shutil
 
     gui_bin = shutil.which("wayper-gui") or str(Path(sys.executable).parent / "wayper-gui")
-    app_dir = Path.home() / "Applications" / "Wayper.app"
-    contents = app_dir / "Contents"
-    macos_dir = contents / "MacOS"
-    resources = contents / "Resources"
-
-    macos_dir.mkdir(parents=True, exist_ok=True)
-    resources.mkdir(parents=True, exist_ok=True)
-
-    # Launcher script
-    launcher = macos_dir / "Wayper"
-    launcher.write_text(f'#!/bin/bash\nexec "{gui_bin}"\n')
-    launcher.chmod(0o755)
-
-    # Info.plist
-    (contents / "Info.plist").write_text(
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"'
-        ' "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
-        '<plist version="1.0">\n<dict>\n'
-        "  <key>CFBundleName</key><string>Wayper</string>\n"
-        "  <key>CFBundleDisplayName</key><string>Wayper</string>\n"
-        "  <key>CFBundleIdentifier</key>"
-        "<string>io.github.yuukidach.wayper</string>\n"
-        "  <key>CFBundleVersion</key><string>1.0</string>\n"
-        "  <key>CFBundleExecutable</key><string>Wayper</string>\n"
-        "  <key>CFBundleIconFile</key><string>icon</string>\n"
-        "  <key>CFBundlePackageType</key><string>APPL</string>\n"
-        "  <key>NSHighResolutionCapable</key><true/>\n"
-        "</dict>\n</plist>\n"
+    desktop = Path.home() / ".local/share/applications/wayper.desktop"
+    desktop.parent.mkdir(parents=True, exist_ok=True)
+    desktop.write_text(
+        "[Desktop Entry]\n"
+        "Name=Wayper\n"
+        f"Exec={gui_bin}\n"
+        "Icon=preferences-desktop-wallpaper\n"
+        "Type=Application\n"
+        "Categories=Utility;\n"
     )
-
-    # Copy icon if available
-    icon_src = Path(__file__).parent.parent / "assets" / "icon.icns"
-    if icon_src.exists():
-        shutil.copy2(icon_src, resources / "icon.icns")
-
-    click.echo(f"Installed {app_dir}")
+    click.echo(f"Installed {desktop}")
 
 
 if __name__ == "__main__":

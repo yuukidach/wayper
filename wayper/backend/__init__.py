@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import fcntl
 import os
-import sys
 from pathlib import Path
 
 from ..config import MonitorConfig, TransitionConfig, WayperConfig
@@ -39,14 +38,9 @@ class FileLock:
 
 
 def _create_backend() -> WallpaperBackend:
-    if sys.platform == "darwin":
-        from .macos import MacOSBackend
+    from .linux import LinuxBackend
 
-        return MacOSBackend()
-    else:
-        from .linux import LinuxBackend
-
-        return LinuxBackend()
+    return LinuxBackend()
 
 
 _backend = _create_backend()

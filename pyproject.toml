@@ -15,7 +15,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-macos = ["pyobjc-framework-Cocoa>=10.0", "pyobjc-framework-Quartz>=10.0"]
 linux = ["PyGObject>=3.42"]
 
 [project.scripts]
