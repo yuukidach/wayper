@@ -1,0 +1,55 @@
+name: Publish to AUR
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  aur:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Extract version
+        run: |
+          pacman -Sy --noconfirm curl git
+          if [[ "$GITHUB_REF_NAME" == v* ]]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+            echo "TAG_NAME=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+          else
+            # workflow_dispatch: get latest tag
+            TAG=$(curl -s "https://api.github.com/repos/${GITHUB_REPOSITORY}/tags" | grep -oP '"name":\s*"\Kv[^"]+' | head -1)
+            echo "VERSION=${TAG#v}" >> $GITHUB_ENV
+            echo "TAG_NAME=$TAG" >> $GITHUB_ENV
+          fi
+
+      - name: Compute sha256sum
+        run: |
+          HASH=$(curl -sL "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG_NAME}.tar.gz" | sha256sum | cut -d' ' -f1)
+          echo "SHA256=$HASH" >> $GITHUB_ENV
+
+      - name: Setup SSH
+        run: |
+          mkdir -p /root/.ssh
+          echo "${{ secrets.AUR_SSH_KEY }}" > /root/.ssh/id_ed25519
+          chmod 600 /root/.ssh/id_ed25519
+          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIhd" >> /root/.ssh/known_hosts
+
+      - name: Clone AUR repo and update
+        run: |
+          git clone ssh://aur@aur.archlinux.org/wayper.git aur
+          cd aur
+          sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
+          sed -i "s/^sha256sums=.*/sha256sums=('$SHA256')/" PKGBUILD
+
+          # Generate .SRCINFO (makepkg refuses to run as root)
+          useradd -m builder
+          chown -R builder: .
+          su builder -c "makepkg --printsrcinfo > .SRCINFO"
+
+          git config user.name "Da Chen"
+          git config user.email "dachen@connect.hku.hk"
+          git add PKGBUILD .SRCINFO
+          git commit -m "bump: v$VERSION"
+          git push
