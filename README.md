@@ -35,7 +35,7 @@
 - **SFW/NSFW toggle** — one key to switch. Persistent across sessions.
 - **History navigation** — prev/next through your wallpaper history. Browser-style back/forward per monitor.
 - **Favorites & blacklist** — like/dislike with undo. Favorites stay in rotation.
-- **Electron GUI** — browse, preview, and manage your collection with daemon control and settings. Cross-platform. Keyboard-driven.
+- **Cross-platform GUI** — browse, preview, and manage your collection with daemon control and settings. Works on Linux and macOS. Keyboard-driven.
 - **AI-native** — built-in MCP server lets AI assistants (Claude Code, etc.) control your wallpapers directly. Ask your AI to "delete this broken wallpaper" or "favorite this one" — it just works.
 - **JSON output** — `--json` flag on every command for scripting and automation.
 
@@ -74,7 +74,7 @@ wayper --json status        # machine-readable output
 
 ### GUI App
 
-`wayper-gui` launches a standalone Electron app with browse, quick actions (next/prev/fav/dislike), daemon control, and settings — all in one window.
+`wayper-gui` launches a standalone app with browse, quick actions (next/prev/fav/dislike), daemon control, and settings — all in one window.
 
 ```
 1/2/3    switch category        Enter    set as wallpaper
