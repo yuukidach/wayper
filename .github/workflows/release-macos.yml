@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -46,7 +46,7 @@ jobs:
         working-directory: wayper/electron
         run: |
           for i in 1 2 3 4 5; do
-            npm ci --fetch-timeout=300000 && break
+            npm ci --prefer-offline --fetch-timeout=600000 && break
             echo "Attempt $i failed, retrying in 15s..."
             sleep 15
           done
