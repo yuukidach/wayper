@@ -14,6 +14,18 @@ from .pool import extract_tag_names, favorites_dir, is_blacklisted, pool_dir, sa
 
 SEARCH_URL = "https://wallhaven.cc/api/v1/search"
 
+
+def wallhaven_id(name: str) -> str:
+    """Extract Wallhaven ID from a filename (with or without extension)."""
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return stem.split("-", 1)[-1] if "-" in stem else stem
+
+
+def wallhaven_url(img_path: Path) -> str:
+    """Build Wallhaven URL from image path."""
+    return f"https://wallhaven.cc/w/{wallhaven_id(img_path.name)}"
+
+
 _PURITY_CODES = {"sfw": "100", "sketchy": "010", "nsfw": "001"}
 
 

@@ -215,7 +215,7 @@ def fav(ctx, open_url):
         if open_url:
             import webbrowser
 
-            from .browse._common import wallhaven_url
+            from .wallhaven import wallhaven_url
 
             webbrowser.open(wallhaven_url(img))
 
