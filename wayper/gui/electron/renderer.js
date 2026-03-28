@@ -202,6 +202,21 @@ function handleGlobalKeydown(e) {
         case '3':
             setViewMode('trash');
             break;
+        case 's':
+            switchView(appState.view === 'settings' ? 'grid' : 'settings');
+            break;
+        case '[':
+            if (appState.mode === 'trash') {
+                appState.blocklistTab = 'recoverable';
+                renderBlocklistView();
+            }
+            break;
+        case ']':
+            if (appState.mode === 'trash') {
+                appState.blocklistTab = 'blocked';
+                renderBlocklistView();
+            }
+            break;
         case 'Enter':
             if (focusedCard) {
                 setWallpaper(focusedCard.dataset.path);
@@ -815,12 +830,12 @@ function renderBlocklistView() {
 
     const tabRecoverable = document.createElement('button');
     tabRecoverable.className = `blocklist-tab ${appState.blocklistTab === 'recoverable' ? 'active' : ''}`;
-    tabRecoverable.innerHTML = `Recoverable <span class="tab-count">${recoverableCount}</span>`;
+    tabRecoverable.innerHTML = `Recoverable <span class="tab-count">${recoverableCount}</span><kbd>[</kbd>`;
     tabRecoverable.onclick = () => { appState.blocklistTab = 'recoverable'; renderBlocklistView(); };
 
     const tabBlocked = document.createElement('button');
     tabBlocked.className = `blocklist-tab ${appState.blocklistTab === 'blocked' ? 'active' : ''}`;
-    tabBlocked.innerHTML = `All Blocked <span class="tab-count">${blockedCount}</span>`;
+    tabBlocked.innerHTML = `All Blocked <span class="tab-count">${blockedCount}</span><kbd>]</kbd>`;
     tabBlocked.onclick = () => { appState.blocklistTab = 'blocked'; renderBlocklistView(); };
 
     tabs.appendChild(tabRecoverable);

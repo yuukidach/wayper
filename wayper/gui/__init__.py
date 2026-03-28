@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import sys
 
 
 def run_app() -> None:
@@ -22,11 +21,6 @@ def run_app() -> None:
 
     config = load_config()
 
-    if sys.platform == "darwin":
-        from .macos.app import WayperApp
+    from .gtk.app import run
 
-        WayperApp.launch(config)
-    else:
-        from .gtk.app import run
-
-        run(config)
+    run(config)
