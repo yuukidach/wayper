@@ -1,5 +1,11 @@
 const API_URL = 'http://127.0.0.1:8080';
 
+const _escDiv = document.createElement('div');
+function esc(str) {
+    _escDiv.textContent = str;
+    return _escDiv.innerHTML;
+}
+
 // State
 let appState = {
     mode: 'pool', // pool, favorites
@@ -303,11 +309,15 @@ async function fetchStatus() {
     try {
         const res = await fetch(`${API_URL}/api/status`);
         const data = await res.json();
-        appState.status = data;
-        updateStatusUI();
+        if (data.running !== appState.status.running) {
+            appState.status = data;
+            updateStatusUI();
+        }
     } catch (e) {
-        appState.status = { running: false };
-        updateStatusUI();
+        if (appState.status.running !== false) {
+            appState.status = { running: false };
+            updateStatusUI();
+        }
     }
 }
 
@@ -315,7 +325,10 @@ async function fetchDiskUsage() {
     try {
         const res = await fetch(`${API_URL}/api/disk`);
         const data = await res.json();
-        els.diskUsage.innerText = `${data.used_mb} / ${data.quota_mb} MB`;
+        const text = `${data.used_mb} / ${data.quota_mb} MB`;
+        if (els.diskUsage.innerText !== text) {
+            els.diskUsage.innerText = text;
+        }
     } catch (e) { }
 }
 
@@ -400,8 +413,8 @@ function renderMonitors() {
         const icon = isLandscape ? '🖥️' : '📱';
 
         el.innerHTML = `
-            <h4>${icon} ${m.name}</h4>
-            <p>${m.orientation} • ${m.current_image ? 'Has Wallpaper' : 'Empty'}</p>
+            <h4>${icon} ${esc(m.name)}</h4>
+            <p>${esc(m.orientation)} • ${m.current_image ? 'Has Wallpaper' : 'Empty'}</p>
         `;
 
         el.onclick = () => {
@@ -436,10 +449,10 @@ function renderImages() {
             card.classList.add('portrait');
         }
 
-        const imgUrl = `${API_URL}/images/${img.path}`;
+        const imgUrl = `${API_URL}/images/${encodeURI(img.path)}`;
 
         card.innerHTML = `
-            <img src="${imgUrl}" loading="lazy" alt="${img.name}">
+            <img src="${imgUrl}" loading="lazy" alt="${esc(img.name)}">
             <div class="overlay">
                 <button class="action-btn" title="Set Wallpaper">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

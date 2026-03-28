@@ -2,13 +2,13 @@ const { app, BrowserWindow } = require('electron')
 const path = require('path')
 
 function createWindow () {
+  const isMac = process.platform === 'darwin'
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
-    titleBarStyle: 'hiddenInset',
+    titleBarStyle: isMac ? 'hiddenInset' : 'default',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      webSecurity: false
     }
   })
 

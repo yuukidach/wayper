@@ -308,8 +308,7 @@ aside {
   transform: none;
 }
 
-.primary.mode-btn { /* Active state hack */
-  background-color: var(--base); /* Actually surface1/blue might be better but let's stick to toggle style */
+.primary.mode-btn {
   background-color: var(--blue);
   color: var(--base);
   box-shadow: var(--shadow-sm);

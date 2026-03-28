@@ -1,30 +1,30 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import subprocess
 import sys
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Body
-from fastapi.staticfiles import StaticFiles
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from wayper.config import load_config, save_config, WayperConfig, NO_TRANSITION
-from wayper.daemon import (
-    is_daemon_running,
-    signal_daemon,
-)
+from wayper.backend import FileLock, get_context, query_current, set_wallpaper
+from wayper.config import NO_TRANSITION, WayperConfig, load_config, save_config
+from wayper.daemon import is_daemon_running, signal_daemon
+from wayper.history import go_prev, pick_next
+from wayper.history import push as push_history
 from wayper.pool import (
-    list_images,
-    pool_dir,
-    favorites_dir,
     add_to_blacklist,
-    remove_from_blacklist,
+    favorites_dir,
+    list_images,
+    pick_random,
+    pool_dir,
 )
-from wayper.state import read_mode, write_mode
-from wayper.backend import set_wallpaper, query_current
+from wayper.state import push_undo, read_mode, write_mode
 
 log = logging.getLogger("wayper.api")
 
@@ -32,36 +32,59 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["file://", "http://127.0.0.1:8080", "http://localhost:8080"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-config = load_config()
 
-# Define Pydantic models for API responses
+_cached_config: WayperConfig | None = None
+_cached_mtime: float = 0
+
+
+def get_config() -> WayperConfig:
+    """Return cached config, reloading only when the file changes on disk."""
+    global _cached_config, _cached_mtime
+    from wayper.config import CONFIG_FILE
+
+    try:
+        mtime = CONFIG_FILE.stat().st_mtime
+    except OSError:
+        mtime = 0
+    if _cached_config is None or mtime != _cached_mtime:
+        _cached_config = load_config()
+        _cached_mtime = mtime
+    return _cached_config
+
+
+# Pydantic models
 class StatusResponse(BaseModel):
     running: bool
     pid: int | None = None
+
 
 class ImageItem(BaseModel):
     path: str
     name: str
     is_favorite: bool = False
 
+
 class MonitorInfo(BaseModel):
     name: str
     orientation: str
     current_image: str | None = None
 
+
 class SetWallpaperRequest(BaseModel):
     monitor: str
     image_path: str
 
+
 class ActionRequest(BaseModel):
     image_path: str
     monitor: str | None = None
+
 
 class WallhavenConfigModel(BaseModel):
     categories: str
@@ -69,6 +92,7 @@ class WallhavenConfigModel(BaseModel):
     sorting: str
     ai_art_filter: int
     exclude_tags: list[str]
+
 
 class ConfigResponse(BaseModel):
     download_dir: str
@@ -78,11 +102,27 @@ class ConfigResponse(BaseModel):
     quota_mb: int
     wallhaven: WallhavenConfigModel
 
+
+class SetModeRequest(BaseModel):
+    mode: str
+
+
+def _resolve_image(config: WayperConfig, image_path: str) -> Path:
+    """Resolve and validate an image path stays within download_dir."""
+    img_full = (config.download_dir / image_path).resolve()
+    if not img_full.is_relative_to(config.download_dir):
+        raise HTTPException(403, "Path traversal not allowed")
+    if not img_full.exists():
+        raise HTTPException(404, "Image not found")
+    return img_full
+
+
 @app.get("/api/config", response_model=ConfigResponse)
 def get_config_route():
+    config = get_config()
     return {
         "download_dir": str(config.download_dir),
-        "interval_min": config.interval_min,
+        "interval_min": config.interval // 60,
         "mode": str(read_mode(config) or "pool"),
         "pool_target": config.pool_target,
         "quota_mb": config.quota_mb,
@@ -91,100 +131,132 @@ def get_config_route():
             "top_range": config.wallhaven.top_range,
             "sorting": config.wallhaven.sorting,
             "ai_art_filter": config.wallhaven.ai_art_filter,
-            "exclude_tags": config.wallhaven.exclude_tags
-        }
+            "exclude_tags": config.wallhaven.exclude_tags,
+        },
     }
+
 
 @app.patch("/api/config")
 def update_config_route(updates: dict = Body(...)):
-    # Update root config
-    if "interval_min" in updates:
-        config.interval_min = updates["interval_min"]
-        # Convert min to sec for internal storage if needed,
-        # but config.py stores interval in seconds?
-        # Let's check config.py: interval: int = 300 (seconds)
-        # But api returns interval_min? No, config.interval_min property exists?
-        # Let's check config.py again.
-        # config.py has `interval` (seconds). It does NOT have `interval_min` property.
-        # Ah, the original code had `interval_min` in the response dict: `"interval_min": config.interval_min`.
-        # Wait, I might have hallucinated `interval_min` property on config object if it's not in the file I read.
-        # The Read output of config.py showed `interval: int = 300`.
-        # It did NOT show a property `interval_min`.
-        # So `config.interval_min` in the previous `api.py` (line 70) would have failed if it doesn't exist.
-        # Let's assume it was a mistake in my previous Write or I missed it.
-        # Actually I wrote `config.interval_min` in the previous turn. It might have been broken!
-        # Let's fix it to use `interval` (seconds) or calculate min.
-        pass
+    config = get_config()
 
-    if "interval" in updates:
+    if "interval_min" in updates:
+        config.interval = updates["interval_min"] * 60
+    elif "interval" in updates:
         config.interval = updates["interval"]
 
     if "pool_target" in updates:
         config.pool_target = updates["pool_target"]
-
     if "quota_mb" in updates:
         config.quota_mb = updates["quota_mb"]
 
-    # Update Wallhaven config
     if "wallhaven" in updates:
-        wh_updates = updates["wallhaven"]
-        if "categories" in wh_updates:
-            config.wallhaven.categories = wh_updates["categories"]
-        if "top_range" in wh_updates:
-            config.wallhaven.top_range = wh_updates["top_range"]
-        if "sorting" in wh_updates:
-            config.wallhaven.sorting = wh_updates["sorting"]
-        if "ai_art_filter" in wh_updates:
-            config.wallhaven.ai_art_filter = wh_updates["ai_art_filter"]
-        if "exclude_tags" in wh_updates:
-            config.wallhaven.exclude_tags = wh_updates["exclude_tags"]
+        wh = updates["wallhaven"]
+        if "categories" in wh:
+            config.wallhaven.categories = wh["categories"]
+        if "top_range" in wh:
+            config.wallhaven.top_range = wh["top_range"]
+        if "sorting" in wh:
+            config.wallhaven.sorting = wh["sorting"]
+        if "ai_art_filter" in wh:
+            config.wallhaven.ai_art_filter = wh["ai_art_filter"]
+        if "exclude_tags" in wh:
+            config.wallhaven.exclude_tags = wh["exclude_tags"]
 
     save_config(config)
-
-    # If daemon is running, we might need to reload it?
-    # signal_daemon(config, signal.SIGUSR2) # Reload mode/config?
-    # The daemon only reloads config on SIGHUP or restart usually.
-    # Let's restart daemon if running? Or just leave it.
-
+    global _cached_config, _cached_mtime
+    _cached_config = config
+    _cached_mtime = 0  # force reload on next get_config if file changes again
     return {"status": "ok"}
 
-class SetModeRequest(BaseModel):
-    mode: str
 
 @app.post("/api/mode")
 def set_mode_route(req: SetModeRequest):
     if req.mode not in ["sfw", "nsfw"]:
         raise HTTPException(400, "Invalid mode")
+    config = get_config()
     write_mode(config, req.mode)
     signal_daemon(config, signal.SIGUSR2)
     return {"status": "ok", "mode": req.mode}
 
+
 @app.get("/api/disk")
 def get_disk_usage():
     from wayper.pool import disk_usage_mb
-    return {
-        "used_mb": round(disk_usage_mb(config), 1),
-        "quota_mb": config.quota_mb
-    }
+
+    config = get_config()
+    return {"used_mb": round(disk_usage_mb(config), 1), "quota_mb": config.quota_mb}
+
 
 @app.post("/api/control/{action}")
-def control_action(action: str, monitor: str | None = None):
-    # Action: next, prev, dislike, fav, unfav
+def control_action(action: str):
     if action not in ["next", "prev", "dislike", "fav", "unfav"]:
         raise HTTPException(400, "Invalid action")
 
-    # Use CLI logic via subprocess to ensure consistency
-    cmd = [sys.executable, "-m", "wayper.cli", action]
-    subprocess.run(cmd, check=False)
+    config = get_config()
+    monitor, mon_cfg, current_img = get_context(config)
+    if not mon_cfg:
+        raise HTTPException(400, "No monitor config found")
+
+    mode = read_mode(config)
+
+    if action == "next":
+        img = pick_next(config, monitor, mon_cfg.orientation)
+        if img:
+            set_wallpaper(monitor, img, config.transition)
+        return {"status": "ok", "image": str(img) if img else None}
+
+    if action == "prev":
+        img = go_prev(config, monitor)
+        if img:
+            set_wallpaper(monitor, img, config.transition)
+            return {"status": "ok", "image": str(img)}
+        return {"status": "at_oldest"}
+
+    if action in ("fav", "unfav"):
+        if not current_img:
+            raise HTTPException(400, "No current wallpaper")
+        is_fav = current_img.is_relative_to(config.download_dir / "favorites")
+        if action == "fav" and is_fav:
+            return {"status": "already_favorite"}
+        if action == "unfav" and not is_fav:
+            return {"status": "not_favorite"}
+        with FileLock(blocking=False):
+            if action == "fav":
+                dest_dir = favorites_dir(config, mode, mon_cfg.orientation)
+            else:
+                dest_dir = pool_dir(config, mode, mon_cfg.orientation)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / current_img.name
+            current_img.rename(dest)
+            set_wallpaper(monitor, dest, NO_TRANSITION)
+        return {"status": "ok", "image": str(dest)}
+
+    # dislike
+    if not current_img:
+        raise HTTPException(400, "No current wallpaper")
+    with FileLock(blocking=False):
+        if current_img.is_relative_to(config.download_dir / "favorites"):
+            return {"status": "is_favorite"}
+        next_img = pick_random(config, mode, mon_cfg.orientation)
+        if next_img:
+            set_wallpaper(monitor, next_img, config.transition)
+            push_history(config, monitor, next_img)
+        add_to_blacklist(config, current_img.name)
+        push_undo(config, current_img.name, current_img.parent)
     return {"status": "ok"}
+
 
 @app.get("/api/status", response_model=StatusResponse)
 def get_status():
+    config = get_config()
     running, pid = is_daemon_running(config)
     return StatusResponse(running=running, pid=pid)
 
+
 @app.get("/api/monitors", response_model=list[MonitorInfo])
 def get_monitors():
+    config = get_config()
     current_wallpapers = query_current()
     monitors = []
     for m in config.monitors:
@@ -195,15 +267,13 @@ def get_monitors():
                 img_rel = str(img_path.relative_to(config.download_dir))
             except ValueError:
                 pass
-        monitors.append(MonitorInfo(
-            name=m.name,
-            orientation=m.orientation,
-            current_image=img_rel
-        ))
+        monitors.append(MonitorInfo(name=m.name, orientation=m.orientation, current_image=img_rel))
     return monitors
+
 
 @app.get("/api/images", response_model=list[ImageItem])
 def get_images(mode: str = "pool", purity: str = "sfw", orient: str = "landscape"):
+    config = get_config()
     if mode == "pool":
         path = pool_dir(config, purity, orient)
     else:
@@ -214,69 +284,80 @@ def get_images(mode: str = "pool", purity: str = "sfw", orient: str = "landscape
 
     images = list_images(path)
     images.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-
-    is_fav = (mode == "favorites")
+    is_fav = mode == "favorites"
 
     return [
-        ImageItem(
-            path=str(p.relative_to(config.download_dir)),
-            name=p.name,
-            is_favorite=is_fav
-        ) for p in images
+        ImageItem(path=str(p.relative_to(config.download_dir)), name=p.name, is_favorite=is_fav)
+        for p in images
     ]
+
 
 @app.post("/api/wallpaper/set")
 def set_wallpaper_route(req: SetWallpaperRequest):
-    img_full = config.download_dir / req.image_path
-    if not img_full.exists():
-        raise HTTPException(404, "Image not found")
+    config = get_config()
+    img_full = _resolve_image(config, req.image_path)
 
-    # Validate monitor
     if not any(m.name == req.monitor for m in config.monitors):
         raise HTTPException(404, "Monitor not found")
 
     set_wallpaper(req.monitor, img_full, config.transition)
     return {"status": "ok"}
 
+
 @app.post("/api/image/favorite")
 def favorite_image(req: ActionRequest):
-    img_full = config.download_dir / req.image_path
-    if not img_full.exists():
-        raise HTTPException(404, "Image not found")
+    config = get_config()
+    img_full = _resolve_image(config, req.image_path)
 
-    parts = img_full.parts
-    is_fav = "favorites" in parts
+    is_fav = img_full.is_relative_to(config.download_dir / "favorites")
 
     if is_fav:
-        # Move back to pool
         try:
             rel_path = img_full.relative_to(config.download_dir / "favorites")
             dest = config.download_dir / rel_path
         except ValueError:
-             raise HTTPException(400, "Invalid file structure for favorite")
+            raise HTTPException(400, "Invalid file structure for favorite")
     else:
-        # Move to favorites
         rel_path = img_full.relative_to(config.download_dir)
         dest = config.download_dir / "favorites" / rel_path
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     img_full.rename(dest)
-
     return {"status": "ok", "new_path": str(dest.relative_to(config.download_dir))}
+
 
 @app.post("/api/daemon/{action}")
 def daemon_action(action: str):
     if action not in ["start", "stop"]:
         raise HTTPException(status_code=400, detail="Invalid action")
 
-    # Run CLI command
-    subprocess.Popen([sys.executable, "-m", "wayper.cli", "daemon", action])
+    config = get_config()
+
+    if action == "start":
+        running, _ = is_daemon_running(config)
+        if running:
+            return {"status": "already_running"}
+        subprocess.Popen(
+            [sys.executable, "-m", "wayper.cli", "daemon"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return {"status": "ok"}
+
+    # stop
+    running, pid = is_daemon_running(config)
+    if not running or not pid:
+        return {"status": "not_running"}
+    os.kill(pid, signal.SIGTERM)
     return {"status": "ok"}
 
+
 # Mount images directory
-app.mount("/images", StaticFiles(directory=config.download_dir), name="images")
+app.mount("/images", StaticFiles(directory=get_config().download_dir), name="images")
+
 
 def run():
     import uvicorn
-    # Use 0.0.0.0 to allow access, though 127.0.0.1 is safer for local
+
     uvicorn.run(app, host="127.0.0.1", port=8080, log_level="info")

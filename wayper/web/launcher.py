@@ -1,19 +1,35 @@
+from __future__ import annotations
+
+import signal
 import subprocess
-import time
-import os
 import sys
 import threading
-import signal
+import time
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
+
 from wayper.web.api import run as run_api
+
+
+def _wait_for_api(url: str = "http://127.0.0.1:8080/api/status", timeout: float = 10) -> None:
+    """Poll API until it responds or timeout."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            urlopen(url, timeout=1)
+            return
+        except (URLError, OSError):
+            time.sleep(0.2)
+    print("Warning: API did not respond within timeout, launching Electron anyway")
+
 
 def run_app():
     # Start API in a separate thread
     api_thread = threading.Thread(target=run_api, daemon=True)
     api_thread.start()
 
-    # Wait a bit for API to start
-    time.sleep(1)
+    _wait_for_api()
 
     # Electron directory
     electron_dir = Path(__file__).parent.parent / "gui" / "electron"
@@ -55,6 +71,7 @@ def run_app():
     finally:
         if proc.poll() is None:
             proc.terminate()
+
 
 if __name__ == "__main__":
     run_app()
