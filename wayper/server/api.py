@@ -625,9 +625,9 @@ def tag_suggestions():
     if not blacklisted:
         return {"suggestions": []}
 
-    # Group by purity, then count tags in disliked vs pool within each group
+    # Group by purity, then count tags in disliked vs pool within each group.
+    # Track per-tag disliked image sets to filter tags that overlap with excluded ones.
     purity_groups: dict[str, dict] = {}
-    # Track which disliked images have which tags (for co-occurrence clustering)
     tag_dislike_images: dict[str, set[str]] = {}
     for filename, meta in metadata.items():
         purity = meta.get("purity", "sfw")
@@ -650,16 +650,19 @@ def tag_suggestions():
             for tag in tags:
                 g["pool_tags"][tag] = g["pool_tags"].get(tag, 0) + 1
 
+    # Build image sets for already-excluded tags (for overlap filtering below)
+    excluded_image_sets = [
+        tag_dislike_images[t] for t in config.wallhaven.exclude_tags if t in tag_dislike_images
+    ]
+
     # Aggregate scores across purity groups
     tag_scores: dict[str, dict] = {}
     for g in purity_groups.values():
-        # Need enough data in both dislike and pool for meaningful comparison
         if g["dislike_total"] < 3 or g["pool_total"] < 30:
             continue
         for tag, count in g["dislike_tags"].items():
             if count < 3 or tag.lower() in excluded:
                 continue
-            # Skip tags that are too common within this purity (>25% prevalence)
             pool_count = g["pool_tags"].get(tag, 0)
             if pool_count / g["pool_total"] > 0.25:
                 continue
@@ -672,63 +675,16 @@ def tag_suggestions():
                 tag_scores[tag]["count"] += count
                 tag_scores[tag]["ratio"] = max(tag_scores[tag]["ratio"], round(ratio, 1))
 
-    candidates = [s for s in tag_scores.values() if s["count"] >= 3]
-    if not candidates:
-        return {"suggestions": []}
-
-    # Cluster tags by co-occurrence (Jaccard > 0.5 = essentially same concept)
-    candidate_tags = [c["tag"] for c in candidates]
-    parent: dict[str, str] = {t: t for t in candidate_tags}
-
-    def find(x: str) -> str:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a: str, b: str) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[rb] = ra
-
-    for i, a in enumerate(candidate_tags):
-        imgs_a = tag_dislike_images.get(a, set())
-        if not imgs_a:
-            continue
-        for b in candidate_tags[i + 1 :]:
-            imgs_b = tag_dislike_images.get(b, set())
-            if not imgs_b:
-                continue
-            overlap = len(imgs_a & imgs_b)
-            total = len(imgs_a | imgs_b)
-            if total > 0 and overlap / total > 0.5:
-                union(a, b)
-
-    # Build clusters: pick highest-count tag as representative
-    clusters: dict[str, list[dict]] = {}
-    for c in candidates:
-        root = find(c["tag"])
-        clusters.setdefault(root, []).append(c)
-
+    # Filter: skip candidates whose disliked images largely overlap (>50%)
+    # with an already-excluded tag — they're essentially the same concept.
     results = []
-    for members in clusters.values():
-        members.sort(key=lambda m: -m["count"])
-        rep = members[0]
-        # Count = distinct disliked images across all tags in cluster
-        all_images: set[str] = set()
-        aliases = []
-        for m in members:
-            all_images |= tag_dislike_images.get(m["tag"], set())
-            if m["tag"] != rep["tag"]:
-                aliases.append(m["tag"])
-        entry: dict = {
-            "tag": rep["tag"],
-            "count": len(all_images),
-            "ratio": rep["ratio"],
-        }
-        if aliases:
-            entry["aliases"] = aliases
-        results.append(entry)
+    for s in tag_scores.values():
+        if s["count"] < 3:
+            continue
+        imgs = tag_dislike_images.get(s["tag"], set())
+        if imgs and any(len(imgs & ex) / len(imgs | ex) > 0.5 for ex in excluded_image_sets if ex):
+            continue
+        results.append(s)
 
     results.sort(key=lambda r: (-r["count"], -r["ratio"]))
     return {"suggestions": results[:10]}
