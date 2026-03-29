@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json as json_mod
 import logging
 import os
 import signal
@@ -187,6 +189,41 @@ def set_mode_route(req: SetModeRequest):
     write_mode(config, req.mode)
     signal_daemon(config, signal.SIGUSR2)
     return {"status": "ok", "mode": req.mode}
+
+
+@app.get("/api/events")
+async def sse_events():
+    """SSE stream for real-time state changes (mode, etc.)."""
+    from starlette.responses import StreamingResponse
+
+    async def event_stream():
+        config = get_config()
+        last_mtime = 0.0
+        last_mode = ""
+        try:
+            last_mtime = config.state_file.stat().st_mtime
+            last_mode = read_mode(config)
+        except OSError:
+            pass
+
+        while True:
+            await asyncio.sleep(0.3)
+            try:
+                mtime = config.state_file.stat().st_mtime
+                if mtime != last_mtime:
+                    last_mtime = mtime
+                    current = read_mode(config)
+                    if current != last_mode:
+                        last_mode = current
+                        yield f"data: {json_mod.dumps({'type': 'mode', 'mode': current})}\n\n"
+            except OSError:
+                pass
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/disk")

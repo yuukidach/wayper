@@ -148,7 +148,10 @@ async function init() {
     // Initial metrics update after images loaded (or attempted)
     setTimeout(updateGridMetrics, 500);
 
-    // Poll status
+    // SSE for real-time mode changes
+    connectSSE();
+
+    // Poll status (counts, daemon state)
     setInterval(fetchStatus, 3000);
     setInterval(fetchDiskUsage, 30000);
 }
@@ -665,6 +668,26 @@ async function fetchConfig() {
 
         updateUI();
     } catch (e) { console.error(e); }
+}
+
+function connectSSE() {
+    const es = new EventSource(`${API_URL}/api/events`);
+    es.onmessage = (e) => {
+        try {
+            const data = JSON.parse(e.data);
+            if (data.type === 'mode' && data.mode !== appState.purity) {
+                console.log(`SSE mode change: ${appState.purity} -> ${data.mode}`);
+                appState.purity = data.mode;
+                updateUI();
+                refreshImages();
+            }
+        } catch (err) {
+            console.error('SSE parse error', err);
+        }
+    };
+    es.onerror = () => {
+        // EventSource auto-reconnects; nothing to do
+    };
 }
 
 async function fetchStatus() {
