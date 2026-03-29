@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from .config import WayperConfig
+from .state import ALL_PURITIES
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -54,7 +55,7 @@ def count_images(directory: Path) -> int:
 def disk_usage_mb(config: WayperConfig) -> float:
     """Disk usage of pool + favorites images in MB (excludes trash, cache, state files)."""
     total = 0
-    for purity in ("sfw", "nsfw"):
+    for purity in ALL_PURITIES:
         # Pool dirs
         for orient in ("landscape", "portrait"):
             d = config.download_dir / purity / orient
@@ -76,11 +77,20 @@ def favorites_dir(config: WayperConfig, mode: str, orientation: str) -> Path:
     return config.download_dir / "favorites" / mode / orientation
 
 
-def pick_random(config: WayperConfig, mode: str, orientation: str) -> Path | None:
-    """Pick a random image from pool + favorites."""
-    images = list_images(pool_dir(config, mode, orientation))
-    images += list_images(favorites_dir(config, mode, orientation))
-    return random.choice(images) if images else None
+def pick_random(config: WayperConfig, purities: set[str], orientation: str) -> Path | None:
+    """Pick a random image: choose a random purity first (equal weight), then a random image."""
+    import random as _rand
+
+    active = [p for p in ALL_PURITIES if p in purities]
+    if not active:
+        return None
+    _rand.shuffle(active)
+    for purity in active:
+        images = list_images(pool_dir(config, purity, orientation))
+        images += list_images(favorites_dir(config, purity, orientation))
+        if images:
+            return _rand.choice(images)
+    return None
 
 
 def list_blacklist(config: WayperConfig) -> list[tuple[int, str]]:
@@ -145,11 +155,11 @@ def prune_blacklist(config: WayperConfig) -> None:
 
 def enforce_quota(config: WayperConfig) -> None:
     """Delete oldest non-favorite images until under quota."""
-    for purity in ("sfw", "nsfw"):
+    for purity in ALL_PURITIES:
         pdir = config.download_dir / purity
         if not pdir.exists():
             continue
-        quota_bytes = config.quota_mb * 1024 * 1024 // 2  # half per purity
+        quota_bytes = config.quota_mb * 1024 * 1024 // len(ALL_PURITIES)
 
         all_images = sorted(
             [f for f in pdir.rglob("*") if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS],
@@ -165,12 +175,19 @@ def enforce_quota(config: WayperConfig) -> None:
             total -= size
 
 
-def should_download(config: WayperConfig, mode: str) -> bool:
-    """True if any pool is below target or 20% random chance."""
-    for orient in ("portrait", "landscape"):
-        if count_images(pool_dir(config, mode, orient)) < config.pool_target:
-            return True
-    return random.random() < 0.2
+def should_download(config: WayperConfig, purities: set[str]) -> dict[str, bool]:
+    """Return dict of {purity: needs_download} for each active purity."""
+    result = {}
+    for purity in purities:
+        needs = False
+        for orient in ("portrait", "landscape"):
+            if count_images(pool_dir(config, purity, orient)) < config.pool_target:
+                needs = True
+                break
+        if not needs:
+            needs = random.random() < 0.2
+        result[purity] = needs
+    return result
 
 
 def save_metadata(config: WayperConfig, filename: str, item: dict) -> None:
@@ -212,7 +229,7 @@ def load_metadata(config: WayperConfig) -> dict[str, ImageMetadata]:
 
 def ensure_directories(config: WayperConfig) -> None:
     """Create all required directories."""
-    for purity in ("sfw", "nsfw"):
+    for purity in ALL_PURITIES:
         for orient in ("portrait", "landscape"):
             pool_dir(config, purity, orient).mkdir(parents=True, exist_ok=True)
             favorites_dir(config, purity, orient).mkdir(parents=True, exist_ok=True)
