@@ -31,16 +31,21 @@ log = logging.getLogger("wayper")
 
 _change_now = False
 _reload_mode = False
+_wake: asyncio.Event | None = None
 
 
 def _on_usr1(*_: object) -> None:
     global _change_now
     _change_now = True
+    if _wake:
+        _wake.set()
 
 
 def _on_usr2(*_: object) -> None:
     global _reload_mode
     _reload_mode = True
+    if _wake:
+        _wake.set()
 
 
 def write_pid_file(config: WayperConfig) -> None:
@@ -140,14 +145,16 @@ def update_greeter(config: WayperConfig) -> None:
 
 
 async def run_daemon(config: WayperConfig) -> None:
-    global _change_now, _reload_mode
+    global _change_now, _reload_mode, _wake
 
     ensure_directories(config)
     ensure_ready()
     write_pid_file(config)
 
-    signal.signal(signal.SIGUSR1, _on_usr1)
-    signal.signal(signal.SIGUSR2, _on_usr2)
+    _wake = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGUSR1, _on_usr1)
+    loop.add_signal_handler(signal.SIGUSR2, _on_usr2)
 
     log.info("Daemon started (PID %d)", os.getpid())
 
@@ -167,7 +174,11 @@ async def run_daemon(config: WayperConfig) -> None:
                 while config.pause_on_lock and is_locked():
                     if _change_now or _reload_mode:
                         break
-                    await asyncio.sleep(5)
+                    _wake.clear()
+                    try:
+                        await asyncio.wait_for(_wake.wait(), timeout=5)
+                    except TimeoutError:
+                        pass
 
                 if _change_now or _reload_mode:
                     continue
@@ -198,7 +209,7 @@ async def run_daemon(config: WayperConfig) -> None:
                 update_greeter(config)
                 greeter_count = 0
 
-            # Interruptible sleep
+            # Interruptible sleep — _wake.set() fires instantly on signal
             remaining = config.interval
             while remaining > 0:
                 if _change_now or _reload_mode:
@@ -210,13 +221,21 @@ async def run_daemon(config: WayperConfig) -> None:
                     while config.pause_on_lock and is_locked():
                         if _change_now or _reload_mode:
                             break
-                        await asyncio.sleep(5)
+                        _wake.clear()
+                        try:
+                            await asyncio.wait_for(_wake.wait(), timeout=5)
+                        except TimeoutError:
+                            pass
                     log.info("Session unlocked, resuming timer")
 
                     if _change_now or _reload_mode:
                         break
 
-                await asyncio.sleep(1)
+                _wake.clear()
+                try:
+                    await asyncio.wait_for(_wake.wait(), timeout=1)
+                except TimeoutError:
+                    pass
                 remaining -= 1
     except (KeyboardInterrupt, SystemExit):
         log.info("Daemon shutting down")
