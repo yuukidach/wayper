@@ -92,8 +92,8 @@ def pick_next(config: WayperConfig, monitor: str, orientation: str) -> Path | No
     if img:
         return img
 
-    mode = read_mode(config)
-    img = pick_random(config, mode, orientation)
+    purities = read_mode(config)
+    img = pick_random(config, purities, orientation)
     if img:
         push(config, monitor, img)
     return img
