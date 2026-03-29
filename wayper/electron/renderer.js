@@ -213,6 +213,23 @@ function setupEventListeners() {
 
     // Keyboard Shortcuts
     document.addEventListener('keydown', handleGlobalKeydown);
+    document.addEventListener('mouseup', handleMouseBack);
+}
+
+function handleMouseBack(e) {
+    // Mouse back button (button 3) exits tag review or search
+    if (e.button !== 3) return;
+    if (lightboxEl) { closeLightbox(); return; }
+    if (appState.reviewingTag) {
+        e.preventDefault();
+        appState.reviewingTag = null;
+        clearSearch();
+        return;
+    }
+    if (appState.searchQuery) {
+        e.preventDefault();
+        clearSearch();
+    }
 }
 
 function handleGlobalKeydown(e) {
@@ -267,8 +284,14 @@ function handleGlobalKeydown(e) {
 
     switch(e.key) {
         case 'Escape':
-            // Unfocus card
-            if (focusedCard) document.activeElement.blur();
+            if (appState.reviewingTag) {
+                appState.reviewingTag = null;
+                clearSearch();
+            } else if (appState.searchQuery) {
+                clearSearch();
+            } else if (focusedCard) {
+                document.activeElement.blur();
+            }
             break;
         case 'l':
             controlAction('next');
@@ -790,6 +813,7 @@ function handleSearchKeydown(e) {
     if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
+        appState.reviewingTag = null;
         clearSearch();
         els.searchInput.blur();
         return;

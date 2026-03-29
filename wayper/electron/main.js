@@ -111,6 +111,9 @@ function createWindow () {
     shell.openExternal(url)
     return { action: 'deny' }
   })
+
+  // Prevent Electron from navigating on mouse back/forward buttons
+  mainWindow.webContents.on('will-navigate', (e) => e.preventDefault())
 }
 
 const gotTheLock = app.requestSingleInstanceLock()
