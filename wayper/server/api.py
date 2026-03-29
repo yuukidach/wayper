@@ -675,14 +675,14 @@ def tag_suggestions():
                 tag_scores[tag]["count"] += count
                 tag_scores[tag]["ratio"] = max(tag_scores[tag]["ratio"], round(ratio, 1))
 
-    # Filter: skip candidates whose disliked images largely overlap (>50%)
-    # with an already-excluded tag — they're essentially the same concept.
+    # Filter: skip candidates where >50% of their disliked images are already
+    # covered by an excluded tag (containment, not Jaccard).
     results = []
     for s in tag_scores.values():
         if s["count"] < 3:
             continue
         imgs = tag_dislike_images.get(s["tag"], set())
-        if imgs and any(len(imgs & ex) / len(imgs | ex) > 0.5 for ex in excluded_image_sets if ex):
+        if imgs and any(len(imgs & ex) / len(imgs) > 0.5 for ex in excluded_image_sets if ex):
             continue
         results.append(s)
 
