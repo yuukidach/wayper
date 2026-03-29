@@ -30,7 +30,15 @@ from wayper.pool import (
     pool_dir,
     remove_from_blacklist,
 )
-from wayper.state import find_in_trash, push_undo, read_mode, restore_from_trash, write_mode
+from wayper.state import (
+    ALL_PURITIES,
+    find_in_trash,
+    purity_from_path,
+    push_undo,
+    read_mode,
+    restore_from_trash,
+    write_mode,
+)
 
 log = logging.getLogger("wayper.api")
 
@@ -72,7 +80,7 @@ class StatusResponse(BaseModel):
     favorites_count: int = 0
     blocklist_count: int = 0
     recoverable_count: int = 0
-    mode: str = "sfw"
+    mode: list[str] = ["sfw"]
 
 
 class ImageItem(BaseModel):
@@ -108,14 +116,15 @@ class WallhavenConfigModel(BaseModel):
 class ConfigResponse(BaseModel):
     download_dir: str
     interval_min: int
-    mode: str
+    mode: list[str]
     pool_target: int
     quota_mb: int
     wallhaven: WallhavenConfigModel
 
 
 class SetModeRequest(BaseModel):
-    mode: str
+    mode: str | None = None
+    purities: list[str] | None = None
 
 
 def _resolve_image(config: WayperConfig, image_path: str) -> Path:
@@ -134,7 +143,7 @@ def get_config_route():
     return {
         "download_dir": str(config.download_dir),
         "interval_min": config.interval // 60,
-        "mode": str(read_mode(config) or "pool"),
+        "mode": sorted(read_mode(config)),
         "pool_target": config.pool_target,
         "quota_mb": config.quota_mb,
         "wallhaven": {
@@ -183,12 +192,21 @@ def update_config_route(updates: dict = Body(...)):
 
 @app.post("/api/mode")
 def set_mode_route(req: SetModeRequest):
-    if req.mode not in ["sfw", "nsfw"]:
-        raise HTTPException(400, "Invalid mode")
     config = get_config()
-    write_mode(config, req.mode)
+
+    if req.purities is not None:
+        purities = set(req.purities) & set(ALL_PURITIES)
+    elif req.mode is not None:
+        purities = {p.strip() for p in req.mode.split(",") if p.strip() in ALL_PURITIES}
+    else:
+        raise HTTPException(400, "Provide 'purities' or 'mode'")
+
+    if not purities:
+        raise HTTPException(400, "At least one valid purity required")
+
+    write_mode(config, purities)
     signal_daemon(config, signal.SIGUSR2)
-    return {"status": "ok", "mode": req.mode}
+    return {"status": "ok", "purities": sorted(purities)}
 
 
 @app.get("/api/events")
@@ -199,7 +217,7 @@ async def sse_events():
     async def event_stream():
         config = get_config()
         last_mtime = 0.0
-        last_mode = ""
+        last_mode: set[str] = set()
         try:
             last_mtime = config.state_file.stat().st_mtime
             last_mode = read_mode(config)
@@ -215,7 +233,8 @@ async def sse_events():
                     current = read_mode(config)
                     if current != last_mode:
                         last_mode = current
-                        yield f"data: {json_mod.dumps({'type': 'mode', 'mode': current})}\n\n"
+                        payload = json_mod.dumps({"type": "mode", "purities": sorted(current)})
+                        yield f"data: {payload}\n\n"
             except OSError:
                 pass
 
@@ -252,8 +271,6 @@ def control_action(action: str, monitor_name: str | None = Body(None, embed=True
     if not mon_cfg:
         raise HTTPException(400, "No monitor config found")
 
-    mode = read_mode(config)
-
     if action == "next":
         img = pick_next(config, monitor, mon_cfg.orientation)
         if img:
@@ -276,10 +293,11 @@ def control_action(action: str, monitor_name: str | None = Body(None, embed=True
         if action == "unfav" and not is_fav:
             return {"status": "not_favorite"}
         with FileLock(blocking=False):
+            purity = purity_from_path(config, current_img)
             if action == "fav":
-                dest_dir = favorites_dir(config, mode, mon_cfg.orientation)
+                dest_dir = favorites_dir(config, purity, mon_cfg.orientation)
             else:
-                dest_dir = pool_dir(config, mode, mon_cfg.orientation)
+                dest_dir = pool_dir(config, purity, mon_cfg.orientation)
             dest_dir.mkdir(parents=True, exist_ok=True)
             dest = dest_dir / current_img.name
             current_img.rename(dest)
@@ -305,7 +323,8 @@ def control_action(action: str, monitor_name: str | None = Body(None, embed=True
     with FileLock(blocking=False):
         if current_img.is_relative_to(config.download_dir / "favorites"):
             return {"status": "is_favorite"}
-        next_img = pick_random(config, mode, mon_cfg.orientation)
+        purities = read_mode(config)
+        next_img = pick_random(config, purities, mon_cfg.orientation)
         if next_img:
             set_wallpaper(monitor, next_img, config.transition)
             push_history(config, monitor, next_img)
@@ -318,14 +337,14 @@ def control_action(action: str, monitor_name: str | None = Body(None, embed=True
 def get_status():
     config = get_config()
     running, pid = is_daemon_running(config)
-    mode = read_mode(config)
+    purities = read_mode(config)
 
-    # Calculate counts for current mode across all orientations
     pool_c = 0
     fav_c = 0
-    for orient in ["landscape", "portrait"]:
-        pool_c += count_images(pool_dir(config, mode, orient))
-        fav_c += count_images(favorites_dir(config, mode, orient))
+    for purity in purities:
+        for orient in ["landscape", "portrait"]:
+            pool_c += count_images(pool_dir(config, purity, orient))
+            fav_c += count_images(favorites_dir(config, purity, orient))
 
     entries = list_blacklist(config)
     blocklist_c = len(entries)
@@ -338,7 +357,7 @@ def get_status():
         favorites_count=fav_c,
         blocklist_count=blocklist_c,
         recoverable_count=recoverable_c,
-        mode=mode or "sfw",
+        mode=sorted(purities),
     )
 
 
@@ -407,7 +426,6 @@ def restore_image(req: ActionRequest):
 
     remove_from_blacklist(config, filename)
 
-    # Determine orientation from image dimensions
     try:
         with Image.open(trashed) as img:
             width, height = img.size
@@ -415,8 +433,15 @@ def restore_image(req: ActionRequest):
     except Exception:
         orientation = "landscape"
 
-    mode = read_mode(config)
-    dest_dir = pool_dir(config, mode, orientation)
+    from wayper.pool import load_metadata
+
+    meta = load_metadata(config)
+    img_meta = meta.get(filename, {})
+    purity = img_meta.get("purity", "sfw")
+    if purity not in ALL_PURITIES:
+        purity = "sfw"
+
+    dest_dir = pool_dir(config, purity, orientation)
     dest = restore_from_trash(config, filename, dest_dir)
     if not dest:
         raise HTTPException(500, "Failed to restore image")
@@ -495,11 +520,11 @@ def dislike_image_route(req: ActionRequest):
         current_wallpapers = {}
 
     with FileLock(blocking=False):
-        mode = read_mode(config)
+        purities = read_mode(config)
         for mon in config.monitors:
             current_path = current_wallpapers.get(mon.name)
             if current_path and current_path.resolve() == img_full.resolve():
-                next_img = pick_random(config, mode, mon.orientation)
+                next_img = pick_random(config, purities, mon.orientation)
                 if next_img:
                     set_wallpaper(mon.name, next_img, config.transition)
 
