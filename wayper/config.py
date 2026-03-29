@@ -52,7 +52,6 @@ class WayperConfig:
     api_key: str = ""
     proxy: str | None = None
     download_dir: Path = field(default_factory=lambda: Path.home() / "Pictures" / "wallpaper")
-    default_mode: str = "nsfw"
     interval: int = 300
     pool_target: int = 30
     quota_mb: int = 4000
@@ -112,7 +111,6 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
     if config.proxy:
         lines.append(f'proxy = "{_esc(config.proxy)}"')
     lines.append(f'download_dir = "{_esc(dl)}"')
-    lines.append(f'default_mode = "{config.default_mode}"')
     lines.append(f"interval = {config.interval}")
     lines.append(f"pool_target = {config.pool_target}")
     lines.append(f"quota_mb = {config.quota_mb}")
@@ -221,7 +219,6 @@ def load_config(path: Path | None = None) -> WayperConfig:
         api_key=raw.get("api_key", ""),
         proxy=raw.get("proxy"),
         download_dir=download_dir,
-        default_mode=raw.get("default_mode", "nsfw"),
         interval=raw.get("interval", 300),
         pool_target=raw.get("pool_target", 30),
         quota_mb=raw.get("quota_mb", 4000),

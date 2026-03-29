@@ -147,6 +147,7 @@ async function init() {
 
     await fetchConfig(); // to get initial mode & settings
     await fetchMonitors();
+    await ensureDaemon();
     await fetchStatus();
     await fetchDiskUsage();
     await refreshImages();
@@ -534,6 +535,14 @@ async function setPurities(purities) {
     updateUI();
     refreshImages();
     fetchStatus();
+}
+
+async function ensureDaemon() {
+    try {
+        await fetch(`${API_URL}/api/daemon/start`, { method: 'POST' });
+    } catch (e) {
+        console.error("Auto-start daemon failed", e);
+    }
 }
 
 async function toggleDaemon() {

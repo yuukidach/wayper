@@ -25,7 +25,7 @@ def read_mode(config: WayperConfig) -> set[str]:
         raw = sf.read_text().strip()
         if raw:
             return _parse_mode(raw)
-    return _parse_mode(config.default_mode)
+    return {"sfw"}
 
 
 def write_mode(config: WayperConfig, mode: set[str]) -> None:
