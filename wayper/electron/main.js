@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell } = require('electron')
+const { app, BrowserWindow, Menu, shell } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const http = require('http')
@@ -67,6 +67,31 @@ function killBackend() {
   }
 }
 
+function buildMenu() {
+  const isMac = process.platform === 'darwin'
+  const template = [
+    ...(isMac ? [{ role: 'appMenu' }] : []),
+    { role: 'fileMenu' },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+    {
+      role: 'help',
+      submenu: [
+        {
+          label: 'Wayper Website',
+          click: () => shell.openExternal('https://yuukidach.github.io/wayper/')
+        },
+        {
+          label: 'Report Issue',
+          click: () => shell.openExternal('https://github.com/yuukidach/wayper/issues')
+        },
+      ]
+    }
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
 function createWindow () {
   const isMac = process.platform === 'darwin'
   mainWindow = new BrowserWindow({
@@ -101,6 +126,7 @@ if (!gotTheLock) {
   })
 
   app.whenReady().then(() => {
+    buildMenu()
     startBackend()
     createWindow()
 
