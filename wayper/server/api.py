@@ -72,6 +72,27 @@ def get_config() -> WayperConfig:
     return _cached_config
 
 
+_cached_metadata: dict | None = None
+_cached_meta_mtime: float = 0
+
+
+def _get_metadata() -> dict:
+    """Return cached metadata, reloading only when the file changes on disk."""
+    global _cached_metadata, _cached_meta_mtime
+    config = get_config()
+    mf = config.metadata_file
+    try:
+        mtime = mf.stat().st_mtime
+    except OSError:
+        mtime = 0
+    if _cached_metadata is None or mtime != _cached_meta_mtime:
+        from wayper.pool import load_metadata
+
+        _cached_metadata = load_metadata(config)
+        _cached_meta_mtime = mtime
+    return _cached_metadata
+
+
 # Pydantic models
 class StatusResponse(BaseModel):
     running: bool
@@ -433,9 +454,7 @@ def restore_image(req: ActionRequest):
     except Exception:
         orientation = "landscape"
 
-    from wayper.pool import load_metadata
-
-    meta = load_metadata(config)
+    meta = _get_metadata()
     img_meta = meta.get(filename, {})
     purity = img_meta.get("purity", "sfw")
     if purity not in ALL_PURITIES:
@@ -559,6 +578,32 @@ def daemon_action(action: str):
         return {"status": "not_running"}
     os.kill(pid, signal.SIGTERM)
     return {"status": "ok"}
+
+
+@app.get("/api/search")
+def search_images(q: str = ""):
+    """Search images by tags, category, or filename."""
+    if not q:
+        return {"matches": [], "suggestions": []}
+
+    metadata = _get_metadata()
+    query = q.lower()
+    matches: list[str] = []
+    tag_counts: dict[str, int] = {}
+
+    for filename, meta in metadata.items():
+        tags = [t.lower() for t in meta.get("tags", [])]
+        category = meta.get("category", "").lower()
+        fname = filename.lower()
+
+        if any(query in tag for tag in tags) or query in category or query in fname:
+            matches.append(filename)
+            for tag in meta.get("tags", []):
+                if tag.lower().startswith(query):
+                    tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+    suggestions = sorted(tag_counts.keys(), key=lambda t: -tag_counts[t])[:8]
+    return {"matches": matches, "suggestions": suggestions}
 
 
 @app.get("/trash/{filename}")
