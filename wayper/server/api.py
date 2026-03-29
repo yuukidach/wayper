@@ -39,6 +39,7 @@ from wayper.state import (
     restore_from_trash,
     write_mode,
 )
+from wayper.suggestions import suggest_tags_to_exclude
 
 log = logging.getLogger("wayper.api")
 
@@ -620,74 +621,8 @@ def tag_suggestions():
     config = get_config()
     metadata = _get_metadata()
     blacklisted = {fn for _, fn in list_blacklist(config)}
-    excluded = {t.lower() for t in config.wallhaven.exclude_tags}
-
-    if not blacklisted:
-        return {"suggestions": []}
-
-    # Group by purity, then count tags in disliked vs pool within each group.
-    # Track per-tag disliked image sets to filter tags that overlap with excluded ones.
-    purity_groups: dict[str, dict] = {}
-    tag_dislike_images: dict[str, set[str]] = {}
-    for filename, meta in metadata.items():
-        purity = meta.get("purity", "sfw")
-        if purity not in purity_groups:
-            purity_groups[purity] = {
-                "dislike_tags": {},
-                "pool_tags": {},
-                "dislike_total": 0,
-                "pool_total": 0,
-            }
-        g = purity_groups[purity]
-        tags = meta.get("tags", [])
-        if filename in blacklisted:
-            g["dislike_total"] += 1
-            for tag in tags:
-                g["dislike_tags"][tag] = g["dislike_tags"].get(tag, 0) + 1
-                tag_dislike_images.setdefault(tag, set()).add(filename)
-        else:
-            g["pool_total"] += 1
-            for tag in tags:
-                g["pool_tags"][tag] = g["pool_tags"].get(tag, 0) + 1
-
-    # Build image sets for already-excluded tags (for overlap filtering below)
-    excluded_image_sets = [
-        tag_dislike_images[t] for t in config.wallhaven.exclude_tags if t in tag_dislike_images
-    ]
-
-    # Aggregate scores across purity groups
-    tag_scores: dict[str, dict] = {}
-    for g in purity_groups.values():
-        if g["dislike_total"] < 3 or g["pool_total"] < 30:
-            continue
-        for tag, count in g["dislike_tags"].items():
-            if count < 3 or tag.lower() in excluded:
-                continue
-            pool_count = g["pool_tags"].get(tag, 0)
-            if pool_count / g["pool_total"] > 0.25:
-                continue
-            dislike_rate = count / g["dislike_total"]
-            pool_rate = pool_count / max(g["pool_total"], 1)
-            ratio = dislike_rate / max(pool_rate, 0.001)
-            if ratio > 2.0:
-                if tag not in tag_scores:
-                    tag_scores[tag] = {"tag": tag, "count": 0, "ratio": 0.0}
-                tag_scores[tag]["count"] += count
-                tag_scores[tag]["ratio"] = max(tag_scores[tag]["ratio"], round(ratio, 1))
-
-    # Filter: skip candidates where >50% of their disliked images are already
-    # covered by an excluded tag (containment, not Jaccard).
-    results = []
-    for s in tag_scores.values():
-        if s["count"] < 3:
-            continue
-        imgs = tag_dislike_images.get(s["tag"], set())
-        if imgs and any(len(imgs & ex) / len(imgs) > 0.5 for ex in excluded_image_sets if ex):
-            continue
-        results.append(s)
-
-    results.sort(key=lambda r: (-r["count"], -r["ratio"]))
-    return {"suggestions": results[:10]}
+    results = suggest_tags_to_exclude(metadata, blacklisted, config.wallhaven.exclude_tags)
+    return {"suggestions": results}
 
 
 @app.get("/trash/{filename}")
