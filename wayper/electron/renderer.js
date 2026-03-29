@@ -648,9 +648,14 @@ async function performSearch(query) {
     appState.searchQuery = query;
     try {
         const res = await fetch(`${API_URL}/api/search?q=${encodeURIComponent(query)}`, { signal: searchAbortController.signal });
+        if (!res.ok) {
+            console.error('[search] API error:', res.status);
+            return;
+        }
         const data = await res.json();
-        appState.searchMatches = new Set(data.matches);
-        renderSearchSuggestions(data.suggestions);
+        console.log('[search]', query, '→', data.matches?.length, 'matches, allImages:', appState.allImages.length);
+        appState.searchMatches = new Set(data.matches || []);
+        renderSearchSuggestions(data.suggestions || []);
         applySearchFilter();
         updateSearchCount();
     } catch (e) {
@@ -683,9 +688,11 @@ function updateSearchCount() {
 function applySearchFilter() {
     if (appState.searchMatches) {
         appState.images = appState.allImages.filter(img => appState.searchMatches.has(img.name));
+        console.log('[filter]', appState.allImages.length, '→', appState.images.length, 'images (mode:', appState.mode + ')');
     } else {
         appState.images = [...appState.allImages];
     }
+    els.mainContent.scrollTop = 0;
     renderImages();
 }
 
@@ -1058,6 +1065,7 @@ function renderMonitors() {
 }
 
 function renderImages() {
+    console.log('[render]', appState.mode, 'images:', appState.images.length, 'search:', appState.searchQuery || '(none)');
     els.wallpaperGrid.innerHTML = '';
     appState.currentBatchIndex = 0;
 
