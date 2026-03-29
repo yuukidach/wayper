@@ -1216,7 +1216,7 @@ function renderBlocklistView() {
                 body: JSON.stringify({ wallhaven: { exclude_tags: tags } })
             });
             await fetchConfig();
-            appState.tagSuggestions = appState.tagSuggestions.filter(x => x.tag !== s.tag);
+            await fetchTagSuggestions();
             appState.reviewingTag = null;
             clearSearch();
         };
