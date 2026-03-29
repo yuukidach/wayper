@@ -32,7 +32,7 @@
 - **Wallhaven integration** — auto-downloads wallpapers from [Wallhaven](https://wallhaven.cc) based on your search preferences. No manual sourcing.
 - **Auto orientation matching** — portrait monitors get portrait wallpapers, landscape gets landscape. No manual sorting.
 - **Pool management** — validates (catches corrupt images), resizes to your exact resolution, and rotates automatically.
-- **SFW/NSFW toggle** — one key to switch. Persistent across sessions.
+- **Three-tier purity** — SFW, Sketchy, NSFW — independently toggleable. Persistent across sessions.
 - **History navigation** — prev/next through your wallpaper history. Browser-style back/forward per monitor.
 - **Favorites & blacklist** — like/dislike with undo. Favorites stay in rotation.
 - **Cross-platform GUI** — browse, preview, and manage your collection with daemon control and settings. Works on Linux and macOS.
@@ -66,7 +66,9 @@ wayper fav [--open]         # favorite current wallpaper
 wayper unfav                # remove from favorites
 wayper dislike              # blacklist + switch
 wayper undislike            # undo last dislike
-wayper mode [sfw|nsfw]      # toggle or set mode
+wayper mode                 # toggle sfw↔nsfw (preserves sketchy)
+wayper mode sketchy         # toggle sketchy on/off
+wayper mode sfw,sketchy     # set exact purity combination
 wayper status               # show current state
 wayper-gui                  # GUI app (browse, actions, daemon, settings)
 wayper setup                # install .desktop entry (Linux)
@@ -81,7 +83,7 @@ wayper --json status        # machine-readable output
 
 | Key | Action | Key | Action |
 |-----|--------|-----|--------|
-| `1` `2` `3` | Pool / Favorites / Blocklist | `m` | Toggle SFW/NSFW |
+| `1` `2` `3` | Pool / Favorites / Blocklist | `F1` `F2` `F3` | Toggle SFW / Sketchy / NSFW |
 | `h` / `l` | Prev / Next wallpaper | `f` | Favorite (focused card or current) |
 | `x` / `Del` | Dislike / Remove | `z` | Undo dislike |
 | `o` | Open on Wallhaven | `s` | Settings |
@@ -110,6 +112,7 @@ bind = $mod CTRL, F10, exec, wayper fav --open
 bind = $mod, F11,      exec, wayper next
 bind = $mod SHIFT, F11,exec, wayper prev
 bind = $mod, F12,      exec, wayper mode
+bind = $mod SHIFT, F12,exec, wayper mode sketchy
 exec-once = wayper daemon
 ```
 </details>

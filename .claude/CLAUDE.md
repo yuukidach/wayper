@@ -87,6 +87,6 @@ wayper/
 ## Guidelines
 
 - No tests exist yet — do not add test infrastructure unless asked
-- Pool directory structure: `download_dir/[sfw|nsfw]/[portrait|landscape]` + `favorites/` + `.trash/`
+- Pool directory structure: `download_dir/[sfw|sketchy|nsfw]/[portrait|landscape]` + `favorites/[sfw|sketchy|nsfw]/` + `.trash/`
 - All CLI commands support `--json` flag for machine-readable output
 - Keep platform-specific code in `backend/` — never in shared modules

@@ -32,7 +32,7 @@
 - **Wallhaven 集成** — 根据搜索偏好自动从 [Wallhaven](https://wallhaven.cc) 下载壁纸，无需手动找图。
 - **自动匹配方向** — 竖屏显示器自动用竖屏壁纸，横屏用横屏。无需手动分类。
 - **壁纸池管理** — 验证（检测损坏图片）、裁剪至显示器分辨率、定时轮换。
-- **SFW/NSFW 切换** — 一键切换，跨会话持久化。
+- **三档纯度** — SFW、Sketchy、NSFW 独立开关，跨会话持久化。
 - **历史导航** — 前进/后退浏览壁纸历史，按显示器独立记录。
 - **收藏与黑名单** — 喜欢/不喜欢，支持撤销。收藏的壁纸继续参与轮换。
 - **跨平台 GUI** — 浏览、预览和管理壁纸集合，集成 daemon 控制和设置。支持 Linux 和 macOS。
@@ -66,7 +66,9 @@ wayper fav [--open]         # 收藏当前壁纸
 wayper unfav                # 取消收藏
 wayper dislike              # 拉黑 + 切换
 wayper undislike            # 撤销上次拉黑
-wayper mode [sfw|nsfw]      # 切换模式
+wayper mode                 # 切换 sfw↔nsfw（保留 sketchy 状态）
+wayper mode sketchy         # 开关 sketchy
+wayper mode sfw,sketchy     # 设置精确组合
 wayper status               # 查看当前状态
 wayper-gui                  # GUI 应用（浏览、操作、daemon、设置）
 wayper setup                # 安装 .desktop（Linux）
@@ -81,7 +83,7 @@ wayper --json status        # JSON 格式输出
 
 | 按键 | 操作 | 按键 | 操作 |
 |------|------|------|------|
-| `1` `2` `3` | 壁纸池 / 收藏 / 黑名单 | `m` | 切换 SFW/NSFW |
+| `1` `2` `3` | 壁纸池 / 收藏 / 黑名单 | `F1` `F2` `F3` | 切换 SFW / Sketchy / NSFW |
 | `h` / `l` | 上一张 / 下一张壁纸 | `f` | 收藏 |
 | `x` / `Del` | 拉黑 / 移除 | `z` | 撤销拉黑 |
 | `o` | 在 Wallhaven 打开 | `s` | 设置 |
@@ -107,6 +109,7 @@ bind = $mod CTRL, F10, exec, wayper fav --open
 bind = $mod, F11,      exec, wayper next
 bind = $mod SHIFT, F11,exec, wayper prev
 bind = $mod, F12,      exec, wayper mode
+bind = $mod SHIFT, F12,exec, wayper mode sketchy
 exec-once = wayper daemon
 ```
 

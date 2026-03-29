@@ -249,8 +249,8 @@ footer .links a { color: var(--subtext); }
       <p>Validates, resizes, rotates. Favorites, blacklist, undo — all built in.</p>
     </div>
     <div class="feature">
-      <strong>SFW / NSFW</strong>
-      <p>One key to switch. Persistent across sessions.</p>
+      <strong>Three-tier purity</strong>
+      <p>SFW, Sketchy, NSFW — independently toggleable. Persistent across sessions.</p>
     </div>
     <div class="feature">
       <strong>History</strong>
@@ -308,7 +308,9 @@ wayper fav [--open]         # favorite current wallpaper
 wayper unfav                # remove from favorites
 wayper dislike              # blacklist + switch
 wayper undislike            # undo last dislike
-wayper mode [sfw|nsfw]      # toggle or set mode
+wayper mode                 # toggle sfw↔nsfw (preserves sketchy)
+wayper mode sketchy         # toggle sketchy on/off
+wayper mode sfw,sketchy     # set exact purity combination
 wayper status               # show current state
 wayper-gui                  # GUI app
 wayper setup                # install .desktop entry (Linux)
@@ -333,7 +335,7 @@ wayper --json status        # machine-readable output</code></pre>
     <div><kbd>x</kbd> / <kbd>Del</kbd> <span class="label">dislike / remove</span></div>
     <div><kbd>z</kbd> <span class="label">undo dislike</span></div>
     <div><kbd>o</kbd> <span class="label">open on Wallhaven</span></div>
-    <div><kbd>m</kbd> <span class="label">toggle SFW/NSFW</span></div>
+    <div><kbd>F1</kbd> <kbd>F2</kbd> <kbd>F3</kbd> <span class="label">toggle SFW / Sketchy / NSFW</span></div>
     <div><kbd>s</kbd> <span class="label">settings</span></div>
     <div><kbd>Esc</kbd> <span class="label">unfocus card</span></div>
     <div><kbd>Arrow keys</kbd> <span class="label">navigate grid</span></div>
@@ -381,6 +383,7 @@ bind = $mod CTRL, F10, exec, wayper fav --open
 bind = $mod, F11,      exec, wayper next
 bind = $mod SHIFT, F11,exec, wayper prev
 bind = $mod, F12,      exec, wayper mode
+bind = $mod SHIFT, F12,exec, wayper mode sketchy
 exec-once = wayper daemon</code></pre>
   </div>
   <div id="tab-aero" class="tab-content">
