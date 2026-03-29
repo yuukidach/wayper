@@ -360,6 +360,11 @@ def control_action(action: str, monitor_name: str | None = Body(None, embed=True
             push_history(config, monitor, next_img)
         add_to_blacklist(config, current_img.name)
         push_undo(config, current_img.name, current_img.parent)
+        try:
+            rel = current_img.relative_to(config.download_dir)
+            _remove_thumbnail(config, str(rel))
+        except ValueError:
+            pass
     return {"status": "ok"}
 
 
@@ -558,6 +563,7 @@ def dislike_image_route(req: ActionRequest):
 
         add_to_blacklist(config, img_full.name)
         push_undo(config, img_full.name, img_full.parent)
+        _remove_thumbnail(config, req.image_path)
 
     return {"status": "ok"}
 
@@ -637,6 +643,35 @@ def serve_trash_image(filename: str):
     return FileResponse(trashed)
 
 
+def _remove_thumbnail(config: WayperConfig, image_path: str) -> None:
+    """Remove cached thumbnail for an image, if it exists."""
+    rel = Path(image_path)
+    thumb = config.download_dir / ".thumbnails" / rel.parent / (rel.stem + ".jpg")
+    thumb.unlink(missing_ok=True)
+
+
+@app.get("/thumbnails/{path:path}")
+def serve_thumbnail(path: str):
+    """Serve a cached thumbnail, generating on first request."""
+    from fastapi.responses import FileResponse
+
+    from wayper.image import generate_thumbnail
+
+    config = get_config()
+    img_full = (config.download_dir / path).resolve()
+    if not img_full.is_relative_to(config.download_dir):
+        raise HTTPException(403, "Path traversal not allowed")
+    if not img_full.exists():
+        raise HTTPException(404, "Image not found")
+
+    rel = img_full.relative_to(config.download_dir)
+    cache_dir = config.download_dir / ".thumbnails" / rel.parent
+
+    thumb = generate_thumbnail(img_full, cache_dir)
+    target = thumb if thumb else img_full
+    return FileResponse(target, headers={"Cache-Control": "public, max-age=86400"})
+
+
 # Mount images directory
 app.mount("/images", StaticFiles(directory=get_config().download_dir), name="images")
 
@@ -644,6 +679,9 @@ app.mount("/images", StaticFiles(directory=get_config().download_dir), name="ima
 def run():
     import uvicorn
 
+    from wayper.logging import setup_logging
+
+    setup_logging()
     uvicorn.run(app, host="127.0.0.1", port=8080, log_level="info")
 
 

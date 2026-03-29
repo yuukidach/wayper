@@ -1382,6 +1382,13 @@ function imageUrl(path) {
     return `${API_URL}/images/${encodeURI(path)}`;
 }
 
+function thumbnailUrl(path) {
+    if (path.startsWith('__trash/')) {
+        return `${API_URL}/trash/${encodeURIComponent(path.slice(8))}`;
+    }
+    return `${API_URL}/thumbnails/${encodeURI(path)}`;
+}
+
 function createCard(img) {
     const card = document.createElement('div');
     card.className = 'wallpaper-card';
@@ -1392,11 +1399,11 @@ function createCard(img) {
         card.classList.add('portrait');
     }
 
-    const imgUrl = imageUrl(img.path);
+    const thumbUrl = thumbnailUrl(img.path);
 
     if (appState.mode === 'trash') {
         card.innerHTML = `
-            <img class="loading" src="${imgUrl}" loading="lazy" alt="${esc(img.name)}">
+            <img class="loading" src="${thumbUrl}" loading="lazy" alt="${esc(img.name)}">
             <div class="overlay">
                 <button class="action-btn restore" title="Restore to Pool">${ICONS.restore()}</button>
                 <button class="action-btn url" title="Open on Wallhaven">${ICONS.externalLink()}</button>
@@ -1410,7 +1417,7 @@ function createCard(img) {
         card.onclick = () => showLightbox(img);
     } else {
         card.innerHTML = `
-            <img class="loading" src="${imgUrl}" loading="lazy" alt="${esc(img.name)}">
+            <img class="loading" src="${thumbUrl}" loading="lazy" alt="${esc(img.name)}">
             <div class="overlay">
                 <button class="action-btn" title="Set Wallpaper">${ICONS.setWallpaper()}</button>
                 <button class="action-btn fav ${img.is_favorite ? 'active' : ''}" title="Favorite">${ICONS.favorite(16, img.is_favorite)}</button>

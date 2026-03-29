@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json as json_mod
-import logging
 import signal
 import subprocess
 import sys
@@ -67,11 +66,9 @@ def daemon(ctx):
     """
     if ctx.invoked_subcommand is None:
         config = ctx.obj["config"]
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s [%(levelname)s] %(message)s",
-            datefmt="%H:%M:%S",
-        )
+        from .logging import setup_logging
+
+        setup_logging()
         from .daemon import run_daemon
 
         asyncio.run(run_daemon(config))
@@ -103,8 +100,13 @@ def start(ctx):
     else:
         cmd = [sys.executable, "-m", "wayper.cli", "daemon"]
 
-    with open("/tmp/wayper-daemon.log", "w") as f:
-        subprocess.Popen(cmd, start_new_session=True, stdout=f, stderr=f, stdin=subprocess.DEVNULL)
+    subprocess.Popen(
+        cmd,
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+    )
     click.echo("Daemon started in background.")
 
 

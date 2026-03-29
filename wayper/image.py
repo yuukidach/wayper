@@ -1,10 +1,13 @@
-"""Image validation and resize/crop using Pillow."""
+"""Image validation, resize/crop, and thumbnail generation using Pillow."""
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PIL import Image
+
+log = logging.getLogger("wayper.image")
 
 
 def validate_image(path: Path) -> bool:
@@ -15,6 +18,34 @@ def validate_image(path: Path) -> bool:
         return True
     except Exception:
         return False
+
+
+def generate_thumbnail(source: Path, cache_dir: Path, max_width: int = 400) -> Path | None:
+    """Generate a JPEG thumbnail preserving aspect ratio (only downscales).
+
+    Returns the thumbnail path on success, None on failure.
+    Skips regeneration if a cached thumbnail with newer mtime exists.
+    """
+    thumb = cache_dir / (source.stem + ".jpg")
+    try:
+        if thumb.exists() and thumb.stat().st_mtime >= source.stat().st_mtime:
+            return thumb
+    except OSError:
+        pass
+
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        with Image.open(source) as img:
+            if img.width <= max_width:
+                return None  # already small enough, serve original
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            img.thumbnail((max_width, max_width * 4), Image.LANCZOS)
+            img.save(thumb, format="JPEG", quality=80)
+        return thumb
+    except Exception:
+        log.debug("thumbnail generation failed for %s", source, exc_info=True)
+        return None
 
 
 def resize_crop(path: Path, width: int, height: int) -> bool:

@@ -147,6 +147,9 @@ def update_greeter(config: WayperConfig) -> None:
 async def run_daemon(config: WayperConfig) -> None:
     global _change_now, _reload_mode, _wake
 
+    from .logging import setup_logging
+
+    setup_logging()
     ensure_directories(config)
     ensure_ready()
     write_pid_file(config)

@@ -6,6 +6,9 @@ from wayper.server.api import run as run_api
 
 
 def main():
+    from wayper.logging import setup_logging
+
+    setup_logging()
     if getattr(sys, "frozen", False):
         # We are running in a PyInstaller bundle
         if len(sys.argv) > 1:
