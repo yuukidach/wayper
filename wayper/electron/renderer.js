@@ -527,11 +527,13 @@ async function saveSettings() {
 
     els.btnSaveSettings.innerText = 'Saving...';
     try {
-        await fetch(`${API_URL}/api/config`, {
+        const res = await fetch(`${API_URL}/api/config`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updates)
         });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         await fetchConfig(); // Reload config
         switchView('grid');
@@ -621,9 +623,7 @@ async function setWallpaper(path) {
 
     // Optimistic UI update
     const card = document.querySelector(`[data-path="${path}"]`);
-    if (card) {
-        card.style.opacity = '0.5';
-    }
+    if (card) card.classList.add('setting');
 
     try {
         await fetch(`${API_URL}/api/wallpaper/set`, {
@@ -638,10 +638,10 @@ async function setWallpaper(path) {
         // Refresh monitor status to show new current
         setTimeout(fetchMonitors, 500);
 
-        if (card) card.style.opacity = '1';
+        if (card) card.classList.remove('setting');
     } catch (e) {
         console.error("Set wallpaper failed", e);
-        if (card) card.style.opacity = '1';
+        if (card) card.classList.remove('setting');
     } finally {
         hideLoader();
     }
@@ -1071,14 +1071,16 @@ function updateStatusUI() {
     if (running) {
         els.daemonDot.classList.add('running');
         els.daemonStatus.innerText = 'Daemon Active';
-        els.daemonStatus.style.color = 'var(--text)';
+        els.daemonStatus.classList.add('daemon-active');
+        els.daemonStatus.classList.remove('daemon-stopped');
         els.btnDaemon.innerText = 'Stop Daemon';
         els.btnDaemon.classList.add('danger');
         els.btnDaemon.classList.remove('primary');
     } else {
         els.daemonDot.classList.remove('running');
         els.daemonStatus.innerText = 'Daemon Stopped';
-        els.daemonStatus.style.color = 'var(--overlay1)';
+        els.daemonStatus.classList.add('daemon-stopped');
+        els.daemonStatus.classList.remove('daemon-active');
         els.btnDaemon.innerText = 'Start Daemon';
         els.btnDaemon.classList.remove('danger');
         els.btnDaemon.classList.add('primary'); // Encourage starting

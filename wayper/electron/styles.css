@@ -87,7 +87,7 @@ kbd {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 4px;
   padding: 1px 5px;
-  color: var(--overlay1);
+  color: var(--subtext0);
   min-width: 16px;
   text-align: center;
   line-height: 1.4;
@@ -1021,8 +1021,8 @@ footer {
 }
 
 .dot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background-color: rgba(243, 139, 168, 0.4);
   transition: background-color 0.3s var(--ease), box-shadow 0.3s var(--ease);
@@ -1031,6 +1031,20 @@ footer {
 .dot.running {
   background-color: var(--green);
   box-shadow: 0 0 6px rgba(166, 227, 161, 0.5);
+}
+
+/* Daemon status text */
+.daemon-active {
+  color: var(--text);
+}
+
+.daemon-stopped {
+  color: var(--overlay1);
+}
+
+/* Card loading state */
+.wallpaper-card.setting {
+  opacity: 0.5;
 }
 
 /* ---------- Scrollbar ---------- */
@@ -1414,7 +1428,7 @@ footer {
   left: 10px;
   top: 50%;
   transform: translateY(-50%);
-  color: var(--overlay1);
+  color: var(--subtext0);
   pointer-events: none;
   z-index: 1;
 }

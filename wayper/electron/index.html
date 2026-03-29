@@ -131,19 +131,19 @@
                     <div class="settings-card">
                         <h3>General</h3>
                         <div class="field">
-                            <label>Interval (minutes)</label>
+                            <label for="input-interval">Interval (minutes)</label>
                             <input type="number" id="input-interval" min="1" value="5">
                         </div>
                         <div class="field">
-                            <label>Disk Quota (MB)</label>
+                            <label for="input-quota">Disk Quota (MB)</label>
                             <input type="number" id="input-quota" min="100" value="4000">
                         </div>
                         <div class="field">
-                            <label>Pool Target (images)</label>
+                            <label for="input-pool-target">Pool Target (images)</label>
                             <input type="number" id="input-pool-target" min="10" value="30">
                         </div>
                         <div class="field">
-                            <label>Proxy</label>
+                            <label for="input-proxy">Proxy</label>
                             <input type="text" id="input-proxy" placeholder="http://127.0.0.1:7897" class="code-font">
                             <small class="hint">Leave empty for direct connection</small>
                         </div>
@@ -162,12 +162,12 @@
                     <div class="settings-card">
                         <h3>Wallhaven Source</h3>
                         <div class="field">
-                            <label>Categories (General/Anime/People)</label>
+                            <label for="input-categories">Categories (General/Anime/People)</label>
                             <input type="text" id="input-categories" placeholder="111" class="code-font">
                             <small class="hint">111 = All, 010 = Anime only</small>
                         </div>
                         <div class="field">
-                            <label>Top Range</label>
+                            <label for="input-top-range">Top Range</label>
                             <select id="input-top-range">
                                 <option value="1d">Last Day</option>
                                 <option value="3d">Last 3 Days</option>
@@ -179,7 +179,7 @@
                             </select>
                         </div>
                         <div class="field">
-                            <label>Sorting</label>
+                            <label for="input-sorting">Sorting</label>
                             <select id="input-sorting">
                                 <option value="toplist">Toplist</option>
                                 <option value="hot">Hot</option>
@@ -189,14 +189,14 @@
                             </select>
                         </div>
                         <div class="field">
-                            <label>AI Art Filter</label>
+                            <label for="input-ai-art">AI Art Filter</label>
                             <select id="input-ai-art">
                                 <option value="0">Allow AI</option>
                                 <option value="1">Block AI</option>
                             </select>
                         </div>
                         <div class="field">
-                            <label>Exclude Tags</label>
+                            <label for="input-exclude-tag">Exclude Tags</label>
                             <div class="tag-input-row">
                                 <input type="text" id="input-exclude-tag" placeholder="Tag name..." class="tag-input">
                                 <button type="button" id="btn-add-tag" class="btn-add-tag">Add</button>

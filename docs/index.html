@@ -151,6 +151,31 @@ kbd {
   border: 1px solid var(--surface1); box-shadow: 0 1px 2px rgba(0,0,0,.2);
 }
 
+/* ── GUI section ── */
+.gui-screenshot {
+  margin-bottom: 20px; text-align: center;
+}
+.gui-screenshot img {
+  width: 100%; max-width: 740px; border-radius: 12px;
+  border: 1px solid var(--surface0); box-shadow: 0 4px 24px rgba(0,0,0,.3);
+}
+.gui-desc {
+  margin-bottom: 16px; color: var(--subtext); font-size: .92em;
+}
+.kbd-label {
+  margin-bottom: 8px; font-size: .88em; color: var(--overlay); font-weight: 500;
+}
+.kbd-grid-gap { margin-bottom: 18px; }
+.section-intro {
+  margin-bottom: 14px; color: var(--subtext); font-size: .92em;
+}
+.mcp-tools {
+  margin-top: 14px; color: var(--subtext); font-size: .88em;
+}
+.req-list {
+  list-style: none; padding: 0; line-height: 2.2;
+}
+
 /* ── Footer ── */
 footer {
   padding: 40px 24px; text-align: center; color: var(--overlay); font-size: .85em;
@@ -198,6 +223,7 @@ footer .links a { color: var(--subtext); }
       <a href="#browse">GUI</a>
       <a href="#keybindings">Keys</a>
       <a href="#mcp">MCP</a>
+      <a href="https://github.com/yuukidach/wayper/blob/main/example-config.toml">Config</a>
     </div>
     <a class="gh-btn" href="https://github.com/yuukidach/wayper">GitHub</a>
   </div>
@@ -319,15 +345,14 @@ wayper --json status        # machine-readable output</code></pre>
 
 <section id="browse">
   <h2>GUI</h2>
-  <p style="margin-bottom:20px;text-align:center">
-    <img src="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png" alt="browse window" loading="lazy"
-         style="width:100%;max-width:740px;border-radius:12px;border:1px solid var(--surface0);box-shadow:0 4px 24px rgba(0,0,0,.3)">
+  <p class="gui-screenshot">
+    <img src="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png" alt="browse window" loading="lazy">
   </p>
-  <p style="margin-bottom:16px;color:var(--subtext);font-size:.92em">
+  <p class="gui-desc">
     <code>wayper-gui</code> — browse your pool, favorites, and disliked wallpapers. Quick actions, daemon control, settings. Designed to be fully operable without a mouse.
   </p>
-  <p style="margin-bottom:8px;font-size:.88em;color:var(--overlay);font-weight:500">Grid view</p>
-  <div class="kbd-grid" style="margin-bottom:18px">
+  <p class="kbd-label">Grid view</p>
+  <div class="kbd-grid kbd-grid-gap">
     <div><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <span class="label">pool / fav / blocklist</span></div>
     <div><kbd>Enter</kbd> / <kbd>Space</kbd> <span class="label">preview (lightbox)</span></div>
     <div><kbd>h</kbd> / <kbd>l</kbd> <span class="label">prev / next wallpaper</span></div>
@@ -343,7 +368,7 @@ wayper --json status        # machine-readable output</code></pre>
     <div><kbd>[</kbd> / <kbd>]</kbd> <span class="label">blocklist: recoverable / all</span></div>
     <div><kbd>4</kbd>–<kbd>9</kbd> <span class="label">switch monitor</span></div>
   </div>
-  <p style="margin-bottom:8px;font-size:.88em;color:var(--overlay);font-weight:500">Lightbox preview</p>
+  <p class="kbd-label">Lightbox preview</p>
   <div class="kbd-grid">
     <div><kbd>←</kbd> / <kbd>→</kbd> <span class="label">previous / next image</span></div>
     <div><kbd>Enter</kbd> <span class="label">set as wallpaper</span></div>
@@ -356,7 +381,7 @@ wayper --json status        # machine-readable output</code></pre>
 
 <section id="mcp">
   <h2>MCP</h2>
-  <p style="margin-bottom:14px">Built-in <a href="https://modelcontextprotocol.io/">MCP</a> server lets AI assistants control your wallpapers. Ask Claude to <em>"favorite this wallpaper"</em> or <em>"switch to something with mountains"</em> — it just works.</p>
+  <p class="section-intro">Built-in <a href="https://modelcontextprotocol.io/">MCP</a> server lets AI assistants control your wallpapers. Ask Claude to <em>"favorite this wallpaper"</em> or <em>"switch to something with mountains"</em> — it just works.</p>
   <pre><code>{
   "mcpServers": {
     "wayper": {
@@ -364,14 +389,14 @@ wayper --json status        # machine-readable output</code></pre>
     }
   }
 }</code></pre>
-  <p style="margin-top:14px;color:var(--subtext);font-size:.88em">
+  <p class="mcp-tools">
     Tools: <code>status</code> <code>next_wallpaper</code> <code>prev_wallpaper</code> <code>fav</code> <code>unfav</code> <code>dislike</code> <code>undislike</code> <code>set_mode</code> <code>delete_wallpaper</code>
   </p>
 </section>
 
 <section id="keybindings">
   <h2>Keybindings</h2>
-  <p style="margin-bottom:14px;color:var(--subtext);font-size:.92em">Bind wayper commands to your compositor shortcuts for instant wallpaper control.</p>
+  <p class="section-intro">Bind wayper commands to your compositor shortcuts for instant wallpaper control.</p>
   <div class="tabs">
     <div class="tab active" onclick="switchTab(event, 'tab-hypr')">Hyprland</div>
     <div class="tab" onclick="switchTab(event, 'tab-aero')">AeroSpace (macOS)</div>
@@ -397,7 +422,7 @@ cmd-shift-f = 'exec-and-forget wayper fav'</code></pre>
 
 <section>
   <h2>Requirements</h2>
-  <ul style="list-style:none;padding:0;line-height:2.2">
+  <ul class="req-list">
     <li>Python 3.12+</li>
     <li><a href="https://wallhaven.cc/settings/account">Wallhaven API key</a></li>
     <li><strong>Linux:</strong> <a href="https://codeberg.org/LGFae/awww">awww</a>, <a href="https://hyprland.org/">Hyprland</a></li>
