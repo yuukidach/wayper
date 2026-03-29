@@ -177,10 +177,6 @@ header {
   flex-shrink: 0;
 }
 
-body.is-macos header {
-  padding-left: 80px;
-}
-
 .brand {
   display: flex;
   align-items: center;
