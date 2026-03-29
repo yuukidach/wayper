@@ -76,10 +76,6 @@ class WayperConfig:
         return self.download_dir / ".undo"
 
     @property
-    def trash_dir(self) -> Path:
-        return self.download_dir / ".trash"
-
-    @property
     def history_file(self) -> Path:
         return self.download_dir / ".history"
 

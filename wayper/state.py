@@ -87,19 +87,9 @@ def _system_trash_dirs() -> list[Path]:
     return [xdg_data / "Trash" / "files"]
 
 
-def _trash_search_dirs(config: WayperConfig) -> list[Path]:
-    """All directories to search for trashed files: system + legacy."""
-    dirs = _system_trash_dirs()
-    # Legacy .trash/ fallback
-    dirs.extend(
-        [
-            config.trash_dir / "sfw",
-            config.trash_dir / "sketchy",
-            config.trash_dir / "nsfw",
-            config.trash_dir,
-        ]
-    )
-    return dirs
+def _trash_search_dirs() -> list[Path]:
+    """Return system trash directories to search."""
+    return _system_trash_dirs()
 
 
 def _cleanup_trashinfo(filename: str) -> None:
@@ -114,9 +104,9 @@ def _cleanup_trashinfo(filename: str) -> None:
         pass
 
 
-def find_in_trash(config: WayperConfig, filename: str) -> Path | None:
-    """Find a file in system trash or legacy .trash/ directory."""
-    for d in _trash_search_dirs(config):
+def find_in_trash(_config: WayperConfig, filename: str) -> Path | None:
+    """Find a file in system trash."""
+    for d in _trash_search_dirs():
         candidate = d / filename
         if candidate.exists():
             return candidate
@@ -134,13 +124,7 @@ def push_undo(config: WayperConfig, filename: str, original_dir: Path) -> None:
 
     src = original_dir / filename
     if src.exists():
-        try:
-            send2trash.send2trash(src)
-        except Exception:
-            # Fallback: move to legacy .trash/ if system trash fails (e.g. cross-mount)
-            trash = config.trash_dir
-            trash.mkdir(parents=True, exist_ok=True)
-            src.rename(trash / filename)
+        send2trash.send2trash(src)
 
     with open(config.undo_file, "a") as f:
         f.write(f"{filename} {original_dir}\n")
