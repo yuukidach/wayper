@@ -46,6 +46,11 @@ let appState = {
     blocklistTab: 'recoverable', // recoverable, blocked
     blocklistData: null, // cached blocklist data
 
+    // Search
+    searchQuery: '',
+    searchMatches: null, // Set of filenames, or null = no search
+    allImages: [], // unfiltered image list
+
     // Pagination
     batchSize: 50,
     currentBatchIndex: 0,
@@ -120,6 +125,12 @@ const els = {
     countPool: document.getElementById('count-pool'),
     countFavorites: document.getElementById('count-favorites'),
     countBlocklist: document.getElementById('count-blocklist'),
+
+    // Search
+    searchInput: document.getElementById('search-input'),
+    searchCount: document.getElementById('search-count'),
+    searchClear: document.getElementById('search-clear'),
+    searchDropdown: document.getElementById('search-dropdown'),
 };
 
 // Init
@@ -184,13 +195,29 @@ function setupEventListeners() {
     els.btnSaveSettings.onclick = saveSettings;
     els.btnCancelSettings.onclick = () => switchView('grid');
 
+    // Search
+    els.searchInput.addEventListener('input', onSearchInput);
+    els.searchInput.addEventListener('keydown', handleSearchKeydown);
+    els.searchInput.addEventListener('blur', () => {
+        // Delay to allow click on dropdown items
+        setTimeout(() => els.searchDropdown.classList.add('hidden'), 150);
+    });
+    els.searchInput.addEventListener('focus', () => {
+        if (els.searchInput.value.trim()) {
+            performSearch(els.searchInput.value.trim());
+        }
+    });
+    els.searchClear.onclick = () => { clearSearch(); els.searchInput.blur(); };
+
     // Keyboard Shortcuts
     document.addEventListener('keydown', handleGlobalKeydown);
 }
 
 function handleGlobalKeydown(e) {
     // Ignore if typing in an input
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+    if (e.target.tagName === 'INPUT' && e.target.id !== 'search-input') return;
+    if (e.target.id === 'search-input') return; // handled by handleSearchKeydown
 
     // Lightbox-specific shortcuts
     if (lightboxEl) {
@@ -277,6 +304,10 @@ function handleGlobalKeydown(e) {
         case '3':
             setViewMode('trash');
             break;
+        case '/':
+            e.preventDefault();
+            els.searchInput.focus();
+            return;
         case 's':
             switchView(appState.view === 'settings' ? 'grid' : 'settings');
             break;
@@ -590,6 +621,145 @@ async function undoDislike() {
     }
 }
 
+// --- Search ---
+
+let searchDebounceTimer = null;
+let searchHighlightIndex = -1;
+let searchAbortController = null;
+
+function onSearchInput() {
+    const query = els.searchInput.value.trim();
+    clearTimeout(searchDebounceTimer);
+
+    if (!query) {
+        clearSearch();
+        return;
+    }
+
+    els.searchClear.classList.remove('hidden');
+    document.querySelector('.search-kbd')?.classList.add('hidden');
+
+    searchDebounceTimer = setTimeout(() => performSearch(query), 200);
+}
+
+async function performSearch(query) {
+    if (searchAbortController) searchAbortController.abort();
+    searchAbortController = new AbortController();
+
+    appState.searchQuery = query;
+    try {
+        const res = await fetch(`${API_URL}/api/search?q=${encodeURIComponent(query)}`, { signal: searchAbortController.signal });
+        const data = await res.json();
+        appState.searchMatches = new Set(data.matches);
+        renderSearchSuggestions(data.suggestions);
+        applySearchFilter();
+        updateSearchCount();
+    } catch (e) {
+        if (e.name !== 'AbortError') console.error('Search failed:', e);
+    }
+}
+
+function clearSearch() {
+    clearTimeout(searchDebounceTimer);
+    els.searchInput.value = '';
+    appState.searchQuery = '';
+    appState.searchMatches = null;
+    searchHighlightIndex = -1;
+    els.searchCount.classList.add('hidden');
+    els.searchClear.classList.add('hidden');
+    els.searchDropdown.classList.add('hidden');
+    document.querySelector('.search-kbd')?.classList.remove('hidden');
+    applySearchFilter();
+}
+
+function updateSearchCount() {
+    if (!appState.searchMatches) {
+        els.searchCount.classList.add('hidden');
+        return;
+    }
+    els.searchCount.textContent = `${appState.images.length}`;
+    els.searchCount.classList.remove('hidden');
+}
+
+function applySearchFilter() {
+    if (appState.searchMatches) {
+        appState.images = appState.allImages.filter(img => appState.searchMatches.has(img.name));
+    } else {
+        appState.images = [...appState.allImages];
+    }
+    renderImages();
+}
+
+function renderSearchSuggestions(suggestions) {
+    searchHighlightIndex = -1;
+    if (!suggestions.length) {
+        els.searchDropdown.classList.add('hidden');
+        return;
+    }
+
+    els.searchDropdown.innerHTML = suggestions.map((tag, i) =>
+        `<div class="search-dropdown-item" data-index="${i}">${esc(tag)}</div>`
+    ).join('');
+    els.searchDropdown.classList.remove('hidden');
+
+    els.searchDropdown.querySelectorAll('.search-dropdown-item').forEach(item => {
+        item.onmousedown = (e) => {
+            e.preventDefault(); // Prevent blur
+            els.searchInput.value = item.textContent;
+            els.searchDropdown.classList.add('hidden');
+            performSearch(item.textContent);
+        };
+    });
+}
+
+function handleSearchKeydown(e) {
+    const items = els.searchDropdown.querySelectorAll('.search-dropdown-item');
+
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        clearSearch();
+        els.searchInput.blur();
+        return;
+    }
+
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (items.length) {
+            searchHighlightIndex = Math.min(searchHighlightIndex + 1, items.length - 1);
+            updateDropdownHighlight(items);
+        }
+        return;
+    }
+
+    if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (items.length) {
+            searchHighlightIndex = Math.max(searchHighlightIndex - 1, -1);
+            updateDropdownHighlight(items);
+        }
+        return;
+    }
+
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        if (searchHighlightIndex >= 0 && items[searchHighlightIndex]) {
+            els.searchInput.value = items[searchHighlightIndex].textContent;
+            els.searchDropdown.classList.add('hidden');
+            performSearch(items[searchHighlightIndex].textContent);
+        } else {
+            els.searchDropdown.classList.add('hidden');
+        }
+        return;
+    }
+}
+
+function updateDropdownHighlight(items) {
+    items.forEach((item, i) => {
+        item.classList.toggle('highlighted', i === searchHighlightIndex);
+    });
+}
+
 async function fetchBlocklist() {
     try {
         const res = await fetch(`${API_URL}/api/blocklist`);
@@ -633,6 +803,10 @@ async function restoreImage(path) {
 }
 
 function removeImageFromState(path) {
+    // Also remove from allImages (unfiltered list)
+    const allIdx = appState.allImages.findIndex(img => img.path === path);
+    if (allIdx !== -1) appState.allImages.splice(allIdx, 1);
+
     const idx = appState.images.findIndex(img => img.path === path);
     if (idx !== -1) {
         appState.images.splice(idx, 1);
@@ -767,8 +941,8 @@ async function refreshImages() {
                 fetch(url),
                 fetchBlocklist(),
             ]);
-            appState.images = await imgRes.json();
-            renderImages();
+            appState.allImages = await imgRes.json();
+            applySearchFilter();
         } catch (e) { console.error(e); }
     } else {
         try {
@@ -777,8 +951,8 @@ async function refreshImages() {
                     .then(r => r.json())
             );
             const results = await Promise.all(fetches);
-            appState.images = results.flat();
-            renderImages();
+            appState.allImages = results.flat();
+            applySearchFilter();
         } catch (e) { console.error(e); }
     }
 }
@@ -892,10 +1066,13 @@ function renderImages() {
     }
 
     if (appState.images.length === 0) {
+        const msg = appState.searchQuery
+            ? `No matches for "${esc(appState.searchQuery)}"`
+            : `No wallpapers in ${esc(appState.mode)} / ${esc(appState.purity)}`;
         els.wallpaperGrid.innerHTML = `
             <div class="empty-state">
                 <div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
-                <p>No wallpapers in ${esc(appState.mode)} / ${esc(appState.purity)}</p>
+                <p>${msg}</p>
             </div>
         `;
         return;
