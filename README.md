@@ -13,14 +13,6 @@
   <img src="assets/demo-desktop.gif" alt="wallpaper transitions" width="720">
 </p>
 
-<p align="center">
-  <img src="assets/browse.png" alt="GUI browse view" width="720">
-</p>
-
-<p align="center">
-  <img src="assets/demo-cli.gif" alt="CLI usage" width="720">
-</p>
-
 ## Why wayper?
 
 - **Wallhaven integration** — auto-downloads wallpapers from [Wallhaven](https://wallhaven.cc) based on your search preferences. No manual sourcing.
@@ -49,6 +41,10 @@ uv venv && uv pip install -e .
 ```
 
 ## GUI
+
+<p align="center">
+  <img src="assets/browse.png" alt="GUI browse view" width="720">
+</p>
 
 `wayper-gui` launches a standalone app for browsing, managing, and controlling your wallpaper collection. Fully operable without a mouse.
 
@@ -79,6 +75,10 @@ uv venv && uv pip install -e .
 | `o` | Open on Wallhaven | `Space` / `Esc` | Close lightbox |
 
 ## CLI
+
+<p align="center">
+  <img src="assets/demo-cli.gif" alt="CLI usage" width="720">
+</p>
 
 ```
 wayper daemon               # start background rotation + downloads

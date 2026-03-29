@@ -13,14 +13,6 @@
   <img src="../assets/demo-desktop.gif" alt="壁纸切换效果" width="720">
 </p>
 
-<p align="center">
-  <img src="../assets/browse.png" alt="GUI 浏览界面" width="720">
-</p>
-
-<p align="center">
-  <img src="../assets/demo-cli.gif" alt="命令行演示" width="720">
-</p>
-
 ## 为什么选 wayper？
 
 - **Wallhaven 集成** — 根据搜索偏好自动从 [Wallhaven](https://wallhaven.cc) 下载壁纸，无需手动找图。
@@ -49,6 +41,10 @@ uv venv && uv pip install -e .
 ```
 
 ## GUI
+
+<p align="center">
+  <img src="../assets/browse.png" alt="GUI 浏览界面" width="720">
+</p>
 
 `wayper-gui` 启动独立应用，浏览、管理和控制壁纸集合。完全支持键盘操作，无需鼠标。
 
@@ -79,6 +75,10 @@ uv venv && uv pip install -e .
 | `o` | 在 Wallhaven 打开 | `Space` / `Esc` | 关闭灯箱 |
 
 ## CLI
+
+<p align="center">
+  <img src="../assets/demo-cli.gif" alt="命令行演示" width="720">
+</p>
 
 ```
 wayper daemon               # 启动后台轮换 + 下载
