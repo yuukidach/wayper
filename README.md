@@ -37,7 +37,7 @@
 - **Favorites & blacklist** — like/dislike with undo. Favorites stay in rotation.
 - **Cross-platform GUI** — browse, preview, and manage your collection with daemon control and settings. Works on Linux and macOS.
 - **Tag search** — search your collection by Wallhaven tags, category, or filename. Autocomplete suggestions, works across all views (pool, favorites, blocklist).
-- **Smart tag suggestions** — analyzes your dislike history to surface tags you repeatedly block. Review matches in the blocklist, then exclude with one click. No more manually guessing which tags to filter.
+- **Smart tag suggestions** — analyzes your dislike history to surface tags you repeatedly block. Preview matching images in the blocklist, then exclude with one click. Already-excluded tags automatically suppress related suggestions (e.g., excluding "video games" hides "video game characters" and "screen shot" too). No more manually guessing which tags to filter.
 - **Keyboard-driven** — every action has a keyboard shortcut. Grid navigation, lightbox preview, favorites, dislike — all without touching the mouse.
 - **AI-native** — built-in MCP server lets AI assistants (Claude Code, etc.) control your wallpapers directly. Ask your AI to "delete this broken wallpaper" or "favorite this one" — it just works.
 - **JSON output** — `--json` flag on every command for scripting and automation.
