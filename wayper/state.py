@@ -9,17 +9,69 @@ from pathlib import Path
 
 from .config import WayperConfig
 
+ALL_PURITIES = ("sfw", "sketchy", "nsfw")
 
-def read_mode(config: WayperConfig) -> str:
+
+def _parse_mode(raw: str) -> set[str]:
+    """Parse a mode string like 'sfw,sketchy' into a validated set."""
+    parts = {p.strip() for p in raw.split(",") if p.strip()}
+    valid = parts & set(ALL_PURITIES)
+    return valid or {"sfw"}
+
+
+def read_mode(config: WayperConfig) -> set[str]:
     sf = config.state_file
     if sf.exists():
-        return sf.read_text().strip() or config.default_mode
-    return config.default_mode
+        raw = sf.read_text().strip()
+        if raw:
+            return _parse_mode(raw)
+    return _parse_mode(config.default_mode)
 
 
-def write_mode(config: WayperConfig, mode: str) -> None:
+def write_mode(config: WayperConfig, mode: set[str]) -> None:
     config.state_file.parent.mkdir(parents=True, exist_ok=True)
-    config.state_file.write_text(mode)
+    # Canonical order: sfw, sketchy, nsfw
+    ordered = [p for p in ALL_PURITIES if p in mode]
+    config.state_file.write_text(",".join(ordered))
+
+
+def toggle_base(current: set[str]) -> set[str]:
+    """Swap sfw<->nsfw, preserving sketchy membership."""
+    result = current.copy()
+    if "nsfw" in result:
+        result.discard("nsfw")
+        result.add("sfw")
+    elif "sfw" in result:
+        result.discard("sfw")
+        result.add("nsfw")
+    else:
+        # Only sketchy active — add nsfw
+        result.add("nsfw")
+    return result
+
+
+def toggle_purity(current: set[str], purity: str) -> set[str]:
+    """Toggle a single purity; refuses to remove the last one."""
+    result = current.copy()
+    if purity in result:
+        if len(result) <= 1:
+            return current  # Can't remove the last one
+        result.discard(purity)
+    else:
+        result.add(purity)
+    return result
+
+
+def purity_from_path(config: WayperConfig, img: Path) -> str:
+    """Determine purity from an image's filesystem path."""
+    try:
+        rel = img.relative_to(config.download_dir)
+        parts = rel.parts
+        if parts[0] == "favorites":
+            return parts[1] if len(parts) > 1 and parts[1] in ALL_PURITIES else "sfw"
+        return parts[0] if parts[0] in ALL_PURITIES else "sfw"
+    except (ValueError, IndexError):
+        return "sfw"
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +91,14 @@ def _trash_search_dirs(config: WayperConfig) -> list[Path]:
     """All directories to search for trashed files: system + legacy."""
     dirs = _system_trash_dirs()
     # Legacy .trash/ fallback
-    dirs.extend([config.trash_dir / "sfw", config.trash_dir / "nsfw", config.trash_dir])
+    dirs.extend(
+        [
+            config.trash_dir / "sfw",
+            config.trash_dir / "sketchy",
+            config.trash_dir / "nsfw",
+            config.trash_dir,
+        ]
+    )
     return dirs
 
 
