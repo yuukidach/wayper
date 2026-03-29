@@ -137,11 +137,6 @@ const els = {
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
-    // Platform detection for UI adjustments
-    if (typeof process !== 'undefined' && process.platform === 'darwin') {
-        document.body.classList.add('is-macos');
-    }
-
     setupEventListeners();
     setupInfiniteScroll();
 
@@ -450,6 +445,9 @@ function populateSettingsForm() {
     document.getElementById('input-top-range').value = w.top_range;
     document.getElementById('input-sorting').value = w.sorting;
     document.getElementById('input-ai-art').value = w.ai_art_filter;
+
+    // Network
+    document.getElementById('input-proxy').value = c.proxy || '';
 }
 
 async function saveSettings() {
@@ -457,6 +455,7 @@ async function saveSettings() {
         interval_min: parseInt(document.getElementById('input-interval').value) || 5,
         quota_mb: parseInt(document.getElementById('input-quota').value) || 4000,
         pool_target: parseInt(document.getElementById('input-pool-target').value) || 30,
+        proxy: document.getElementById('input-proxy').value,
         wallhaven: {
             categories: document.getElementById('input-categories').value,
             top_range: document.getElementById('input-top-range').value,

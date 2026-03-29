@@ -140,6 +140,7 @@ class ConfigResponse(BaseModel):
     mode: list[str]
     pool_target: int
     quota_mb: int
+    proxy: str
     wallhaven: WallhavenConfigModel
 
 
@@ -167,6 +168,7 @@ def get_config_route():
         "mode": sorted(read_mode(config)),
         "pool_target": config.pool_target,
         "quota_mb": config.quota_mb,
+        "proxy": config.proxy or "",
         "wallhaven": {
             "categories": config.wallhaven.categories,
             "top_range": config.wallhaven.top_range,
@@ -190,6 +192,8 @@ def update_config_route(updates: dict = Body(...)):
         config.pool_target = updates["pool_target"]
     if "quota_mb" in updates:
         config.quota_mb = updates["quota_mb"]
+    if "proxy" in updates:
+        config.proxy = updates["proxy"].strip() or None
 
     if "wallhaven" in updates:
         wh = updates["wallhaven"]
