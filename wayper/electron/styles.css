@@ -831,6 +831,11 @@ main {
   color: var(--blue);
 }
 
+#exclude-combos-container {
+  max-height: none;
+  overflow-y: visible;
+}
+
 .tag-chip-remove {
   background: none;
   border: none;

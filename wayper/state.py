@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from .config import WayperConfig
+from .util import atomic_write
 
 ALL_PURITIES = ("sfw", "sketchy", "nsfw")
 
@@ -32,7 +33,7 @@ def write_mode(config: WayperConfig, mode: set[str]) -> None:
     config.state_file.parent.mkdir(parents=True, exist_ok=True)
     # Canonical order: sfw, sketchy, nsfw
     ordered = [p for p in ALL_PURITIES if p in mode]
-    config.state_file.write_text(",".join(ordered))
+    atomic_write(config.state_file, ",".join(ordered))
 
 
 def toggle_base(current: set[str]) -> set[str]:
@@ -144,7 +145,7 @@ def pop_undo(config: WayperConfig) -> tuple[str, Path] | None:
         return None
 
     filename, orig_dir_str = parts
-    config.undo_file.write_text("\n".join(lines[:-1]) + "\n" if lines[:-1] else "")
+    atomic_write(config.undo_file, "\n".join(lines[:-1]) + "\n" if lines[:-1] else "")
     return filename, Path(orig_dir_str)
 
 

@@ -7,30 +7,19 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .backend import (
-    FileLock,
-    find_monitor,
-    get_context,
-    get_focused_monitor,
-    notify,
-    query_current,
-    set_wallpaper,
-)
-from .config import NO_TRANSITION, load_config
+from .backend import get_context, notify, query_current
+from .config import load_config
+from .core import do_dislike, do_fav, do_next, do_prev, do_undislike, do_unfav
 from .daemon import is_daemon_running, signal_daemon
-from .history import go_prev, pick_next
-from .history import push as push_history
 from .pool import (
     add_to_blacklist,
     count_images,
     disk_usage_mb,
     favorites_dir,
     load_metadata,
-    pick_random,
     pool_dir,
-    remove_from_blacklist,
 )
-from .state import pop_undo, push_undo, read_mode, restore_from_trash, write_mode
+from .state import read_mode, write_mode
 
 mcp = FastMCP("wayper")
 
@@ -49,8 +38,8 @@ def status() -> dict:
     monitors_info = []
     for mon in config.monitors:
         img = current.get(mon.name)
-        pc = count_images(pool_dir(config, current_mode, mon.orientation))
-        fc = count_images(favorites_dir(config, current_mode, mon.orientation))
+        pc = sum(count_images(pool_dir(config, p, mon.orientation)) for p in current_mode)
+        fc = sum(count_images(favorites_dir(config, p, mon.orientation)) for p in current_mode)
         monitors_info.append(
             {
                 "name": mon.name,
@@ -74,147 +63,80 @@ def status() -> dict:
 
 @mcp.tool()
 def next_wallpaper(monitor: str | None = None) -> dict:
-    """Change wallpaper. If monitor is not specified, uses the focused monitor.
-
-    Args:
-        monitor: Monitor name (e.g. "DP-1"). If None, uses focused monitor.
-    """
+    """Change wallpaper. If monitor is not specified, uses the focused monitor."""
     config = _config()
-    if monitor is None:
-        monitor = get_focused_monitor()
-    mon_cfg = find_monitor(config, monitor)
-    if not mon_cfg:
-        return {"error": f"No config for monitor {monitor}"}
-
-    img = pick_next(config, monitor, mon_cfg.orientation)
-    if not img:
-        return {"error": "No images available"}
-
-    set_wallpaper(monitor, img, config.transition)
+    result = do_next(config, monitor)
+    if not result.ok:
+        return {"error": result.error}
     notify("Wallpaper", "Next wallpaper")
-    return {"action": "next", "monitor": monitor, "image": str(img)}
+    return {"action": "next", "monitor": result.monitor, "image": str(result.image)}
 
 
 @mcp.tool()
 def prev_wallpaper(monitor: str | None = None) -> dict:
-    """Go back to the previous wallpaper.
-
-    Args:
-        monitor: Monitor name (e.g. "DP-1"). If None, uses focused monitor.
-    """
+    """Go back to previous wallpaper in history."""
     config = _config()
-    if monitor is None:
-        monitor = get_focused_monitor()
-
-    img = go_prev(config, monitor)
-    if not img:
+    result = do_prev(config, monitor)
+    if not result.ok:
+        return {"error": result.error}
+    if result.status == "at_oldest":
         return {"status": "at_oldest"}
-
-    set_wallpaper(monitor, img, config.transition)
     notify("Wallpaper", "Previous wallpaper")
-    return {"action": "prev", "monitor": monitor, "image": str(img)}
+    return {"action": "prev", "monitor": result.monitor, "image": str(result.image)}
 
 
 @mcp.tool()
 def fav(open_url: bool = False) -> dict:
-    """Favorite the current wallpaper on the focused monitor.
-
-    Args:
-        open_url: If True, also open the wallpaper on Wallhaven in browser.
-    """
+    """Favorite the current wallpaper on the focused monitor."""
     config = _config()
-    with FileLock():
-        monitor, mon_cfg, img = get_context(config)
-        if not img or not mon_cfg:
-            return {"error": "No current wallpaper"}
-
-        if "favorites" in str(img):
-            return {"status": "already_favorite"}
-
-        mode = read_mode(config)
-        dest_dir = favorites_dir(config, mode, mon_cfg.orientation)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / img.name
-        img.rename(dest)
-        set_wallpaper(monitor, dest, NO_TRANSITION)
-
-        if open_url:
-            import webbrowser
-
-            from .wallhaven import wallhaven_url
-
-            webbrowser.open(wallhaven_url(img))
-
-        notify("Wallpaper", "Saved to favorites")
-        return {"action": "fav", "image": str(dest), "opened": open_url}
+    result = do_fav(config, open_url=open_url)
+    if not result.ok:
+        return {"error": result.error}
+    if result.status:
+        return {"status": result.status}
+    notify("Wallpaper", "Saved to favorites")
+    return {"action": "fav", "image": str(result.image), "opened": open_url}
 
 
 @mcp.tool()
 def unfav() -> dict:
     """Remove the current wallpaper from favorites, moving it back to the pool."""
     config = _config()
-    with FileLock():
-        monitor, mon_cfg, img = get_context(config)
-        if not img or not mon_cfg:
-            return {"error": "No current wallpaper"}
-
-        if "favorites" not in str(img):
-            return {"status": "not_favorite"}
-
-        mode = read_mode(config)
-        dest_dir = pool_dir(config, mode, mon_cfg.orientation)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / img.name
-        img.rename(dest)
-        set_wallpaper(monitor, dest, NO_TRANSITION)
-        notify("Wallpaper", "Removed from favorites")
-        return {"action": "unfav", "image": str(dest)}
+    result = do_unfav(config)
+    if not result.ok:
+        return {"error": result.error}
+    if result.status:
+        return {"status": result.status}
+    notify("Wallpaper", "Removed from favorites")
+    return {"action": "unfav", "image": str(result.image)}
 
 
 @mcp.tool()
 def dislike() -> dict:
-    """Blacklist the current wallpaper and switch to a new one. Can be undone with undislike."""
+    """Blacklist the current wallpaper and switch to a new one."""
     config = _config()
-    with FileLock():
-        monitor, mon_cfg, img = get_context(config)
-        if not img or not mon_cfg:
-            return {"error": "No current wallpaper"}
-
-        if "favorites" in str(img):
-            return {"error": "Can't dislike a favorite"}
-
-        mode = read_mode(config)
-        next_img = pick_random(config, mode, mon_cfg.orientation)
-        if next_img:
-            set_wallpaper(monitor, next_img, config.transition)
-            push_history(config, monitor, next_img)
-
-        add_to_blacklist(config, img.name)
-        push_undo(config, img.name, img.parent)
-        notify("Wallpaper", "Disliked")
-        return {"action": "dislike", "image": str(img)}
+    result = do_dislike(config)
+    if not result.ok:
+        return {"error": result.error}
+    if result.status == "is_favorite":
+        return {"error": "Can't dislike a favorite"}
+    notify("Wallpaper", "Disliked")
+    return {"action": "dislike", "image": str(result.image)}
 
 
 @mcp.tool()
 def undislike() -> dict:
     """Undo the last dislike, restoring the wallpaper from trash."""
     config = _config()
-    with FileLock():
-        entry = pop_undo(config)
-        if not entry:
-            return {"status": "nothing_to_undo"}
-
-        filename, orig_dir = entry
-        restored = restore_from_trash(config, filename, orig_dir)
-        remove_from_blacklist(config, filename)
-
-        if restored:
-            monitor = get_focused_monitor()
-            if monitor:
-                set_wallpaper(monitor, restored, config.transition)
-            notify("Wallpaper", f"Restored: {filename}")
-            return {"action": "undislike", "image": str(restored)}
+    result = do_undislike(config)
+    if not result.ok:
+        return {"error": result.error}
+    if result.status == "nothing_to_undo":
+        return {"status": "nothing_to_undo"}
+    if result.status == "file_missing":
         return {"status": "file_missing"}
+    notify("Wallpaper", f"Restored: {result.image.name if result.image else 'unknown'}")
+    return {"action": "undislike", "image": str(result.image)}
 
 
 @mcp.tool()
@@ -228,11 +150,11 @@ def set_mode(mode: str | None = None) -> dict:
     current = read_mode(config)
 
     if mode is None:
-        mode = "sfw" if current == "nsfw" else "nsfw"
+        mode = "sfw" if current == {"nsfw"} else "nsfw"
     elif mode not in ("sfw", "nsfw"):
         return {"error": f"Invalid mode: {mode}. Use 'sfw' or 'nsfw'."}
 
-    write_mode(config, mode)
+    write_mode(config, {mode})
 
     signal_daemon(config, signal.SIGUSR2)
 

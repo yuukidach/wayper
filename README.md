@@ -19,7 +19,7 @@
 - **Auto orientation matching** — portrait monitors get portrait wallpapers, landscape gets landscape. No manual sorting.
 - **Pool management** — validates images, resizes to your exact resolution, and rotates automatically.
 - **Three-tier purity** — SFW, Sketchy, NSFW — independently toggleable. Persistent across sessions.
-- **Smart tag exclusion** — analyzes your dislike history to surface tags you repeatedly block. Supports single-tag and combo exclusion (e.g., "tattoo + nude") for fine-grained filtering. Already-excluded tags suppress related suggestions automatically.
+- **Smart tag exclusion** — analyzes your dislike history to surface tags you repeatedly block. Supports single-tag and combo exclusion (e.g., "tattoo + nude") for fine-grained filtering. Combos are enforced at download, pool selection, and daemon startup. Already-excluded tags suppress related suggestions automatically.
 - **Cross-platform GUI** — browse, preview, search, and manage your entire collection. Tag search, smart suggestions, daemon control, settings — all keyboard-driven.
 - **AI-native** — built-in MCP server lets AI assistants control your wallpapers directly.
 - **JSON output** — `--json` flag on every command for scripting and automation.
@@ -51,7 +51,7 @@ uv venv && uv pip install -e .
 - **Browse & preview** — grid view with thumbnail caching, lightbox preview, set wallpaper with Enter
 - **Tag search** — search by Wallhaven tags, category, or filename with autocomplete
 - **Smart suggestions** — analyzes dislike patterns to recommend tags to exclude; drill into combo exclusions (e.g., "tattoo + nude") for precise filtering
-- **Settings** — configure Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI
+- **Settings** — configure Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI. Changes apply to the running daemon instantly
 - **Keyboard-driven** — every action has a shortcut: grid navigation, tab switching, lightbox, favorites, dislike, undo
 
 **Grid view:**

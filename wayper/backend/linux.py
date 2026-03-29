@@ -86,7 +86,7 @@ class LinuxBackend(WallpaperBackend):
         return result.returncode == 0
 
     def set_wallpaper(self, monitor: str, image: Path, transition: TransitionConfig) -> None:
-        subprocess.run(
+        result = subprocess.run(
             [
                 "awww",
                 "img",
@@ -104,6 +104,13 @@ class LinuxBackend(WallpaperBackend):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        if result.returncode != 0:
+            log.warning(
+                "awww failed to set wallpaper (exit %d): %s on %s",
+                result.returncode,
+                image,
+                monitor,
+            )
 
     def get_focused_monitor(self) -> str | None:
         try:

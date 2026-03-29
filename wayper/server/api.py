@@ -15,11 +15,10 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
-from wayper.backend import FileLock, get_context, query_current, set_wallpaper
-from wayper.config import NO_TRANSITION, WayperConfig, load_config, save_config
+from wayper.backend import FileLock, query_current, set_wallpaper
+from wayper.config import WayperConfig, load_config, save_config
+from wayper.core import do_dislike, do_fav, do_next, do_prev, do_undislike, do_unfav
 from wayper.daemon import is_daemon_running, signal_daemon
-from wayper.history import go_prev, pick_next
-from wayper.history import push as push_history
 from wayper.pool import (
     add_to_blacklist,
     count_images,
@@ -33,7 +32,6 @@ from wayper.pool import (
 from wayper.state import (
     ALL_PURITIES,
     find_in_trash,
-    purity_from_path,
     push_undo,
     read_mode,
     restore_from_trash,
@@ -218,6 +216,7 @@ def update_config_route(updates: dict = Body(...)):
             config.wallhaven.exclude_combos = wh["exclude_combos"]
 
     save_config(config)
+    signal_daemon(config, signal.SIGHUP)
     global _cached_config, _cached_mtime
     _cached_config = config
     _cached_mtime = 0  # force reload on next get_config if file changes again
@@ -289,87 +288,38 @@ def get_disk_usage():
 
 @app.post("/api/control/{action}")
 def control_action(action: str, monitor_name: str | None = Body(None, embed=True)):
-    if action not in ["next", "prev", "dislike", "fav", "unfav", "undislike"]:
-        raise HTTPException(400, "Invalid action")
-
     config = get_config()
-    if monitor_name:
-        from wayper.backend import find_monitor, query_current
 
-        mon_cfg = find_monitor(config, monitor_name)
-        monitor = monitor_name
-        current = query_current()
-        current_img = current.get(monitor)
-    else:
-        monitor, mon_cfg, current_img = get_context(config)
-    if not mon_cfg:
-        raise HTTPException(400, "No monitor config found")
+    # Resolve monitor
+    monitor = monitor_name
+    if not monitor:
+        from wayper.backend import get_context
+
+        monitor, _, _ = get_context(config)
 
     if action == "next":
-        img = pick_next(config, monitor, mon_cfg.orientation)
-        if img:
-            set_wallpaper(monitor, img, config.transition)
-        return {"status": "ok", "image": str(img) if img else None}
+        result = do_next(config, monitor)
+    elif action == "prev":
+        result = do_prev(config, monitor)
+    elif action == "fav":
+        result = do_fav(config, monitor)
+    elif action == "unfav":
+        result = do_unfav(config, monitor)
+    elif action == "dislike":
+        result = do_dislike(config, monitor, clear_thumbnail=lambda p: _remove_thumbnail(config, p))
+    elif action == "undislike":
+        result = do_undislike(config, monitor)
+    else:
+        raise HTTPException(400, f"Unknown action: {action}")
 
-    if action == "prev":
-        img = go_prev(config, monitor)
-        if img:
-            set_wallpaper(monitor, img, config.transition)
-            return {"status": "ok", "image": str(img)}
-        return {"status": "at_oldest"}
+    if not result.ok:
+        raise HTTPException(400, result.error)
 
-    if action in ("fav", "unfav"):
-        if not current_img:
-            raise HTTPException(400, "No current wallpaper")
-        is_fav = current_img.is_relative_to(config.download_dir / "favorites")
-        if action == "fav" and is_fav:
-            return {"status": "already_favorite"}
-        if action == "unfav" and not is_fav:
-            return {"status": "not_favorite"}
-        with FileLock(blocking=False):
-            purity = purity_from_path(config, current_img)
-            if action == "fav":
-                dest_dir = favorites_dir(config, purity, mon_cfg.orientation)
-            else:
-                dest_dir = pool_dir(config, purity, mon_cfg.orientation)
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            dest = dest_dir / current_img.name
-            current_img.rename(dest)
-            set_wallpaper(monitor, dest, NO_TRANSITION)
-        return {"status": "ok", "image": str(dest)}
-
-    if action == "undislike":
-        from wayper.state import pop_undo
-
-        undo = pop_undo(config)
-        if not undo:
-            return {"status": "nothing_to_undo"}
-        filename, orig_dir = undo
-        remove_from_blacklist(config, filename)
-        restored = restore_from_trash(config, filename, Path(orig_dir))
-        if restored:
-            return {"status": "ok", "restored": str(restored)}
-        return {"status": "ok", "note": "blacklist entry removed but file not found in trash"}
-
-    # dislike
-    if not current_img:
-        raise HTTPException(400, "No current wallpaper")
-    with FileLock(blocking=False):
-        if current_img.is_relative_to(config.download_dir / "favorites"):
-            return {"status": "is_favorite"}
-        purities = read_mode(config)
-        next_img = pick_random(config, purities, mon_cfg.orientation)
-        if next_img:
-            set_wallpaper(monitor, next_img, config.transition)
-            push_history(config, monitor, next_img)
-        add_to_blacklist(config, current_img.name)
-        push_undo(config, current_img.name, current_img.parent)
-        try:
-            rel = current_img.relative_to(config.download_dir)
-            _remove_thumbnail(config, str(rel))
-        except ValueError:
-            pass
-    return {"status": "ok"}
+    response = {"status": result.status or "ok"}
+    if result.image:
+        response["image"] = str(result.image)
+    response.update(result.extra)
+    return response
 
 
 @app.get("/api/status", response_model=StatusResponse)

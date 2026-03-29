@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from .backend import ensure_ready, is_locked, set_wallpaper
-from .config import WayperConfig
+from .config import WayperConfig, load_config
 from .history import push_many
 from .pool import (
     count_images,
@@ -22,6 +22,7 @@ from .pool import (
     pick_random,
     pool_dir,
     prune_blacklist,
+    purge_combo_matches,
     should_download,
 )
 from .state import read_mode
@@ -44,6 +45,16 @@ def _on_usr1(*_: object) -> None:
 def _on_usr2(*_: object) -> None:
     global _reload_mode
     _reload_mode = True
+    if _wake:
+        _wake.set()
+
+
+_reload_config = False
+
+
+def _on_hup(*_: object) -> None:
+    global _reload_config
+    _reload_config = True
     if _wake:
         _wake.set()
 
@@ -145,7 +156,7 @@ def update_greeter(config: WayperConfig) -> None:
 
 
 async def run_daemon(config: WayperConfig) -> None:
-    global _change_now, _reload_mode, _wake
+    global _change_now, _reload_mode, _reload_config, _wake
 
     from .logging import setup_logging
 
@@ -158,8 +169,10 @@ async def run_daemon(config: WayperConfig) -> None:
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGUSR1, _on_usr1)
     loop.add_signal_handler(signal.SIGUSR2, _on_usr2)
+    loop.add_signal_handler(signal.SIGHUP, _on_hup)
 
     log.info("Daemon started (PID %d)", os.getpid())
+    purge_combo_matches(config)
 
     client = WallhavenClient(config)
     greeter_count = 0
@@ -168,6 +181,13 @@ async def run_daemon(config: WayperConfig) -> None:
         while True:
             _change_now = False
 
+            if _reload_config:
+                _reload_config = False
+                config = load_config()
+                client = WallhavenClient(config)
+                purge_combo_matches(config)
+                log.info("Configuration reloaded")
+
             if _reload_mode:
                 _reload_mode = False
 
@@ -175,7 +195,7 @@ async def run_daemon(config: WayperConfig) -> None:
             if config.pause_on_lock and is_locked():
                 log.info("Session locked, waiting before rotation")
                 while config.pause_on_lock and is_locked():
-                    if _change_now or _reload_mode:
+                    if _change_now or _reload_mode or _reload_config:
                         break
                     _wake.clear()
                     try:
@@ -183,7 +203,7 @@ async def run_daemon(config: WayperConfig) -> None:
                     except TimeoutError:
                         pass
 
-                if _change_now or _reload_mode:
+                if _change_now or _reload_mode or _reload_config:
                     continue
 
             purities = read_mode(config)
@@ -215,14 +235,14 @@ async def run_daemon(config: WayperConfig) -> None:
             # Interruptible sleep — _wake.set() fires instantly on signal
             remaining = config.interval
             while remaining > 0:
-                if _change_now or _reload_mode:
+                if _change_now or _reload_mode or _reload_config:
                     break
 
                 # Pause if locked
                 if config.pause_on_lock and is_locked():
                     log.info("Session locked, pausing timer")
                     while config.pause_on_lock and is_locked():
-                        if _change_now or _reload_mode:
+                        if _change_now or _reload_mode or _reload_config:
                             break
                         _wake.clear()
                         try:
@@ -231,7 +251,7 @@ async def run_daemon(config: WayperConfig) -> None:
                             pass
                     log.info("Session unlocked, resuming timer")
 
-                    if _change_now or _reload_mode:
+                    if _change_now or _reload_mode or _reload_config:
                         break
 
                 _wake.clear()

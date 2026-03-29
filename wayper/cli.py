@@ -11,37 +11,11 @@ from pathlib import Path
 
 import click
 
-from .backend import (
-    FileLock,
-    get_context,
-    get_focused_monitor,
-    notify,
-    query_current,
-    set_wallpaper,
-)
-from .config import NO_TRANSITION, load_config
-from .history import go_prev, pick_next
-from .history import push as push_history
-from .pool import (
-    add_to_blacklist,
-    count_images,
-    favorites_dir,
-    pick_random,
-    pool_dir,
-    remove_from_blacklist,
-    should_download,
-)
-from .state import (
-    ALL_PURITIES,
-    pop_undo,
-    purity_from_path,
-    push_undo,
-    read_mode,
-    restore_from_trash,
-    toggle_base,
-    toggle_purity,
-    write_mode,
-)
+from .backend import notify, query_current
+from .config import load_config
+from .core import do_dislike, do_fav, do_next, do_prev, do_undislike, do_unfav
+from .pool import count_images, favorites_dir, pool_dir, should_download
+from .state import ALL_PURITIES, read_mode, toggle_base, toggle_purity, write_mode
 
 
 @click.group()
@@ -141,18 +115,21 @@ def stop(ctx):
 def next_cmd(ctx):
     """Change wallpaper on the focused monitor."""
     config = ctx.obj["config"]
-    monitor, mon_cfg, _ = get_context(config)
-    if not mon_cfg:
-        click.echo("No monitor config found", err=True)
+    use_json = ctx.obj["json"]
+
+    result = do_next(config)
+    if not result.ok:
+        if use_json:
+            click.echo(json_mod.dumps({"error": result.error}))
+        else:
+            click.echo(result.error, err=True)
         raise SystemExit(1)
 
-    img = pick_next(config, monitor, mon_cfg.orientation)
-    if img:
-        set_wallpaper(monitor, img, config.transition)
-        if ctx.obj["json"]:
-            click.echo(json_mod.dumps({"action": "next", "monitor": monitor, "image": str(img)}))
-        else:
-            notify("Wallpaper", "Next wallpaper")
+    if use_json:
+        data = {"action": "next", "monitor": result.monitor, "image": str(result.image)}
+        click.echo(json_mod.dumps(data))
+    else:
+        notify("Wallpaper", "Next wallpaper")
 
     # Trigger download with same probability as daemon
     purities = read_mode(config)
@@ -180,23 +157,30 @@ def next_cmd(ctx):
 def prev_cmd(ctx):
     """Go back to the previous wallpaper."""
     config = ctx.obj["config"]
-    monitor, mon_cfg, _ = get_context(config)
-    if not mon_cfg:
-        click.echo("No monitor config found", err=True)
+    use_json = ctx.obj["json"]
+
+    result = do_prev(config)
+    if not result.ok:
+        if use_json:
+            click.echo(json_mod.dumps({"error": result.error}))
+        else:
+            click.echo(result.error, err=True)
         raise SystemExit(1)
 
-    img = go_prev(config, monitor)
-    if img:
-        set_wallpaper(monitor, img, config.transition)
-        if ctx.obj["json"]:
-            click.echo(json_mod.dumps({"action": "prev", "monitor": monitor, "image": str(img)}))
-        else:
-            notify("Wallpaper", "Previous wallpaper")
-    else:
-        if ctx.obj["json"]:
+    if result.status == "at_oldest":
+        if use_json:
             click.echo(json_mod.dumps({"action": "prev", "status": "at_oldest"}))
         else:
             notify("Wallpaper", "Already at oldest")
+    else:
+        if use_json:
+            click.echo(
+                json_mod.dumps(
+                    {"action": "prev", "monitor": result.monitor, "image": str(result.image)}
+                )
+            )
+        else:
+            notify("Wallpaper", "Previous wallpaper")
 
 
 @cli.command()
@@ -205,40 +189,30 @@ def prev_cmd(ctx):
 def fav(ctx, open_url):
     """Favorite the current wallpaper."""
     config = ctx.obj["config"]
-    with FileLock(blocking=False):
-        monitor, mon_cfg, img = get_context(config)
-        if not img or not mon_cfg:
-            click.echo("No current wallpaper", err=True)
-            raise SystemExit(1)
+    use_json = ctx.obj["json"]
 
-        if "favorites" in str(img):
-            if ctx.obj["json"]:
-                click.echo(json_mod.dumps({"action": "fav", "status": "already_favorite"}))
-            else:
-                notify("Wallpaper", "Already in favorites")
-            return
-
-        purity = purity_from_path(config, img)
-        dest_dir = favorites_dir(config, purity, mon_cfg.orientation)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / img.name
-        img.rename(dest)
-
-        # Re-set wallpaper with no transition so it doesn't flash
-        set_wallpaper(monitor, dest, NO_TRANSITION)
-
-        if open_url:
-            import webbrowser
-
-            from .wallhaven import wallhaven_url
-
-            webbrowser.open(wallhaven_url(img))
-
-        if ctx.obj["json"]:
-            click.echo(json_mod.dumps({"action": "fav", "image": str(dest), "opened": open_url}))
+    result = do_fav(config, open_url=open_url)
+    if not result.ok:
+        if use_json:
+            click.echo(json_mod.dumps({"error": result.error}))
         else:
-            msg = "Saved & opened on Wallhaven" if open_url else "Saved to favorites"
-            notify("Wallpaper", msg)
+            click.echo(result.error, err=True)
+        raise SystemExit(1)
+
+    if result.status == "already_favorite":
+        if use_json:
+            click.echo(json_mod.dumps({"action": "fav", "status": "already_favorite"}))
+        else:
+            notify("Wallpaper", "Already in favorites")
+        return
+
+    if use_json:
+        click.echo(
+            json_mod.dumps({"action": "fav", "image": str(result.image), "opened": open_url})
+        )
+    else:
+        msg = "Saved & opened on Wallhaven" if open_url else "Saved to favorites"
+        notify("Wallpaper", msg)
 
 
 @cli.command()
@@ -246,29 +220,27 @@ def fav(ctx, open_url):
 def unfav(ctx):
     """Remove current wallpaper from favorites."""
     config = ctx.obj["config"]
-    with FileLock(blocking=False):
-        monitor, mon_cfg, img = get_context(config)
-        if not img or not mon_cfg:
-            click.echo("No current wallpaper", err=True)
-            raise SystemExit(1)
+    use_json = ctx.obj["json"]
 
-        if "favorites" not in str(img):
-            if ctx.obj["json"]:
-                click.echo(json_mod.dumps({"action": "unfav", "status": "not_favorite"}))
-            else:
-                notify("Wallpaper", "Not a favorite")
-            return
-
-        purity = purity_from_path(config, img)
-        dest_dir = pool_dir(config, purity, mon_cfg.orientation)
-        dest = dest_dir / img.name
-        img.rename(dest)
-        set_wallpaper(monitor, dest, NO_TRANSITION)
-
-        if ctx.obj["json"]:
-            click.echo(json_mod.dumps({"action": "unfav", "image": str(dest)}))
+    result = do_unfav(config)
+    if not result.ok:
+        if use_json:
+            click.echo(json_mod.dumps({"error": result.error}))
         else:
-            notify("Wallpaper", "Removed from favorites")
+            click.echo(result.error, err=True)
+        raise SystemExit(1)
+
+    if result.status == "not_favorite":
+        if use_json:
+            click.echo(json_mod.dumps({"action": "unfav", "status": "not_favorite"}))
+        else:
+            notify("Wallpaper", "Not a favorite")
+        return
+
+    if use_json:
+        click.echo(json_mod.dumps({"action": "unfav", "image": str(result.image)}))
+    else:
+        notify("Wallpaper", "Removed from favorites")
 
 
 @cli.command()
@@ -276,34 +248,27 @@ def unfav(ctx):
 def dislike(ctx):
     """Blacklist current wallpaper and switch to a new one."""
     config = ctx.obj["config"]
-    with FileLock(blocking=False):
-        monitor, mon_cfg, img = get_context(config)
-        if not img or not mon_cfg:
-            click.echo("No current wallpaper", err=True)
-            raise SystemExit(1)
+    use_json = ctx.obj["json"]
 
-        if "favorites" in str(img):
-            if ctx.obj["json"]:
-                click.echo(json_mod.dumps({"action": "dislike", "status": "is_favorite"}))
-            else:
-                notify("Wallpaper", "Can't dislike a favorite")
-            return
-
-        # Switch wallpaper first for instant feedback
-        purities = read_mode(config)
-        next_img = pick_random(config, purities, mon_cfg.orientation)
-        if next_img:
-            set_wallpaper(monitor, next_img, config.transition)
-            push_history(config, monitor, next_img)
-
-        # Bookkeeping
-        add_to_blacklist(config, img.name)
-        push_undo(config, img.name, img.parent)
-
-        if ctx.obj["json"]:
-            click.echo(json_mod.dumps({"action": "dislike", "image": str(img)}))
+    result = do_dislike(config)
+    if not result.ok:
+        if use_json:
+            click.echo(json_mod.dumps({"error": result.error}))
         else:
-            notify("Wallpaper", "Disliked")
+            click.echo(result.error, err=True)
+        raise SystemExit(1)
+
+    if result.status == "is_favorite":
+        if use_json:
+            click.echo(json_mod.dumps({"action": "dislike", "status": "is_favorite"}))
+        else:
+            notify("Wallpaper", "Can't dislike a favorite")
+        return
+
+    if use_json:
+        click.echo(json_mod.dumps({"action": "dislike", "image": str(result.image)}))
+    else:
+        notify("Wallpaper", "Disliked")
 
 
 @cli.command()
@@ -311,32 +276,29 @@ def dislike(ctx):
 def undislike(ctx):
     """Undo the last dislike."""
     config = ctx.obj["config"]
-    with FileLock(blocking=False):
-        entry = pop_undo(config)
-        if not entry:
-            if ctx.obj["json"]:
-                click.echo(json_mod.dumps({"action": "undislike", "status": "nothing_to_undo"}))
-            else:
-                notify("Wallpaper", "Nothing to undo")
-            return
+    use_json = ctx.obj["json"]
 
-        filename, orig_dir = entry
-        restored = restore_from_trash(config, filename, orig_dir)
-        remove_from_blacklist(config, filename)
+    result = do_undislike(config)
 
-        if restored:
-            monitor = get_focused_monitor()
-            if monitor:
-                set_wallpaper(monitor, restored, config.transition)
-            if ctx.obj["json"]:
-                click.echo(json_mod.dumps({"action": "undislike", "image": str(restored)}))
-            else:
-                notify("Wallpaper", f"Restored: {filename}")
+    if result.status == "nothing_to_undo":
+        if use_json:
+            click.echo(json_mod.dumps({"action": "undislike", "status": "nothing_to_undo"}))
         else:
-            if ctx.obj["json"]:
-                click.echo(json_mod.dumps({"action": "undislike", "status": "file_missing"}))
-            else:
-                notify("Wallpaper", "Can't restore (file missing)")
+            notify("Wallpaper", "Nothing to undo")
+        return
+
+    if result.status == "file_missing":
+        if use_json:
+            click.echo(json_mod.dumps({"action": "undislike", "status": "file_missing"}))
+        else:
+            notify("Wallpaper", "Can't restore (file missing)")
+        return
+
+    if use_json:
+        click.echo(json_mod.dumps({"action": "undislike", "image": str(result.image)}))
+    else:
+        filename = result.image.name if result.image else "unknown"
+        notify("Wallpaper", f"Restored: {filename}")
 
 
 @cli.command()

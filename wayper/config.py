@@ -6,6 +6,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .util import atomic_write
+
 CONFIG_DIR = Path.home() / ".config" / "wayper"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 
@@ -161,7 +163,7 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
             lines.append(f'sudo_password = "{_esc(gr.sudo_password)}"')
 
     lines.append("")
-    path.write_text("\n".join(lines))
+    atomic_write(path, "\n".join(lines))
 
 
 def load_config(path: Path | None = None) -> WayperConfig:

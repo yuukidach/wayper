@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from pathlib import Path
 
@@ -11,6 +12,8 @@ import httpx
 from .config import WayperConfig
 from .image import resize_crop, validate_image
 from .pool import extract_tag_names, favorites_dir, is_blacklisted, pool_dir, save_metadata
+
+log = logging.getLogger("wayper.wallhaven")
 
 SEARCH_URL = "https://wallhaven.cc/api/v1/search"
 
@@ -85,6 +88,12 @@ class WallhavenClient:
                 results = resp.json().get("data", [])
             return results
         except Exception:
+            log.warning(
+                "Wallhaven search failed (orientation=%s, purity=%s)",
+                orientation,
+                purity,
+                exc_info=True,
+            )
             return []
 
     async def search_with_meta(
@@ -116,6 +125,7 @@ class WallhavenClient:
             resp.raise_for_status()
             return resp.json().get("data", [])
         except Exception:
+            log.warning("Wallhaven search_with_meta failed", exc_info=True)
             return []
 
     async def wallpaper_info(self, wallpaper_id: str) -> dict:
@@ -128,6 +138,7 @@ class WallhavenClient:
             resp.raise_for_status()
             return resp.json().get("data", {})
         except Exception:
+            log.warning("Failed to fetch wallpaper info for %s", wallpaper_id, exc_info=True)
             return {}
 
     async def download_image(self, url: str, dest: Path) -> bool:
@@ -136,9 +147,10 @@ class WallhavenClient:
         try:
             async with self.client.stream("GET", url) as resp:
                 resp.raise_for_status()
-                with open(tmp, "wb") as f:
-                    async for chunk in resp.aiter_bytes(8192):
-                        f.write(chunk)
+                chunks = []
+                async for chunk in resp.aiter_bytes(8192):
+                    chunks.append(chunk)
+                await asyncio.to_thread(tmp.write_bytes, b"".join(chunks))
             # Validate
             if not validate_image(tmp):
                 tmp.unlink(missing_ok=True)
@@ -146,6 +158,7 @@ class WallhavenClient:
             tmp.rename(dest)
             return True
         except Exception:
+            log.warning("Download failed: %s", url, exc_info=True)
             tmp.unlink(missing_ok=True)
             return False
 

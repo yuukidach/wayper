@@ -381,6 +381,8 @@ function debounce(func, wait) {
     };
 }
 
+const debouncedRefreshImages = debounce(() => refreshImages(), 300);
+
 function updateGridMetrics() {
     const cards = document.getElementsByClassName('wallpaper-card');
     if (cards.length < 2) {
@@ -667,7 +669,7 @@ async function setViewMode(mode) {
     appState.mode = mode;
     switchView('grid'); // Ensure we are in grid view
     updateUI();
-    refreshImages();
+    debouncedRefreshImages();
 }
 
 function toggleSinglePurity(purity) {
@@ -694,7 +696,7 @@ async function setPurities(purities) {
     }
 
     updateUI();
-    refreshImages();
+    debouncedRefreshImages();
     fetchStatus();
 }
 
@@ -1053,6 +1055,7 @@ function connectSSE() {
 async function fetchStatus() {
     try {
         const res = await fetch(`${API_URL}/api/status`);
+        if (!res.ok) return;
         const data = await res.json();
 
         // Check for external mode change (e.g. via CLI)
@@ -1064,12 +1067,16 @@ async function fetchStatus() {
             refreshImages();
         }
 
-        if (data.running !== appState.status.running) {
-            appState.status = data;
-            updateStatusUI();
-        } else {
-            // Update counts even if running state hasn't changed
-            appState.status = data;
+        // Only update DOM if data actually changed
+        const prev = appState.status;
+        const changed = !prev
+            || data.running !== prev.running
+            || data.pool_count !== prev.pool_count
+            || data.favorites_count !== prev.favorites_count
+            || data.blocklist_count !== prev.blocklist_count;
+
+        appState.status = data;
+        if (changed) {
             updateStatusUI();
         }
     } catch (e) {

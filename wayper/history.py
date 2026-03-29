@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from .config import WayperConfig
+from .util import atomic_write
 
 MAX_HISTORY = 50
 
@@ -19,9 +19,7 @@ def _load(config: WayperConfig) -> dict:
 
 
 def _save(config: WayperConfig, data: dict) -> None:
-    tmp = config.history_file.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data))
-    os.replace(tmp, config.history_file)
+    atomic_write(config.history_file, json.dumps(data))
 
 
 def _monitor_data(data: dict, monitor: str) -> dict:

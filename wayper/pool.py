@@ -9,6 +9,7 @@ from typing import TypedDict
 
 from .config import WayperConfig
 from .state import ALL_PURITIES
+from .util import atomic_write
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -77,9 +78,51 @@ def favorites_dir(config: WayperConfig, mode: str, orientation: str) -> Path:
     return config.download_dir / "favorites" / mode / orientation
 
 
+def _matches_exclude_combo(filename: str, metadata: dict, combos: list[list[str]]) -> bool:
+    """Return True if image's tags match any exclude combo rule."""
+    entry = metadata.get(filename)
+    if not entry:
+        return False
+    tag_set = set(extract_tag_names(entry.get("tags", [])))
+    return any(all(t in tag_set for t in combo) for combo in combos)
+
+
+def purge_combo_matches(config: WayperConfig) -> list[str]:
+    """Blocklist+trash pool images matching exclude_combos. Returns purged filenames."""
+    import logging
+
+    from .state import push_undo
+
+    combos = config.wallhaven.exclude_combos
+    if not combos:
+        return []
+
+    metadata = load_metadata(config)
+    if not metadata:
+        return []
+
+    log = logging.getLogger("wayper.pool")
+    purged: list[str] = []
+
+    for purity in ALL_PURITIES:
+        for orient in ("landscape", "portrait"):
+            for img in list_images(pool_dir(config, purity, orient)):
+                if _matches_exclude_combo(img.name, metadata, combos):
+                    add_to_blacklist(config, img.name)
+                    push_undo(config, img.name, img.parent)
+                    purged.append(img.name)
+
+    if purged:
+        log.info("Purged %d combo-matching images: %s", len(purged), purged)
+    return purged
+
+
 def pick_random(config: WayperConfig, purities: set[str], orientation: str) -> Path | None:
     """Pick a random image: choose a random purity first (equal weight), then a random image."""
     import random as _rand
+
+    combos = config.wallhaven.exclude_combos
+    metadata = load_metadata(config) if combos else {}
 
     active = [p for p in ALL_PURITIES if p in purities]
     if not active:
@@ -88,6 +131,10 @@ def pick_random(config: WayperConfig, purities: set[str], orientation: str) -> P
     for purity in active:
         images = list_images(pool_dir(config, purity, orientation))
         images += list_images(favorites_dir(config, purity, orientation))
+        if combos:
+            images = [
+                img for img in images if not _matches_exclude_combo(img.name, metadata, combos)
+            ]
         if images:
             return _rand.choice(images)
     return None
@@ -107,15 +154,30 @@ def list_blacklist(config: WayperConfig) -> list[tuple[int, str]]:
     return entries
 
 
-def is_blacklisted(config: WayperConfig, filename: str) -> bool:
+_bl_cache: set[str] | None = None
+_bl_mtime: float = 0
+
+
+def _blacklist_set(config: WayperConfig) -> set[str]:
+    """Return cached set of blacklisted filenames, refreshing on file change."""
+    global _bl_cache, _bl_mtime
     bf = config.blacklist_file
-    if not bf.exists():
-        return False
-    for line in bf.read_text().splitlines():
-        parts = line.split(maxsplit=1)
-        if len(parts) == 2 and parts[1] == filename:
-            return True
-    return False
+    try:
+        mtime = bf.stat().st_mtime
+    except OSError:
+        return set()
+    if _bl_cache is None or mtime != _bl_mtime:
+        _bl_cache = set()
+        for line in bf.read_text().splitlines():
+            parts = line.split(maxsplit=1)
+            if len(parts) == 2:
+                _bl_cache.add(parts[1])
+        _bl_mtime = mtime
+    return _bl_cache
+
+
+def is_blacklisted(config: WayperConfig, filename: str) -> bool:
+    return filename in _blacklist_set(config)
 
 
 def add_to_blacklist(config: WayperConfig, filename: str) -> None:
@@ -123,6 +185,8 @@ def add_to_blacklist(config: WayperConfig, filename: str) -> None:
 
     with open(config.blacklist_file, "a") as f:
         f.write(f"{int(time.time())} {filename}\n")
+    global _bl_cache
+    _bl_cache = None
 
 
 def remove_from_blacklist(config: WayperConfig, filename: str) -> None:
@@ -134,7 +198,9 @@ def remove_from_blacklist(config: WayperConfig, filename: str) -> None:
         parts = line.split(maxsplit=1)
         if not (len(parts) == 2 and parts[1] == filename):
             lines.append(line)
-    bf.write_text("\n".join(lines) + "\n" if lines else "")
+    atomic_write(bf, "\n".join(lines) + "\n" if lines else "")
+    global _bl_cache
+    _bl_cache = None
 
 
 def prune_blacklist(config: WayperConfig) -> None:
@@ -150,7 +216,7 @@ def prune_blacklist(config: WayperConfig) -> None:
         parts = line.split(maxsplit=1)
         if len(parts) == 2 and parts[0].isdigit() and int(parts[0]) >= cutoff:
             lines.append(line)
-    bf.write_text("\n".join(lines) + "\n" if lines else "")
+    atomic_write(bf, "\n".join(lines) + "\n" if lines else "")
 
 
 def enforce_quota(config: WayperConfig) -> None:
@@ -216,7 +282,7 @@ def save_metadata(config: WayperConfig, filename: str, item: dict) -> None:
         "created_at": item.get("created_at", ""),
         "downloaded_at": int(time.time()),
     }
-    mf.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    atomic_write(mf, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 
 def load_metadata(config: WayperConfig) -> dict[str, ImageMetadata]:
