@@ -64,14 +64,18 @@ def is_daemon_running(config: WayperConfig) -> tuple[bool, int | None]:
         return False, None
 
 
-def compute_daemon_state(config: WayperConfig) -> tuple[bool, str, int, int, int]:
-    """Compute daemon state tuple: (running, mode, pool_count, fav_count, disk_mb_rounded)."""
+def compute_daemon_state(config: WayperConfig) -> tuple[bool, set[str], int, int, int]:
+    """Compute daemon state tuple: (running, purities, pool_count, fav_count, disk_mb_rounded)."""
     running, _ = is_daemon_running(config)
-    mode = read_mode(config)
-    pool_count = sum(count_images(pool_dir(config, mode, o)) for o in ("landscape", "portrait"))
-    fav_count = sum(count_images(favorites_dir(config, mode, o)) for o in ("landscape", "portrait"))
+    purities = read_mode(config)
+    pool_count = 0
+    fav_count = 0
+    for purity in purities:
+        for o in ("landscape", "portrait"):
+            pool_count += count_images(pool_dir(config, purity, o))
+            fav_count += count_images(favorites_dir(config, purity, o))
     disk_mb = disk_usage_mb(config)
-    return running, mode, pool_count, fav_count, round(disk_mb)
+    return running, purities, pool_count, fav_count, round(disk_mb)
 
 
 def signal_daemon(config: WayperConfig, sig: int) -> bool:
@@ -92,11 +96,11 @@ def read_last_rotation(config: WayperConfig) -> float | None:
         return None
 
 
-def set_all_wallpapers(config: WayperConfig, mode: str) -> None:
+def set_all_wallpapers(config: WayperConfig, purities: set[str]) -> None:
     """Set wallpaper on all configured monitors."""
     history_items: list[tuple[str, Path]] = []
     for mon in config.monitors:
-        img = pick_random(config, mode, mon.orientation)
+        img = pick_random(config, purities, mon.orientation)
         if img:
             set_wallpaper(mon.name, img, config.transition)
             history_items.append((mon.name, img))
@@ -168,16 +172,22 @@ async def run_daemon(config: WayperConfig) -> None:
                 if _change_now or _reload_mode:
                     continue
 
-            mode = read_mode(config)
+            purities = read_mode(config)
 
             # Set wallpapers immediately
-            set_all_wallpapers(config, mode)
+            set_all_wallpapers(config, purities)
             (config.download_dir / ".last_rotation").write_text(str(time.time()))
 
             # Download if needed
-            if should_download(config, mode):
-                orientations = {m.orientation for m in config.monitors}
-                await asyncio.gather(*(client.download_for(o, mode) for o in orientations))
+            download_map = should_download(config, purities)
+            tasks = []
+            orientations = {m.orientation for m in config.monitors}
+            for purity, needs in download_map.items():
+                if needs:
+                    for o in orientations:
+                        tasks.append(client.download_for(o, purity))
+            if tasks:
+                await asyncio.gather(*tasks)
 
             enforce_quota(config)
             prune_blacklist(config)
