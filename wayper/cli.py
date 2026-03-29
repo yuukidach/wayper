@@ -32,7 +32,17 @@ from .pool import (
     remove_from_blacklist,
     should_download,
 )
-from .state import pop_undo, push_undo, read_mode, restore_from_trash, write_mode
+from .state import (
+    ALL_PURITIES,
+    pop_undo,
+    purity_from_path,
+    push_undo,
+    read_mode,
+    restore_from_trash,
+    toggle_base,
+    toggle_purity,
+    write_mode,
+)
 
 
 @click.group()
@@ -143,17 +153,20 @@ def next_cmd(ctx):
             notify("Wallpaper", "Next wallpaper")
 
     # Trigger download with same probability as daemon
-    mode = read_mode(config)
-    if should_download(config, mode):
+    purities = read_mode(config)
+    download_map = should_download(config, purities)
+    to_download = [p for p, needs in download_map.items() if needs]
+    if to_download:
         from .wallhaven import WallhavenClient
 
         async def _download():
             client = WallhavenClient(config)
             try:
-                await asyncio.gather(
-                    client.download_for("landscape", mode),
-                    client.download_for("portrait", mode),
-                )
+                tasks = []
+                for purity in to_download:
+                    tasks.append(client.download_for("landscape", purity))
+                    tasks.append(client.download_for("portrait", purity))
+                await asyncio.gather(*tasks)
             finally:
                 await client.close()
 
@@ -203,8 +216,8 @@ def fav(ctx, open_url):
                 notify("Wallpaper", "Already in favorites")
             return
 
-        mode = read_mode(config)
-        dest_dir = favorites_dir(config, mode, mon_cfg.orientation)
+        purity = purity_from_path(config, img)
+        dest_dir = favorites_dir(config, purity, mon_cfg.orientation)
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / img.name
         img.rename(dest)
@@ -244,8 +257,8 @@ def unfav(ctx):
                 notify("Wallpaper", "Not a favorite")
             return
 
-        mode = read_mode(config)
-        dest_dir = pool_dir(config, mode, mon_cfg.orientation)
+        purity = purity_from_path(config, img)
+        dest_dir = pool_dir(config, purity, mon_cfg.orientation)
         dest = dest_dir / img.name
         img.rename(dest)
         set_wallpaper(monitor, dest, NO_TRANSITION)
@@ -275,8 +288,8 @@ def dislike(ctx):
             return
 
         # Switch wallpaper first for instant feedback
-        mode = read_mode(config)
-        next_img = pick_random(config, mode, mon_cfg.orientation)
+        purities = read_mode(config)
+        next_img = pick_random(config, purities, mon_cfg.orientation)
         if next_img:
             set_wallpaper(monitor, next_img, config.transition)
             push_history(config, monitor, next_img)
@@ -325,27 +338,48 @@ def undislike(ctx):
 
 
 @cli.command()
-@click.argument("new_mode", required=False, type=click.Choice(["sfw", "nsfw"]))
+@click.argument("new_mode", required=False)
 @click.pass_context
 def mode(ctx, new_mode):
-    """Show or switch SFW/NSFW mode."""
+    """Show or switch purity mode.
+
+    No argument toggles sfw/nsfw. 'sketchy' toggles sketchy on/off.
+    Comma-separated values set exact combination (e.g. sfw,sketchy).
+    """
     config = ctx.obj["config"]
     current = read_mode(config)
 
     if new_mode is None:
-        # Toggle
-        new_mode = "sfw" if current == "nsfw" else "nsfw"
+        result = toggle_base(current)
+    elif new_mode == "sketchy":
+        result = toggle_purity(current, "sketchy")
+    elif "," in new_mode:
+        result = {p.strip() for p in new_mode.split(",") if p.strip() in ALL_PURITIES}
+        if not result:
+            click.echo("Invalid mode. Use: sfw, sketchy, nsfw", err=True)
+            raise SystemExit(1)
+    elif new_mode in ("sfw", "nsfw"):
+        result = current.copy()
+        result.discard("sfw")
+        result.discard("nsfw")
+        result.add(new_mode)
+        if not result:
+            result.add(new_mode)
+    else:
+        click.echo(f"Unknown mode: {new_mode}. Use: sfw, sketchy, nsfw", err=True)
+        raise SystemExit(1)
 
-    write_mode(config, new_mode)
+    write_mode(config, result)
 
     from .daemon import signal_daemon
 
     signal_daemon(config, signal.SIGUSR2)
 
+    label = ", ".join(p for p in ALL_PURITIES if p in result)
     if ctx.obj["json"]:
-        click.echo(json_mod.dumps({"action": "mode", "mode": new_mode}))
+        click.echo(json_mod.dumps({"action": "mode", "mode": sorted(result)}))
     else:
-        notify("Wallpaper", f"Mode: {new_mode}")
+        notify("Wallpaper", f"Mode: {label}")
 
 
 @cli.command()
@@ -353,14 +387,14 @@ def mode(ctx, new_mode):
 def status(ctx):
     """Show current wallpapers, mode, and pool counts."""
     config = ctx.obj["config"]
-    current_mode = read_mode(config)
+    current_purities = read_mode(config)
     current = query_current()
 
     monitors_info = []
     for mon in config.monitors:
         img = current.get(mon.name)
-        pc = count_images(pool_dir(config, current_mode, mon.orientation))
-        fc = count_images(favorites_dir(config, current_mode, mon.orientation))
+        pc = sum(count_images(pool_dir(config, p, mon.orientation)) for p in current_purities)
+        fc = sum(count_images(favorites_dir(config, p, mon.orientation)) for p in current_purities)
         monitors_info.append(
             {
                 "name": mon.name,
@@ -381,7 +415,7 @@ def status(ctx):
         click.echo(
             json_mod.dumps(
                 {
-                    "mode": current_mode,
+                    "mode": sorted(current_purities),
                     "daemon": daemon_running,
                     "disk_mb": round(disk_mb, 1),
                     "quota_mb": config.quota_mb,
@@ -391,7 +425,8 @@ def status(ctx):
             )
         )
     else:
-        click.echo(f"Mode: {current_mode}")
+        mode_label = ", ".join(p for p in ALL_PURITIES if p in current_purities)
+        click.echo(f"Mode: {mode_label}")
         click.echo(f"Daemon: {'running' if daemon_running else 'stopped'}")
         click.echo(f"Disk: {disk_mb:.0f} MB / {config.quota_mb} MB")
         for m in monitors_info:
