@@ -36,6 +36,7 @@
 - **History navigation** — prev/next through your wallpaper history. Browser-style back/forward per monitor.
 - **Favorites & blacklist** — like/dislike with undo. Favorites stay in rotation.
 - **Cross-platform GUI** — browse, preview, and manage your collection with daemon control and settings. Works on Linux and macOS.
+- **Tag search** — search your collection by Wallhaven tags, category, or filename. Autocomplete suggestions, works across all views (pool, favorites, blocklist).
 - **Keyboard-driven** — every action has a keyboard shortcut. Grid navigation, lightbox preview, favorites, dislike — all without touching the mouse.
 - **AI-native** — built-in MCP server lets AI assistants (Claude Code, etc.) control your wallpapers directly. Ask your AI to "delete this broken wallpaper" or "favorite this one" — it just works.
 - **JSON output** — `--json` flag on every command for scripting and automation.
@@ -87,8 +88,9 @@ wayper --json status        # machine-readable output
 | `h` / `l` | Prev / Next wallpaper | `f` | Favorite (focused card or current) |
 | `x` / `Del` | Dislike / Remove | `z` | Undo dislike |
 | `o` | Open on Wallhaven | `s` | Settings |
-| `Enter` / `Space` | Preview (lightbox) | `Esc` | Unfocus card |
-| Arrow keys | Navigate grid | `4`–`9` | Switch monitor |
+| `/` | Focus search bar | `Esc` | Clear search / Unfocus |
+| `Enter` / `Space` | Preview (lightbox) | Arrow keys | Navigate grid |
+| `[` / `]` | Blocklist: Recoverable / All | `4`–`9` | Switch monitor |
 
 **Lightbox preview:**
 
