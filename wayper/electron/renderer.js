@@ -1195,9 +1195,12 @@ function renderBlocklistView() {
         const s = appState.reviewingTag;
         const bar = document.createElement('div');
         bar.className = 'tag-review-bar';
+        const aliasInfo = s.aliases && s.aliases.length > 0
+            ? ` <span class="review-bar-aliases">(${s.aliases.map(a => esc(a)).join(', ')})</span>`
+            : '';
         bar.innerHTML = `
             <span class="review-bar-text">
-                <strong>${esc(s.tag)}</strong>
+                <strong>${esc(s.tag)}</strong>${aliasInfo}
                 <span class="review-bar-count">${s.count} disliked</span>
             </span>
         `;
@@ -1209,7 +1212,8 @@ function renderBlocklistView() {
         excludeBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Exclude';
         excludeBtn.onclick = async () => {
             const config = appState.config;
-            const tags = [...(config.wallhaven.exclude_tags || []), s.tag];
+            const newTags = [s.tag, ...(s.aliases || [])];
+            const tags = [...(config.wallhaven.exclude_tags || []), ...newTags];
             await fetch(`${API_URL}/api/config`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
@@ -1244,7 +1248,10 @@ function renderBlocklistView() {
         for (const s of appState.tagSuggestions) {
             const chip = document.createElement('span');
             chip.className = 'suggestion-chip';
-            chip.title = `Review "${s.tag}" in blocklist`;
+            const aliasText = s.aliases && s.aliases.length > 0
+                ? ` (also: ${s.aliases.join(', ')})`
+                : '';
+            chip.title = `Review "${s.tag}" in blocklist${aliasText}`;
             chip.onclick = async () => {
                 appState.reviewingTag = s;
                 els.searchInput.value = s.tag;
@@ -1254,6 +1261,9 @@ function renderBlocklistView() {
             const tagLabel = document.createElement('span');
             tagLabel.className = 'suggestion-chip-name';
             tagLabel.textContent = s.tag;
+            if (s.aliases && s.aliases.length > 0) {
+                tagLabel.textContent += ` +${s.aliases.length}`;
+            }
             const count = document.createElement('span');
             count.className = 'suggestion-chip-count';
             count.textContent = `${s.count}`;

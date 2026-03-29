@@ -935,6 +935,12 @@ main {
   color: var(--overlay1);
 }
 
+.review-bar-aliases {
+  font-size: 11px;
+  color: var(--overlay0);
+  font-weight: 400;
+}
+
 .review-bar-actions {
   display: flex;
   gap: 6px;
