@@ -401,55 +401,43 @@ aside {
   padding-left: 22px;
 }
 
-/* Mode Switch */
-.mode-switch {
+/* Purity Toggles */
+.purity-toggles {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 10px;
+  gap: 6px;
 }
 
-.mode-switch-label {
-  font-size: 11px;
-  font-weight: 600;
+.purity-btn {
+  flex: 1;
+  padding: 6px 4px;
+  border: 1px solid var(--surface1);
+  border-radius: 8px;
+  background: var(--surface0);
   color: var(--overlay1);
-  transition: color var(--duration) var(--ease);
+  font-size: 11px;
+  font-weight: 500;
   cursor: pointer;
-  letter-spacing: 0.5px;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
 }
 
-.mode-switch-label.active {
+.purity-btn kbd {
+  font-size: 9px;
+  opacity: 0.5;
+}
+
+.purity-btn:hover {
+  border-color: var(--overlay0);
   color: var(--text);
 }
 
-.switch-track {
-  width: 34px;
-  height: 18px;
-  background-color: var(--surface1);
-  border-radius: 9px;
-  position: relative;
-  cursor: pointer;
-  transition: background-color 0.25s var(--ease);
-  flex-shrink: 0;
-}
-
-.switch-track.on {
-  background-color: var(--red);
-}
-
-.switch-thumb {
-  width: 14px;
-  height: 14px;
-  background-color: var(--text);
-  border-radius: 50%;
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  transition: transform 0.25s var(--ease);
-}
-
-.switch-track.on .switch-thumb {
-  transform: translateX(16px);
+.purity-btn.active {
+  background: var(--surface1);
+  border-color: var(--blue);
+  color: var(--text);
 }
 
 /* Sidebar bottom */

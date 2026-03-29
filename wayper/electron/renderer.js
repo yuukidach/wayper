@@ -36,7 +36,7 @@ function focusedCardImage() {
 // State
 let appState = {
     mode: 'pool', // pool, favorites, trash
-    purity: 'sfw', // sfw, nsfw
+    purity: ['sfw'], // active purities: subset of ['sfw', 'sketchy', 'nsfw']
     monitors: [],
     selectedMonitor: null, // monitor name
     status: { running: false, pid: null },
@@ -95,9 +95,9 @@ const els = {
     btnFavorites: document.getElementById('btn-favorites'),
     btnBlocklist: document.getElementById('btn-blocklist'),
 
-    modeToggle: document.getElementById('mode-toggle'),
-    labelSfw: document.getElementById('label-sfw'),
-    labelNsfw: document.getElementById('label-nsfw'),
+    btnPuritySfw: document.getElementById('btn-purity-sfw'),
+    btnPuritySketchy: document.getElementById('btn-purity-sketchy'),
+    btnPurityNsfw: document.getElementById('btn-purity-nsfw'),
 
     btnDaemon: document.getElementById('btn-daemon'),
     btnSettings: document.getElementById('btn-settings'),
@@ -169,10 +169,10 @@ function setupEventListeners() {
     els.btnFavorites.onclick = () => setViewMode('favorites');
     els.btnBlocklist.onclick = () => setViewMode('trash');
 
-    // Sidebar: Mode switch
-    els.modeToggle.onclick = () => togglePurity();
-    els.labelSfw.onclick = () => setPurity('sfw');
-    els.labelNsfw.onclick = () => setPurity('nsfw');
+    // Sidebar: Purity toggles
+    els.btnPuritySfw.onclick = () => toggleSinglePurity('sfw');
+    els.btnPuritySketchy.onclick = () => toggleSinglePurity('sketchy');
+    els.btnPurityNsfw.onclick = () => toggleSinglePurity('nsfw');
 
     // Sidebar: Daemon
     els.btnDaemon.onclick = toggleDaemon;
@@ -228,6 +228,11 @@ function handleGlobalKeydown(e) {
         return;
     }
 
+    // Purity toggles (F1/F2/F3)
+    if (e.key === 'F1') { e.preventDefault(); toggleSinglePurity('sfw'); return; }
+    if (e.key === 'F2') { e.preventDefault(); toggleSinglePurity('sketchy'); return; }
+    if (e.key === 'F3') { e.preventDefault(); toggleSinglePurity('nsfw'); return; }
+
     // Check if a card is focused
     const focusedCard = document.activeElement && document.activeElement.classList.contains('wallpaper-card') ? document.activeElement : null;
 
@@ -262,9 +267,6 @@ function handleGlobalKeydown(e) {
             break;
         case 'z':
             undoDislike();
-            break;
-        case 'm':
-            togglePurity();
             break;
         case '1':
             setViewMode('pool');
@@ -476,26 +478,32 @@ async function setViewMode(mode) {
     refreshImages();
 }
 
-function togglePurity() {
-    setPurity(appState.purity === 'sfw' ? 'nsfw' : 'sfw');
+function toggleSinglePurity(purity) {
+    const current = appState.purity;
+    if (current.includes(purity)) {
+        if (current.length <= 1) return;
+        setPurities(current.filter(p => p !== purity));
+    } else {
+        setPurities([...current, purity]);
+    }
 }
 
-async function setPurity(purity) {
-    appState.purity = purity;
+async function setPurities(purities) {
+    appState.purity = purities;
 
-    // Also update server config
     try {
         await fetch(`${API_URL}/api/mode`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mode: purity })
+            body: JSON.stringify({ purities })
         });
     } catch (e) {
-        console.error("Failed to set mode", e);
+        console.error("Failed to set purities", e);
     }
 
     updateUI();
     refreshImages();
+    fetchStatus();
 }
 
 async function toggleDaemon() {
@@ -662,9 +670,8 @@ async function fetchConfig() {
         const data = await res.json();
         appState.config = data;
 
-        // data.mode is 'sfw' or 'nsfw' (purity)
-        appState.purity = data.mode;
-        // interval_min is in data, used for settings
+        // data.mode is now an array of purities
+        appState.purity = Array.isArray(data.mode) ? data.mode : [data.mode];
 
         updateUI();
     } catch (e) { console.error(e); }
@@ -675,19 +682,21 @@ function connectSSE() {
     es.onmessage = (e) => {
         try {
             const data = JSON.parse(e.data);
-            if (data.type === 'mode' && data.mode !== appState.purity) {
-                console.log(`SSE mode change: ${appState.purity} -> ${data.mode}`);
-                appState.purity = data.mode;
-                updateUI();
-                refreshImages();
+            if (data.type === 'mode' && data.purities) {
+                const newPurities = data.purities;
+                if (JSON.stringify(newPurities.sort()) !== JSON.stringify([...appState.purity].sort())) {
+                    console.log(`SSE purity change: ${appState.purity} -> ${newPurities}`);
+                    appState.purity = newPurities;
+                    updateUI();
+                    refreshImages();
+                    fetchStatus();
+                }
             }
         } catch (err) {
             console.error('SSE parse error', err);
         }
     };
-    es.onerror = () => {
-        // EventSource auto-reconnects; nothing to do
-    };
+    es.onerror = () => {};
 }
 
 async function fetchStatus() {
@@ -696,11 +705,12 @@ async function fetchStatus() {
         const data = await res.json();
 
         // Check for external mode change (e.g. via CLI)
-        if (data.mode && data.mode !== appState.purity) {
-             console.log(`Mode changed externally: ${appState.purity} -> ${data.mode}`);
-             appState.purity = data.mode;
-             updateUI();
-             refreshImages();
+        const newMode = Array.isArray(data.mode) ? data.mode : [data.mode];
+        if (JSON.stringify(newMode.sort()) !== JSON.stringify([...appState.purity].sort())) {
+            console.log(`Mode changed externally: ${appState.purity} -> ${newMode}`);
+            appState.purity = newMode;
+            updateUI();
+            refreshImages();
         }
 
         if (data.running !== appState.status.running) {
@@ -751,8 +761,7 @@ async function refreshImages() {
     const orient = monitor ? monitor.orientation : 'landscape';
 
     if (appState.mode === 'trash') {
-        // Fetch both image grid and blocklist data
-        const url = `${API_URL}/api/images?mode=trash&purity=${appState.purity}&orient=${orient}`;
+        const url = `${API_URL}/api/images?mode=trash&purity=sfw&orient=${orient}`;
         try {
             const [imgRes] = await Promise.all([
                 fetch(url),
@@ -763,9 +772,12 @@ async function refreshImages() {
         } catch (e) { console.error(e); }
     } else {
         try {
-            const url = `${API_URL}/api/images?mode=${appState.mode}&purity=${appState.purity}&orient=${orient}`;
-            const res = await fetch(url);
-            appState.images = await res.json();
+            const fetches = appState.purity.map(p =>
+                fetch(`${API_URL}/api/images?mode=${appState.mode}&purity=${p}&orient=${orient}`)
+                    .then(r => r.json())
+            );
+            const results = await Promise.all(fetches);
+            appState.images = results.flat();
             renderImages();
         } catch (e) { console.error(e); }
     }
@@ -787,16 +799,10 @@ function updateUI() {
         els.btnBlocklist.classList.add('active');
     }
 
-    // Mode switch
-    if (appState.purity === 'nsfw') {
-        els.modeToggle.classList.add('on');
-        els.labelNsfw.classList.add('active');
-        els.labelSfw.classList.remove('active');
-    } else {
-        els.modeToggle.classList.remove('on');
-        els.labelSfw.classList.add('active');
-        els.labelNsfw.classList.remove('active');
-    }
+    // Purity toggles
+    els.btnPuritySfw.classList.toggle('active', appState.purity.includes('sfw'));
+    els.btnPuritySketchy.classList.toggle('active', appState.purity.includes('sketchy'));
+    els.btnPurityNsfw.classList.toggle('active', appState.purity.includes('nsfw'));
 }
 
 function updateStatusUI() {
