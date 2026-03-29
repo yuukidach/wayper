@@ -1135,6 +1135,128 @@ footer {
   color: var(--crust);
 }
 
+/* ---------- Search Bar ---------- */
+
+.search-wrapper {
+  position: relative;
+  flex: 1;
+  max-width: 400px;
+  min-width: 200px;
+  margin: 0 16px;
+  -webkit-app-region: no-drag;
+}
+
+.search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--overlay1);
+  pointer-events: none;
+  z-index: 1;
+}
+
+#search-input {
+  width: 100%;
+  background: var(--surface0);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 6px 56px 6px 32px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  outline: none;
+  transition: border-color var(--duration) var(--ease),
+              box-shadow var(--duration) var(--ease),
+              background-color var(--duration) var(--ease);
+}
+
+#search-input::placeholder {
+  color: var(--subtext0);
+}
+
+#search-input:focus {
+  border-color: var(--blue);
+  background: var(--mantle);
+  box-shadow: 0 0 0 3px rgba(137, 180, 250, 0.15);
+}
+
+#search-input:focus ~ .search-kbd {
+  display: none;
+}
+
+.search-kbd {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.search-count {
+  position: absolute;
+  right: 28px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: var(--subtext1);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--overlay1);
+  font-size: 16px;
+  cursor: pointer;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  line-height: 1;
+}
+
+.search-clear:hover {
+  color: var(--text);
+  background: var(--surface1);
+}
+
+.search-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--surface0);
+  border: 1px solid var(--surface1);
+  border-radius: var(--radius);
+  overflow: hidden;
+  z-index: 200;
+  box-shadow: var(--shadow-lg);
+}
+
+.search-dropdown-item {
+  padding: 7px 12px;
+  font-size: 12px;
+  color: var(--subtext1);
+  cursor: pointer;
+  transition: background var(--duration) var(--ease),
+              color var(--duration) var(--ease);
+}
+
+.search-dropdown-item:hover,
+.search-dropdown-item.highlighted {
+  background: var(--surface2);
+  color: var(--text);
+}
+
 /* ---------- Utilities ---------- */
 
 .hidden {
