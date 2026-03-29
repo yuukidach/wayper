@@ -5,7 +5,7 @@
     Cross-platform wallpaper manager with <a href="https://wallhaven.cc">Wallhaven</a> integration and AI-native control.
   </p>
   <p align="center">
-    <a href="https://yuukidach.github.io/wayper/">Home</a> · <a href="#install">Install</a> · <a href="#usage">Usage</a> · <a href="#mcp">MCP</a> · <a href="#config">Config</a> · <a href="README.zh-CN.md">中文</a>
+    <a href="https://yuukidach.github.io/wayper/">Home</a> · <a href="#install">Install</a> · <a href="#gui">GUI</a> · <a href="#cli">CLI</a> · <a href="#mcp">MCP</a> · <a href="#config">Config</a> · <a href="docs/README.zh-CN.md">中文</a>
   </p>
 </p>
 
@@ -13,33 +13,23 @@
   <img src="assets/demo-desktop.gif" alt="wallpaper transitions" width="720">
 </p>
 
-<details>
-<summary>CLI demo</summary>
-<p align="center">
-  <img src="assets/demo-cli.gif" alt="CLI usage" width="720">
-</p>
-</details>
-
-<details>
-<summary>GUI screenshot</summary>
 <p align="center">
   <img src="assets/browse.png" alt="GUI browse view" width="720">
 </p>
-</details>
+
+<p align="center">
+  <img src="assets/demo-cli.gif" alt="CLI usage" width="720">
+</p>
 
 ## Why wayper?
 
 - **Wallhaven integration** — auto-downloads wallpapers from [Wallhaven](https://wallhaven.cc) based on your search preferences. No manual sourcing.
 - **Auto orientation matching** — portrait monitors get portrait wallpapers, landscape gets landscape. No manual sorting.
-- **Pool management** — validates (catches corrupt images), resizes to your exact resolution, and rotates automatically.
+- **Pool management** — validates images, resizes to your exact resolution, and rotates automatically.
 - **Three-tier purity** — SFW, Sketchy, NSFW — independently toggleable. Persistent across sessions.
-- **History navigation** — prev/next through your wallpaper history. Browser-style back/forward per monitor.
-- **Favorites & blacklist** — like/dislike with undo. Favorites stay in rotation.
-- **Cross-platform GUI** — browse, preview, and manage your collection with daemon control and settings. Works on Linux and macOS.
-- **Tag search** — search your collection by Wallhaven tags, category, or filename. Autocomplete suggestions, works across all views (pool, favorites, blocklist).
-- **Smart tag suggestions** — analyzes your dislike history to surface tags you repeatedly block. Preview matching images in the blocklist, then exclude with one click. Already-excluded tags automatically suppress related suggestions (e.g., excluding "video games" hides "video game characters" and "screen shot" too). No more manually guessing which tags to filter.
-- **Keyboard-driven** — every action has a keyboard shortcut. Grid navigation, lightbox preview, favorites, dislike — all without touching the mouse.
-- **AI-native** — built-in MCP server lets AI assistants (Claude Code, etc.) control your wallpapers directly. Ask your AI to "delete this broken wallpaper" or "favorite this one" — it just works.
+- **Smart tag exclusion** — analyzes your dislike history to surface tags you repeatedly block. Supports single-tag and combo exclusion (e.g., "tattoo + nude") for fine-grained filtering. Already-excluded tags suppress related suggestions automatically.
+- **Cross-platform GUI** — browse, preview, search, and manage your entire collection. Tag search, smart suggestions, daemon control, settings — all keyboard-driven.
+- **AI-native** — built-in MCP server lets AI assistants control your wallpapers directly.
 - **JSON output** — `--json` flag on every command for scripting and automation.
 
 ## Install
@@ -58,28 +48,15 @@ cd wayper
 uv venv && uv pip install -e .
 ```
 
-## Usage
+## GUI
 
-```
-wayper daemon               # start background rotation + downloads
-wayper next                 # next wallpaper (forward history or new random)
-wayper prev                 # previous wallpaper from history
-wayper fav [--open]         # favorite current wallpaper
-wayper unfav                # remove from favorites
-wayper dislike              # blacklist + switch
-wayper undislike            # undo last dislike
-wayper mode                 # toggle sfw↔nsfw (preserves sketchy)
-wayper mode sketchy         # toggle sketchy on/off
-wayper mode sfw,sketchy     # set exact purity combination
-wayper status               # show current state
-wayper-gui                  # GUI app (browse, actions, daemon, settings)
-wayper setup                # install .desktop entry (Linux)
-wayper --json status        # machine-readable output
-```
+`wayper-gui` launches a standalone app for browsing, managing, and controlling your wallpaper collection. Fully operable without a mouse.
 
-### GUI App
-
-`wayper-gui` launches a standalone app with browse, quick actions (next/prev/fav/dislike), daemon control, and settings — all in one window. Designed to be fully operable without a mouse.
+- **Browse & preview** — grid view with thumbnail caching, lightbox preview, set wallpaper with Enter
+- **Tag search** — search by Wallhaven tags, category, or filename with autocomplete
+- **Smart suggestions** — analyzes dislike patterns to recommend tags to exclude; drill into combo exclusions (e.g., "tattoo + nude") for precise filtering
+- **Settings** — configure Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI
+- **Keyboard-driven** — every action has a shortcut: grid navigation, tab switching, lightbox, favorites, dislike, undo
 
 **Grid view:**
 
@@ -101,10 +78,28 @@ wayper --json status        # machine-readable output
 | `f` | Favorite | `x` / `Del` | Dislike |
 | `o` | Open on Wallhaven | `Space` / `Esc` | Close lightbox |
 
+## CLI
+
+```
+wayper daemon               # start background rotation + downloads
+wayper next                 # next wallpaper (forward history or new random)
+wayper prev                 # previous wallpaper from history
+wayper fav [--open]         # favorite current wallpaper
+wayper unfav                # remove from favorites
+wayper dislike              # blacklist + switch
+wayper undislike            # undo last dislike
+wayper mode                 # toggle sfw↔nsfw (preserves sketchy)
+wayper mode sketchy         # toggle sketchy on/off
+wayper mode sfw,sketchy     # set exact purity combination
+wayper status               # show current state
+wayper-gui                  # GUI app (browse, actions, daemon, settings)
+wayper setup                # install .desktop entry (Linux)
+wayper --json status        # machine-readable output
+```
+
 ### Keybindings
 
-<details>
-<summary>Hyprland</summary>
+**Hyprland:**
 
 ```ini
 bind = $mod, F9,       exec, wayper dislike
@@ -118,17 +113,14 @@ bind = $mod, F12,      exec, wayper mode
 bind = $mod SHIFT, F12,exec, wayper mode sketchy
 exec-once = wayper daemon
 ```
-</details>
 
-<details>
-<summary>AeroSpace (macOS)</summary>
+**AeroSpace (macOS):**
 
 ```toml
 cmd-shift-n = 'exec-and-forget wayper next'
 cmd-shift-b = 'exec-and-forget wayper dislike'
 cmd-shift-f = 'exec-and-forget wayper fav'
 ```
-</details>
 
 ## MCP
 
