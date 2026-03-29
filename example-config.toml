@@ -1,7 +1,7 @@
 api_key = ""  # https://wallhaven.cc/settings/account
 # proxy = "http://127.0.0.1:7897"
 download_dir = "~/Pictures/wallpaper"
-default_mode = "sfw"
+default_mode = "sfw"           # comma-separated: sfw, sketchy, nsfw (e.g. "sfw,sketchy")
 interval = 300         # seconds between rotations
 pool_target = 30       # images per orientation before slowing downloads
 quota_mb = 4000        # max disk usage
