@@ -133,6 +133,7 @@ class WallhavenConfigModel(BaseModel):
     sorting: str
     ai_art_filter: int
     exclude_tags: list[str]
+    exclude_combos: list[list[str]] = []
 
 
 class ConfigResponse(BaseModel):
@@ -178,6 +179,7 @@ def get_config_route():
             "sorting": config.wallhaven.sorting,
             "ai_art_filter": config.wallhaven.ai_art_filter,
             "exclude_tags": config.wallhaven.exclude_tags,
+            "exclude_combos": config.wallhaven.exclude_combos,
         },
     }
 
@@ -212,6 +214,8 @@ def update_config_route(updates: dict = Body(...)):
             config.wallhaven.ai_art_filter = wh["ai_art_filter"]
         if "exclude_tags" in wh:
             config.wallhaven.exclude_tags = wh["exclude_tags"]
+        if "exclude_combos" in wh:
+            config.wallhaven.exclude_combos = wh["exclude_combos"]
 
     save_config(config)
     global _cached_config, _cached_mtime
@@ -596,22 +600,35 @@ def daemon_action(action: str):
 
 
 @app.get("/api/search")
-def search_images(q: str = ""):
-    """Search images by tags, category, or filename."""
-    if not q:
+def search_images(q: str = "", tags: str = ""):
+    """Search images by tags, category, or filename.
+
+    Use ?tags=tag1,tag2 for exact multi-tag intersection (all must match).
+    Use ?q=query for substring search.
+    """
+    if not q and not tags:
         return {"matches": [], "suggestions": []}
 
     metadata = _get_metadata()
-    query = q.lower()
     matches: list[str] = []
     tag_counts: dict[str, int] = {}
 
+    if tags:
+        # Exact tag intersection: image must have ALL specified tags
+        required = {t.strip().lower() for t in tags.split(",") if t.strip()}
+        for filename, meta in metadata.items():
+            img_tags = {t.lower() for t in meta.get("tags", [])}
+            if required.issubset(img_tags):
+                matches.append(filename)
+        return {"matches": matches, "suggestions": []}
+
+    query = q.lower()
     for filename, meta in metadata.items():
-        tags = [t.lower() for t in meta.get("tags", [])]
+        img_tags = [t.lower() for t in meta.get("tags", [])]
         category = meta.get("category", "").lower()
         fname = filename.lower()
 
-        if any(query in tag for tag in tags) or query in category or query in fname:
+        if any(query in tag for tag in img_tags) or query in category or query in fname:
             matches.append(filename)
             for tag in meta.get("tags", []):
                 if tag.lower().startswith(query):
@@ -622,12 +639,31 @@ def search_images(q: str = ""):
 
 
 @app.get("/api/tag-suggestions")
-def tag_suggestions():
-    """Suggest tags to exclude based on dislike history vs same-purity pool."""
+def tag_suggestions(context: str = ""):
+    """Suggest tags to exclude based on dislike history vs same-purity pool.
+
+    With ?context=tag1,tag2, returns refinement suggestions for combo drill-down.
+    """
     config = get_config()
     metadata = _get_metadata()
     blacklisted = {fn for _, fn in list_blacklist(config)}
-    results = suggest_tags_to_exclude(metadata, blacklisted, config.wallhaven.exclude_tags)
+
+    if context:
+        from wayper.suggestions import suggest_combo_refinements
+
+        context_tags = [t.strip() for t in context.split(",") if t.strip()]
+        results = suggest_combo_refinements(
+            metadata,
+            blacklisted,
+            context_tags,
+            config.wallhaven.exclude_tags,
+            config.wallhaven.exclude_combos,
+        )
+        return {"suggestions": results, "context": context_tags}
+
+    results = suggest_tags_to_exclude(
+        metadata, blacklisted, config.wallhaven.exclude_tags, config.wallhaven.exclude_combos
+    )
     return {"suggestions": results}
 
 

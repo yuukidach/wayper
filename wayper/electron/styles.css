@@ -802,6 +802,10 @@ main {
   gap: 6px;
   margin-top: 8px;
   min-height: 0;
+  max-height: 120px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface2) transparent;
 }
 
 .tag-chips:empty {
@@ -819,6 +823,12 @@ main {
   font-size: 11px;
   font-weight: 500;
   line-height: 1.4;
+}
+
+.combo-chip {
+  background: rgba(137, 180, 250, 0.08);
+  border: 1px solid rgba(137, 180, 250, 0.15);
+  color: var(--blue);
 }
 
 .tag-chip-remove {
@@ -902,6 +912,13 @@ main {
   opacity: 0;
   transform: scale(0.9);
   transition: opacity 0.2s var(--ease), transform 0.2s var(--ease);
+}
+
+.combo-refinements {
+  padding: 4px 14px;
+  background: rgba(137, 180, 250, 0.03);
+  border: 1px solid rgba(137, 180, 250, 0.08);
+  border-radius: var(--radius);
 }
 
 /* Review bar (active tag review in blocklist) */

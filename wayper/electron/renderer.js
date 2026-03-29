@@ -47,6 +47,8 @@ let appState = {
     blocklistData: null, // cached blocklist data
     tagSuggestions: null, // tag exclusion suggestions
     reviewingTag: null, // tag currently being reviewed in blocklist
+    comboContext: [], // drill-down context for combo exclusion [tag1, tag2, ...]
+    comboRefinements: [], // refinement suggestions for current context
 
     // Search
     searchQuery: '',
@@ -222,8 +224,7 @@ function handleMouseBack(e) {
     if (lightboxEl) { closeLightbox(); return; }
     if (appState.reviewingTag) {
         e.preventDefault();
-        appState.reviewingTag = null;
-        clearSearch();
+        exitComboLevel();
         return;
     }
     if (appState.searchQuery) {
@@ -285,8 +286,7 @@ function handleGlobalKeydown(e) {
     switch(e.key) {
         case 'Escape':
             if (appState.reviewingTag) {
-                appState.reviewingTag = null;
-                clearSearch();
+                exitComboLevel();
             } else if (appState.searchQuery) {
                 clearSearch();
             } else if (focusedCard) {
@@ -476,8 +476,9 @@ function populateSettingsForm() {
     document.getElementById('input-sorting').value = w.sorting;
     document.getElementById('input-ai-art').value = w.ai_art_filter;
 
-    // Exclude tags
+    // Exclude tags & combos
     renderExcludeTags(w.exclude_tags || []);
+    renderExcludeCombos(w.exclude_combos || []);
 
     // Network
     document.getElementById('input-proxy').value = c.proxy || '';
@@ -518,6 +519,33 @@ function getExcludeTags() {
     return [...container.querySelectorAll('.tag-chip')].map(c => c.textContent.slice(0, -1));
 }
 
+function renderExcludeCombos(combos) {
+    const container = document.getElementById('exclude-combos-container');
+    const field = document.getElementById('exclude-combos-field');
+    container.innerHTML = '';
+    if (!combos.length) { field.style.display = 'none'; return; }
+    field.style.display = '';
+    combos.forEach(combo => {
+        const chip = document.createElement('span');
+        chip.className = 'tag-chip combo-chip';
+        chip.textContent = combo.join(' + ');
+        const btn = document.createElement('button');
+        btn.className = 'tag-chip-remove';
+        btn.textContent = '\u00d7';
+        btn.onclick = () => chip.remove();
+        chip.appendChild(btn);
+        container.appendChild(chip);
+    });
+}
+
+function getExcludeCombos() {
+    const container = document.getElementById('exclude-combos-container');
+    return [...container.querySelectorAll('.tag-chip')].map(c => {
+        const text = c.textContent.slice(0, -1); // remove × button text
+        return text.split(' + ').map(t => t.trim());
+    });
+}
+
 async function fetchTagSuggestions() {
     try {
         const res = await fetch(`${API_URL}/api/tag-suggestions`);
@@ -526,6 +554,56 @@ async function fetchTagSuggestions() {
         appState.tagSuggestions = data.suggestions || [];
     } catch (e) {
         console.error('Failed to fetch tag suggestions:', e);
+    }
+}
+
+async function searchByTags(tagList) {
+    // Use exact tag intersection search instead of text search
+    const res = await fetch(`${API_URL}/api/search?tags=${encodeURIComponent(tagList.join(','))}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    console.log('[searchByTags]', tagList, '→', data.matches?.length, 'matches, allImages:', appState.allImages.length);
+    appState.searchQuery = tagList.join(' + ');
+    appState.searchMatches = new Set(data.matches || []);
+    els.searchInput.value = tagList.join(' + ');
+    els.searchDropdown.classList.add('hidden');
+    applySearchFilter();
+    updateSearchCount();
+}
+
+function exitComboLevel() {
+    els.searchInput.blur();
+    if (appState.comboContext.length > 1) {
+        // Pop one level — if going back to single tag, use text search for consistency
+        appState.comboContext.pop();
+        const ctx = appState.comboContext;
+        // Restore reviewingTag to match the parent level
+        if (ctx.length === 1) {
+            const original = appState.tagSuggestions?.find(s => s.tag === ctx[0]);
+            if (original) appState.reviewingTag = original;
+        }
+        const searchFn = searchByTags(ctx);
+        searchFn.then(() => {
+            els.searchDropdown.classList.add('hidden');
+            fetchComboRefinements(ctx).then(() => renderBlocklistView());
+        });
+    } else {
+        appState.reviewingTag = null;
+        appState.comboContext = [];
+        appState.comboRefinements = [];
+        clearSearch();
+    }
+}
+
+async function fetchComboRefinements(contextTags) {
+    try {
+        const res = await fetch(`${API_URL}/api/tag-suggestions?context=${encodeURIComponent(contextTags.join(','))}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        appState.comboRefinements = data.suggestions || [];
+    } catch (e) {
+        console.error('Failed to fetch combo refinements:', e);
+        appState.comboRefinements = [];
     }
 }
 
@@ -541,7 +619,8 @@ async function saveSettings() {
             top_range: document.getElementById('input-top-range').value,
             sorting: document.getElementById('input-sorting').value,
             ai_art_filter: parseInt(document.getElementById('input-ai-art').value),
-            exclude_tags: getExcludeTags()
+            exclude_tags: getExcludeTags(),
+            exclude_combos: getExcludeCombos()
         }
     };
 
@@ -1217,11 +1296,16 @@ function renderBlocklistView() {
     if (appState.reviewingTag) {
         // Review mode: show context bar for the tag being reviewed
         const s = appState.reviewingTag;
+        const ctx = appState.comboContext;
+        const isCombo = ctx.length > 1;
         const bar = document.createElement('div');
         bar.className = 'tag-review-bar';
+
+        // Show breadcrumb for combo context
+        const breadcrumb = ctx.map(t => `<strong>${esc(t)}</strong>`).join(' + ');
         bar.innerHTML = `
             <span class="review-bar-text">
-                <strong>${esc(s.tag)}</strong>
+                ${breadcrumb}
                 <span class="review-bar-count">${s.count} disliked</span>
             </span>
         `;
@@ -1230,33 +1314,95 @@ function renderBlocklistView() {
 
         const excludeBtn = document.createElement('button');
         excludeBtn.className = 'review-btn-exclude';
-        excludeBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Exclude';
-        excludeBtn.onclick = async () => {
-            const config = appState.config;
-            const tags = [...(config.wallhaven.exclude_tags || []), s.tag];
-            await fetch(`${API_URL}/api/config`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ wallhaven: { exclude_tags: tags } })
-            });
-            await fetchConfig();
-            await fetchTagSuggestions();
-            appState.reviewingTag = null;
-            clearSearch();
-        };
+        if (isCombo) {
+            excludeBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Exclude combo';
+            excludeBtn.onclick = async () => {
+                const config = appState.config;
+                const newComboLower = new Set(ctx.map(t => t.toLowerCase()));
+                // Remove supersets of the new combo (redundant, more specific)
+                const combos = (config.wallhaven.exclude_combos || []).filter(existing => {
+                    const existingLower = new Set(existing.map(t => t.toLowerCase()));
+                    if (existingLower.size > newComboLower.size &&
+                        [...newComboLower].every(t => existingLower.has(t))) {
+                        return false;
+                    }
+                    return true;
+                });
+                combos.push([...ctx]);
+                await fetch(`${API_URL}/api/config`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ wallhaven: { exclude_combos: combos } })
+                });
+                await fetchConfig();
+                await fetchTagSuggestions();
+                appState.reviewingTag = null;
+                appState.comboContext = [];
+                appState.comboRefinements = [];
+                clearSearch();
+            };
+        } else {
+            excludeBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Exclude';
+            excludeBtn.onclick = async () => {
+                const config = appState.config;
+                const tags = [...(config.wallhaven.exclude_tags || []), s.tag];
+                await fetch(`${API_URL}/api/config`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ wallhaven: { exclude_tags: tags } })
+                });
+                await fetchConfig();
+                await fetchTagSuggestions();
+                appState.reviewingTag = null;
+                appState.comboContext = [];
+                appState.comboRefinements = [];
+                clearSearch();
+            };
+        }
 
         const backBtn = document.createElement('button');
         backBtn.className = 'review-btn-back';
         backBtn.textContent = 'Back';
         backBtn.onclick = () => {
-            appState.reviewingTag = null;
-            clearSearch();
+            exitComboLevel();
         };
 
         actions.appendChild(excludeBtn);
         actions.appendChild(backBtn);
         bar.appendChild(actions);
         els.wallpaperGrid.appendChild(bar);
+
+        // Combo refinement chips
+        if (appState.comboRefinements.length > 0) {
+            const refBar = document.createElement('div');
+            refBar.className = 'tag-suggestions-bar combo-refinements';
+            const label = document.createElement('span');
+            label.className = 'suggestion-bar-label';
+            label.textContent = 'Refine with';
+            refBar.appendChild(label);
+            for (const r of appState.comboRefinements) {
+                const chip = document.createElement('span');
+                chip.className = 'suggestion-chip';
+                chip.title = `Add "${r.tag}" to combo`;
+                chip.onclick = async () => {
+                    appState.comboContext = [...ctx, r.tag];
+                    appState.reviewingTag = r;
+                    await searchByTags(appState.comboContext);
+                    await fetchComboRefinements(appState.comboContext);
+                    renderBlocklistView();
+                };
+                const tagLabel = document.createElement('span');
+                tagLabel.className = 'suggestion-chip-name';
+                tagLabel.textContent = r.tag;
+                const count = document.createElement('span');
+                count.className = 'suggestion-chip-count';
+                count.textContent = `${r.count}`;
+                chip.appendChild(tagLabel);
+                chip.appendChild(count);
+                refBar.appendChild(chip);
+            }
+            els.wallpaperGrid.appendChild(refBar);
+        }
     } else if (!appState.searchQuery && appState.tagSuggestions && appState.tagSuggestions.length > 0) {
         // Suggestions mode: show all suggestion chips
         const bar = document.createElement('div');
@@ -1271,9 +1417,10 @@ function renderBlocklistView() {
             chip.title = `Review "${s.tag}" in blocklist`;
             chip.onclick = async () => {
                 appState.reviewingTag = s;
-                els.searchInput.value = s.tag;
-                await performSearch(s.tag);
-                els.searchDropdown.classList.add('hidden');
+                appState.comboContext = [s.tag];
+                await searchByTags([s.tag]);
+                await fetchComboRefinements([s.tag]);
+                renderBlocklistView();
             };
             const tagLabel = document.createElement('span');
             tagLabel.className = 'suggestion-chip-name';
@@ -1293,12 +1440,12 @@ function renderBlocklistView() {
             const msg = appState.searchQuery
                 ? `No matches for "${esc(appState.searchQuery)}"`
                 : 'No recoverable images in trash';
-            els.wallpaperGrid.innerHTML += `
+            els.wallpaperGrid.insertAdjacentHTML('beforeend', `
                 <div class="empty-state">
                     <div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div>
                     <p>${msg}</p>
                 </div>
-            `;
+            `);
             return;
         }
         renderNextBatch();
@@ -1310,12 +1457,12 @@ function renderBlocklistView() {
 
 function renderBlockedList(entries) {
     if (entries.length === 0) {
-        els.wallpaperGrid.innerHTML += `
+        els.wallpaperGrid.insertAdjacentHTML('beforeend', `
             <div class="empty-state">
                 <div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
                 <p>No blocked images</p>
             </div>
-        `;
+        `);
         return;
     }
 
