@@ -26,6 +26,15 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["wayper"]
 
+[tool.hatch.build.targets.wheel.shared-data]
+"assets/wayper.desktop" = "share/applications/wayper.desktop"
+"assets/icon.svg" = "share/icons/hicolor/scalable/apps/wayper.svg"
+"assets/icon-32.png" = "share/icons/hicolor/32x32/apps/wayper.png"
+"assets/icon-64.png" = "share/icons/hicolor/64x64/apps/wayper.png"
+"assets/icon-128.png" = "share/icons/hicolor/128x128/apps/wayper.png"
+"assets/icon-256.png" = "share/icons/hicolor/256x256/apps/wayper.png"
+"assets/icon-512.png" = "share/icons/hicolor/512x512/apps/wayper.png"
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100

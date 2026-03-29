@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Wayper
+Comment=Wallpaper manager with Wallhaven integration
+Exec=wayper-gui
+Icon=wayper
+Terminal=false
+Type=Application
+Categories=Utility;Graphics;
+Keywords=wallpaper;wallhaven;background;
