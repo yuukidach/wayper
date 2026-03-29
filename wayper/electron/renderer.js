@@ -749,6 +749,8 @@ function handleSearchKeydown(e) {
             performSearch(items[searchHighlightIndex].textContent);
         } else {
             els.searchDropdown.classList.add('hidden');
+            const query = els.searchInput.value.trim();
+            if (query) performSearch(query);
         }
         return;
     }
@@ -1087,8 +1089,11 @@ function renderBlocklistView() {
     appState.currentBatchIndex = 0;
 
     const bl = appState.blocklistData || { entries: [], total: 0, recoverable_count: 0 };
+    const filteredEntries = appState.searchMatches
+        ? bl.entries.filter(e => appState.searchMatches.has(e.filename))
+        : bl.entries;
     const recoverableCount = appState.images.length;
-    const blockedCount = bl.total;
+    const blockedCount = filteredEntries.length;
 
     // Tabs
     const tabs = document.createElement('div');
@@ -1110,10 +1115,13 @@ function renderBlocklistView() {
 
     if (appState.blocklistTab === 'recoverable') {
         if (appState.images.length === 0) {
+            const msg = appState.searchQuery
+                ? `No matches for "${esc(appState.searchQuery)}"`
+                : 'No recoverable images in trash';
             els.wallpaperGrid.innerHTML += `
                 <div class="empty-state">
                     <div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div>
-                    <p>No recoverable images in trash</p>
+                    <p>${msg}</p>
                 </div>
             `;
             return;
@@ -1121,7 +1129,7 @@ function renderBlocklistView() {
         renderNextBatch();
         setTimeout(updateGridMetrics, 100);
     } else {
-        renderBlockedList(bl.entries);
+        renderBlockedList(filteredEntries);
     }
 }
 
