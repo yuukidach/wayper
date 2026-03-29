@@ -141,6 +141,7 @@ class ConfigResponse(BaseModel):
     pool_target: int
     quota_mb: int
     proxy: str
+    pause_on_lock: bool
     wallhaven: WallhavenConfigModel
 
 
@@ -169,6 +170,7 @@ def get_config_route():
         "pool_target": config.pool_target,
         "quota_mb": config.quota_mb,
         "proxy": config.proxy or "",
+        "pause_on_lock": config.pause_on_lock,
         "wallhaven": {
             "categories": config.wallhaven.categories,
             "top_range": config.wallhaven.top_range,
@@ -194,6 +196,8 @@ def update_config_route(updates: dict = Body(...)):
         config.quota_mb = updates["quota_mb"]
     if "proxy" in updates:
         config.proxy = updates["proxy"].strip() or None
+    if "pause_on_lock" in updates:
+        config.pause_on_lock = bool(updates["pause_on_lock"])
 
     if "wallhaven" in updates:
         wh = updates["wallhaven"]
@@ -608,6 +612,66 @@ def search_images(q: str = ""):
 
     suggestions = sorted(tag_counts.keys(), key=lambda t: -tag_counts[t])[:8]
     return {"matches": matches, "suggestions": suggestions}
+
+
+@app.get("/api/tag-suggestions")
+def tag_suggestions():
+    """Suggest tags to exclude based on dislike history vs same-purity pool."""
+    config = get_config()
+    metadata = _get_metadata()
+    blacklisted = {fn for _, fn in list_blacklist(config)}
+    excluded = {t.lower() for t in config.wallhaven.exclude_tags}
+
+    if not blacklisted:
+        return {"suggestions": []}
+
+    # Group by purity, then count tags in disliked vs pool within each group
+    purity_groups: dict[str, dict] = {}
+    for filename, meta in metadata.items():
+        purity = meta.get("purity", "sfw")
+        if purity not in purity_groups:
+            purity_groups[purity] = {
+                "dislike_tags": {},
+                "pool_tags": {},
+                "dislike_total": 0,
+                "pool_total": 0,
+            }
+        g = purity_groups[purity]
+        tags = meta.get("tags", [])
+        if filename in blacklisted:
+            g["dislike_total"] += 1
+            for tag in tags:
+                g["dislike_tags"][tag] = g["dislike_tags"].get(tag, 0) + 1
+        else:
+            g["pool_total"] += 1
+            for tag in tags:
+                g["pool_tags"][tag] = g["pool_tags"].get(tag, 0) + 1
+
+    # Aggregate scores across purity groups
+    tag_scores: dict[str, dict] = {}
+    for g in purity_groups.values():
+        # Need enough data in both dislike and pool for meaningful comparison
+        if g["dislike_total"] < 3 or g["pool_total"] < 30:
+            continue
+        for tag, count in g["dislike_tags"].items():
+            if count < 3 or tag.lower() in excluded:
+                continue
+            # Skip tags that are too common within this purity (>25% prevalence)
+            pool_count = g["pool_tags"].get(tag, 0)
+            if pool_count / g["pool_total"] > 0.25:
+                continue
+            dislike_rate = count / g["dislike_total"]
+            pool_rate = pool_count / max(g["pool_total"], 1)
+            ratio = dislike_rate / max(pool_rate, 0.001)
+            if ratio > 2.0:
+                if tag not in tag_scores:
+                    tag_scores[tag] = {"tag": tag, "count": 0, "ratio": 0.0}
+                tag_scores[tag]["count"] += count
+                tag_scores[tag]["ratio"] = max(tag_scores[tag]["ratio"], round(ratio, 1))
+
+    results = [s for s in tag_scores.values() if s["count"] >= 3]
+    results.sort(key=lambda r: (-r["count"], -r["ratio"]))
+    return {"suggestions": results[:10]}
 
 
 @app.get("/trash/{filename}")

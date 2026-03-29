@@ -712,6 +712,273 @@ main {
   color: var(--overlay1);
 }
 
+/* Toggle switch */
+.toggle-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.toggle-switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--surface1);
+  border-radius: 10px;
+  transition: background var(--duration) var(--ease);
+  cursor: pointer;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 14px;
+  height: 14px;
+  background: var(--overlay1);
+  border-radius: 50%;
+  transition: transform var(--duration) var(--ease),
+              background var(--duration) var(--ease);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: rgba(137, 180, 250, 0.3);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(16px);
+  background: var(--blue);
+}
+
+/* Tag chips */
+.tag-input-row {
+  display: flex;
+  gap: 6px;
+}
+
+.tag-input-row .tag-input {
+  flex: 1;
+  background: var(--mantle);
+  border: 1px solid var(--surface1);
+  padding: 7px 12px;
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  outline: none;
+  transition: border-color var(--duration) var(--ease),
+              box-shadow var(--duration) var(--ease);
+}
+
+.tag-input-row .tag-input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(137, 180, 250, 0.2);
+}
+
+.btn-add-tag {
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  min-height: 0;
+}
+
+.tag-chips:empty {
+  display: none;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface1);
+  color: var(--subtext1);
+  padding: 3px 6px 3px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.tag-chip-remove {
+  background: none;
+  border: none;
+  color: var(--overlay0);
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--duration) var(--ease),
+              background var(--duration) var(--ease);
+}
+
+.tag-chip-remove:hover {
+  color: var(--red);
+  background: rgba(243, 139, 168, 0.12);
+}
+
+/* Tag suggestions bar (blocklist view) */
+.tag-suggestions-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.suggestion-bar-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--overlay0);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.suggestion-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px dashed var(--surface2);
+  border-radius: 20px;
+  padding: 4px 4px 4px 12px;
+  font-size: 11px;
+  transition: border-color var(--duration) var(--ease),
+              background var(--duration) var(--ease);
+}
+
+.suggestion-chip:hover {
+  border-color: var(--overlay0);
+  background: rgba(69, 71, 90, 0.2);
+}
+
+.suggestion-chip-name {
+  color: var(--subtext0);
+  cursor: pointer;
+  font-weight: 500;
+  transition: color var(--duration) var(--ease);
+}
+
+.suggestion-chip-name:hover {
+  color: var(--blue);
+}
+
+.suggestion-chip-count {
+  font-size: 9px;
+  color: var(--overlay0);
+  font-variant-numeric: tabular-nums;
+}
+
+
+.suggestion-chip.removing {
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 0.2s var(--ease), transform 0.2s var(--ease);
+}
+
+/* Review bar (active tag review in blocklist) */
+.tag-review-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  background: rgba(137, 180, 250, 0.06);
+  border: 1px solid rgba(137, 180, 250, 0.15);
+  border-radius: var(--radius);
+}
+
+.review-bar-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.review-bar-text strong {
+  color: var(--blue);
+  font-weight: 600;
+}
+
+.review-bar-count {
+  font-size: 11px;
+  color: var(--overlay1);
+}
+
+.review-bar-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.review-btn-exclude {
+  background: rgba(243, 139, 168, 0.1);
+  border: 1px solid rgba(243, 139, 168, 0.2);
+  color: var(--red);
+  padding: 5px 12px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: background var(--duration) var(--ease),
+              border-color var(--duration) var(--ease);
+}
+
+.review-btn-exclude:hover {
+  background: rgba(243, 139, 168, 0.18);
+  border-color: rgba(243, 139, 168, 0.35);
+}
+
+.review-btn-back {
+  background: var(--surface0);
+  border: 1px solid var(--surface1);
+  color: var(--subtext0);
+  padding: 5px 12px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration) var(--ease),
+              color var(--duration) var(--ease);
+}
+
+.review-btn-back:hover {
+  background: var(--surface1);
+  color: var(--text);
+}
+
 .settings-actions {
   display: flex;
   justify-content: flex-end;

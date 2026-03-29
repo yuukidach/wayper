@@ -45,6 +45,8 @@ let appState = {
     view: 'grid', // grid, settings
     blocklistTab: 'recoverable', // recoverable, blocked
     blocklistData: null, // cached blocklist data
+    tagSuggestions: null, // tag exclusion suggestions
+    reviewingTag: null, // tag currently being reviewed in blocklist
 
     // Search
     searchQuery: '',
@@ -190,6 +192,10 @@ function setupEventListeners() {
     // Settings Form
     els.btnSaveSettings.onclick = saveSettings;
     els.btnCancelSettings.onclick = () => switchView('grid');
+    document.getElementById('btn-add-tag').onclick = addExcludeTag;
+    document.getElementById('input-exclude-tag').addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); addExcludeTag(); }
+    });
 
     // Search
     els.searchInput.addEventListener('input', onSearchInput);
@@ -447,8 +453,57 @@ function populateSettingsForm() {
     document.getElementById('input-sorting').value = w.sorting;
     document.getElementById('input-ai-art').value = w.ai_art_filter;
 
+    // Exclude tags
+    renderExcludeTags(w.exclude_tags || []);
+
     // Network
     document.getElementById('input-proxy').value = c.proxy || '';
+
+    // Pause on lock
+    document.getElementById('input-pause-on-lock').checked = c.pause_on_lock !== false;
+}
+
+function renderExcludeTags(tags) {
+    const container = document.getElementById('exclude-tags-container');
+    container.innerHTML = '';
+    tags.forEach(tag => {
+        const chip = document.createElement('span');
+        chip.className = 'tag-chip';
+        chip.textContent = tag;
+        const btn = document.createElement('button');
+        btn.className = 'tag-chip-remove';
+        btn.textContent = '\u00d7';
+        btn.onclick = () => chip.remove();
+        chip.appendChild(btn);
+        container.appendChild(chip);
+    });
+}
+
+function addExcludeTag() {
+    const input = document.getElementById('input-exclude-tag');
+    const tag = input.value.trim();
+    if (!tag) return;
+    const container = document.getElementById('exclude-tags-container');
+    const existing = [...container.querySelectorAll('.tag-chip')].map(c => c.textContent.slice(0, -1));
+    if (existing.includes(tag)) { input.value = ''; return; }
+    renderExcludeTags([...existing, tag]);
+    input.value = '';
+}
+
+function getExcludeTags() {
+    const container = document.getElementById('exclude-tags-container');
+    return [...container.querySelectorAll('.tag-chip')].map(c => c.textContent.slice(0, -1));
+}
+
+async function fetchTagSuggestions() {
+    try {
+        const res = await fetch(`${API_URL}/api/tag-suggestions`);
+        if (!res.ok) return;
+        const data = await res.json();
+        appState.tagSuggestions = data.suggestions || [];
+    } catch (e) {
+        console.error('Failed to fetch tag suggestions:', e);
+    }
 }
 
 async function saveSettings() {
@@ -457,11 +512,13 @@ async function saveSettings() {
         quota_mb: parseInt(document.getElementById('input-quota').value) || 4000,
         pool_target: parseInt(document.getElementById('input-pool-target').value) || 30,
         proxy: document.getElementById('input-proxy').value,
+        pause_on_lock: document.getElementById('input-pause-on-lock').checked,
         wallhaven: {
             categories: document.getElementById('input-categories').value,
             top_range: document.getElementById('input-top-range').value,
             sorting: document.getElementById('input-sorting').value,
-            ai_art_filter: parseInt(document.getElementById('input-ai-art').value)
+            ai_art_filter: parseInt(document.getElementById('input-ai-art').value),
+            exclude_tags: getExcludeTags()
         }
     };
 
@@ -957,6 +1014,7 @@ async function refreshImages() {
             const [imgRes] = await Promise.all([
                 fetch(url),
                 fetchBlocklist(),
+                fetchTagSuggestions(),
             ]);
             appState.allImages = await imgRes.json();
             applySearchFilter();
@@ -1128,6 +1186,81 @@ function renderBlocklistView() {
     tabs.appendChild(tabRecoverable);
     tabs.appendChild(tabBlocked);
     els.wallpaperGrid.appendChild(tabs);
+
+    // Tag suggestions / review bar
+    if (appState.reviewingTag) {
+        // Review mode: show context bar for the tag being reviewed
+        const s = appState.reviewingTag;
+        const bar = document.createElement('div');
+        bar.className = 'tag-review-bar';
+        bar.innerHTML = `
+            <span class="review-bar-text">
+                <strong>${esc(s.tag)}</strong>
+                <span class="review-bar-count">${s.count} disliked</span>
+            </span>
+        `;
+        const actions = document.createElement('div');
+        actions.className = 'review-bar-actions';
+
+        const excludeBtn = document.createElement('button');
+        excludeBtn.className = 'review-btn-exclude';
+        excludeBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Exclude';
+        excludeBtn.onclick = async () => {
+            const config = appState.config;
+            const tags = [...(config.wallhaven.exclude_tags || []), s.tag];
+            await fetch(`${API_URL}/api/config`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ wallhaven: { exclude_tags: tags } })
+            });
+            await fetchConfig();
+            appState.tagSuggestions = appState.tagSuggestions.filter(x => x.tag !== s.tag);
+            appState.reviewingTag = null;
+            clearSearch();
+        };
+
+        const backBtn = document.createElement('button');
+        backBtn.className = 'review-btn-back';
+        backBtn.textContent = 'Back';
+        backBtn.onclick = () => {
+            appState.reviewingTag = null;
+            clearSearch();
+        };
+
+        actions.appendChild(excludeBtn);
+        actions.appendChild(backBtn);
+        bar.appendChild(actions);
+        els.wallpaperGrid.appendChild(bar);
+    } else if (!appState.searchQuery && appState.tagSuggestions && appState.tagSuggestions.length > 0) {
+        // Suggestions mode: show all suggestion chips
+        const bar = document.createElement('div');
+        bar.className = 'tag-suggestions-bar';
+        const label = document.createElement('span');
+        label.className = 'suggestion-bar-label';
+        label.textContent = 'Frequently disliked';
+        bar.appendChild(label);
+        for (const s of appState.tagSuggestions) {
+            const chip = document.createElement('span');
+            chip.className = 'suggestion-chip';
+            chip.title = `Review "${s.tag}" in blocklist`;
+            chip.onclick = async () => {
+                appState.reviewingTag = s;
+                els.searchInput.value = s.tag;
+                await performSearch(s.tag);
+                els.searchDropdown.classList.add('hidden');
+            };
+            const tagLabel = document.createElement('span');
+            tagLabel.className = 'suggestion-chip-name';
+            tagLabel.textContent = s.tag;
+            const count = document.createElement('span');
+            count.className = 'suggestion-chip-count';
+            count.textContent = `${s.count}`;
+            chip.appendChild(tagLabel);
+            chip.appendChild(count);
+            bar.appendChild(chip);
+        }
+        els.wallpaperGrid.appendChild(bar);
+    }
 
     if (appState.blocklistTab === 'recoverable') {
         if (appState.images.length === 0) {

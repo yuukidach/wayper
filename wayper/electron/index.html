@@ -147,6 +147,16 @@
                             <input type="text" id="input-proxy" placeholder="http://127.0.0.1:7897" class="code-font">
                             <small class="hint">Leave empty for direct connection</small>
                         </div>
+                        <div class="field">
+                            <label class="toggle-label">
+                                Pause on Lock
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="input-pause-on-lock">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <small class="hint">Pause wallpaper rotation when screen is locked</small>
+                        </div>
                     </div>
 
                     <div class="settings-card">
@@ -184,6 +194,15 @@
                                 <option value="0">Allow AI</option>
                                 <option value="1">Block AI</option>
                             </select>
+                        </div>
+                        <div class="field">
+                            <label>Exclude Tags</label>
+                            <div class="tag-input-row">
+                                <input type="text" id="input-exclude-tag" placeholder="Tag name..." class="tag-input">
+                                <button type="button" id="btn-add-tag" class="btn-add-tag">Add</button>
+                            </div>
+                            <div id="exclude-tags-container" class="tag-chips"></div>
+                            <small class="hint">Tags to exclude from Wallhaven downloads</small>
                         </div>
                     </div>
 
