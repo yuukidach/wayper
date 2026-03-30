@@ -4,6 +4,7 @@ download_dir = "~/Pictures/wallpaper"
 interval = 300         # seconds between rotations
 quota_mb = 4000        # max disk usage
 blacklist_ttl_days = 30
+pause_on_lock = true       # pause rotation when session is locked
 
 # [greeter]
 # image = "/usr/share/backgrounds/greeter.jpg"

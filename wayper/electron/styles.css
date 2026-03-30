@@ -1628,6 +1628,11 @@ footer {
   border-color: rgba(243, 139, 168, 0.2);
   color: var(--red);
 }
+.ai-error-text {
+  margin-left: 6px;
+  font-size: 10px;
+  opacity: 0.8;
+}
 
 @keyframes ai-pulse {
   0%, 100% { opacity: 1; }
@@ -1714,6 +1719,14 @@ footer {
   font-size: 12px;
   color: var(--text);
   flex-shrink: 0;
+}
+.ai-suggestion-tags.clickable {
+  cursor: pointer;
+  border-bottom: 1px dashed var(--overlay0);
+}
+.ai-suggestion-tags.clickable:hover {
+  color: var(--blue);
+  border-bottom-color: var(--blue);
 }
 
 .ai-confidence {

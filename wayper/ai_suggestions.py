@@ -8,6 +8,8 @@ import logging
 import re
 import shutil
 from collections import Counter
+from datetime import UTC, datetime
+from pathlib import Path
 
 from .config import WayperConfig
 from .pool import (
@@ -18,6 +20,7 @@ from .pool import (
     load_metadata,
 )
 from .state import ALL_PURITIES
+from .util import atomic_write
 
 log = logging.getLogger("wayper.ai")
 
@@ -71,10 +74,127 @@ def _collect_tag_frequencies(
     return result
 
 
+def _load_ai_history(path: Path) -> list[dict]:
+    """Load all AI analysis history entries."""
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+        if isinstance(data, list):
+            return data
+    except (json.JSONDecodeError, OSError):
+        pass
+    return []
+
+
+def _save_ai_history(
+    path: Path,
+    result: dict,
+    exclude_tags: list[str],
+    exclude_combos: list[list[str]],
+) -> None:
+    """Append an analysis result to the history file (keep last 5)."""
+    history = _load_ai_history(path)
+    entry = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "analysis": result.get("analysis", ""),
+        "add_suggestions": result.get("add_suggestions", []),
+        "remove_suggestions": result.get("remove_suggestions", []),
+        "exclude_snapshot": {
+            "tags": exclude_tags,
+            "combos": exclude_combos,
+        },
+    }
+    history.append(entry)
+    history = history[-5:]
+    atomic_write(path, json.dumps(history, ensure_ascii=False, indent=2))
+
+
+def _format_history(
+    history: list[dict],
+    current_tags: list[str],
+    current_combos: list[list[str]],
+) -> str:
+    """Format analysis history as a compact timeline for the prompt."""
+    if not history:
+        return ""
+
+    lines = ["\n## Analysis History\n"]
+    lines.append(
+        "Reflect on past rounds. Do NOT repeat ignored suggestions. "
+        "Build on accepted patterns and deepen your analysis.\n"
+    )
+    for i, entry in enumerate(history, 1):
+        ts = entry.get("timestamp", "")[:10]
+        lines.append(f"\n### Round {i} ({ts})")
+        lines.append(f"Insight: {entry.get('analysis', 'N/A')}")
+
+        applied = []
+        ignored = []
+        for section in ("add_suggestions", "remove_suggestions"):
+            for s in entry.get(section, []):
+                tag_str = " + ".join(s.get("tags", []))
+                fb = s.get("feedback")
+                if fb and fb.startswith("applied"):
+                    applied.append(tag_str)
+                else:
+                    ignored.append(tag_str)
+
+        if applied:
+            lines.append(f"Accepted: {', '.join(applied)}")
+        if ignored:
+            lines.append(f"Ignored: {', '.join(ignored)}")
+
+    # Diff between last snapshot and current state
+    last_snap = history[-1].get("exclude_snapshot", {})
+    prev_tags = set(last_snap.get("tags", []))
+    prev_combos = {tuple(c) for c in last_snap.get("combos", [])}
+    curr_tags = set(current_tags)
+    curr_combos = {tuple(c) for c in current_combos}
+
+    added_tags = curr_tags - prev_tags
+    removed_tags = prev_tags - curr_tags
+    added_combos = curr_combos - prev_combos
+    removed_combos = prev_combos - curr_combos
+
+    if added_tags or removed_tags or added_combos or removed_combos:
+        lines.append("\n### Changes since last analysis")
+        for t in sorted(added_tags):
+            lines.append(f"+ tag: {t}")
+        for t in sorted(removed_tags):
+            lines.append(f"- tag: {t}")
+        for c in sorted(added_combos):
+            lines.append(f"+ combo: {' + '.join(c)}")
+        for c in sorted(removed_combos):
+            lines.append(f"- combo: {' + '.join(c)}")
+
+    return "\n".join(lines) + "\n"
+
+
+def update_ai_history_feedback(path: Path, tags: list[str], action: str) -> None:
+    """Record that a suggestion was applied or dismissed.
+
+    action: 'applied_add', 'applied_remove', 'dismissed'
+    """
+    history = _load_ai_history(path)
+    if not history:
+        return
+
+    last = history[-1]
+    tags_lower = {t.lower() for t in tags}
+    for section in ("add_suggestions", "remove_suggestions"):
+        for s in last.get(section, []):
+            if {t.lower() for t in s.get("tags", [])} == tags_lower:
+                s["feedback"] = action
+                atomic_write(path, json.dumps(history, ensure_ascii=False, indent=2))
+                return
+
+
 def _build_prompt(
     freq_groups: dict[str, dict],
     exclude_tags: list[str],
     exclude_combos: list[list[str]],
+    history: list[dict] | None = None,
 ) -> str:
     """Build a compact prompt using aggregated tag frequencies."""
     parts = [
@@ -125,10 +245,14 @@ def _build_prompt(
         else:
             parts.append("(no tagged images)\n")
 
+    # Analysis history for iterative refinement
+    if history:
+        parts.append(_format_history(history, exclude_tags, exclude_combos))
+
     return "".join(parts)
 
 
-async def _invoke_claude(prompt: str, timeout: float = 180.0) -> dict:
+async def _invoke_claude(prompt: str, timeout: float = 600.0) -> dict:
     """Call claude CLI in print mode and return parsed JSON response."""
     claude_bin = shutil.which("claude")
     if not claude_bin:
@@ -179,14 +303,16 @@ async def generate_ai_suggestions(config: WayperConfig) -> dict:
     Returns dict with keys: analysis, add_suggestions, remove_suggestions.
     Raises AISuggestionError on failure.
     """
-    try:
-        await asyncio.wait_for(_ai_lock.acquire(), timeout=0)
-    except TimeoutError:
+    if _ai_lock.locked():
+        log.warning("AI analysis already in progress, rejecting request")
         raise AISuggestionError("AI analysis already in progress", code="in_progress")
+    await _ai_lock.acquire()
+    log.info("AI lock acquired, starting analysis")
     try:
         return await _generate_ai_suggestions_impl(config)
     finally:
         _ai_lock.release()
+        log.info("AI lock released")
 
 
 async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
@@ -216,14 +342,17 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
             "This may happen if images were downloaded before metadata tracking was enabled."
         )
 
+    history = _load_ai_history(config.ai_history_file)
+
     prompt = _build_prompt(
         freq_groups,
         config.wallhaven.exclude_tags,
         config.wallhaven.exclude_combos,
+        history=history,
     )
 
     prompt_kb = len(prompt.encode()) // 1024
-    log.info("Sending AI suggestion request (%d KB prompt)", prompt_kb)
+    log.info("AI suggestion request: %d KB prompt, %d history rounds", prompt_kb, len(history))
     _ai_status["phase"] = "analyzing"
     _ai_status["detail"] = f"Sent {prompt_kb}KB to Claude"
     try:
@@ -232,8 +361,15 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
         _ai_status["phase"] = None
         _ai_status["detail"] = None
 
-    return {
+    parsed = {
         "analysis": result.get("analysis", ""),
         "add_suggestions": result.get("add_suggestions", []),
         "remove_suggestions": result.get("remove_suggestions", []),
     }
+    _save_ai_history(
+        config.ai_history_file,
+        parsed,
+        config.wallhaven.exclude_tags,
+        config.wallhaven.exclude_combos,
+    )
+    return parsed

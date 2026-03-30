@@ -695,6 +695,14 @@ async function applyAISuggestion(suggestion, action) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ wallhaven: update }),
     });
+    fetch(`${API_URL}/api/ai-suggestions/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            tags: suggestion.tags,
+            action: action === 'add' ? 'applied_add' : 'applied_remove',
+        }),
+    }).catch(e => console.error('Failed to record AI feedback:', e));
     await fetchConfig();
     suggestion._applied = true;
     renderBlocklistView();
@@ -1595,14 +1603,19 @@ function renderBlocklistView() {
             txt.textContent = elapsed + 's';
             aiBtn.appendChild(txt);
         } else {
+            aiBtn.textContent = 'AI ';
             if (appState.aiSuggestions && appState.aiSuggestions.error) {
                 aiBtn.classList.add('ai-analyze-error');
                 aiBtn.title = appState.aiSuggestions.error;
+                const errSpan = document.createElement('span');
+                errSpan.className = 'ai-error-text';
+                errSpan.textContent = appState.aiSuggestions.error;
+                aiBtn.appendChild(errSpan);
+            } else {
+                const kbd = document.createElement('kbd');
+                kbd.textContent = 'A';
+                aiBtn.appendChild(kbd);
             }
-            aiBtn.textContent = 'AI ';
-            const kbd = document.createElement('kbd');
-            kbd.textContent = 'A';
-            aiBtn.appendChild(kbd);
         }
         header.appendChild(aiBtn);
         bar.appendChild(header);
@@ -1680,8 +1693,13 @@ function renderBlocklistView() {
                 const info = document.createElement('div');
                 info.className = 'ai-suggestion-info';
                 const tagsSpan = document.createElement('span');
-                tagsSpan.className = 'ai-suggestion-tags';
+                tagsSpan.className = 'ai-suggestion-tags clickable';
                 tagsSpan.textContent = s.tags.join(' + ');
+                tagsSpan.title = 'Click to preview matching images';
+                tagsSpan.onclick = (e) => {
+                    e.stopPropagation();
+                    searchByTags(s.tags);
+                };
                 info.appendChild(tagsSpan);
                 if (s.confidence) {
                     const confSpan = document.createElement('span');

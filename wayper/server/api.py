@@ -15,7 +15,12 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
-from wayper.ai_suggestions import AISuggestionError, generate_ai_suggestions, get_ai_status
+from wayper.ai_suggestions import (
+    AISuggestionError,
+    generate_ai_suggestions,
+    get_ai_status,
+    update_ai_history_feedback,
+)
 from wayper.backend import FileLock, query_current, set_wallpaper
 from wayper.config import WayperConfig, load_config, save_config
 from wayper.core import do_dislike, do_fav, do_next, do_prev, do_undislike, do_unfav
@@ -656,9 +661,22 @@ async def ai_suggestions_route():
     try:
         result = await generate_ai_suggestions(config)
     except AISuggestionError as e:
+        log.warning("AI suggestion error [%s]: %s", e.code, e)
         status_map = {"cli_not_found": 503, "timeout": 504}
         raise HTTPException(status_map.get(e.code, 400), str(e))
     return result
+
+
+@app.post("/api/ai-suggestions/feedback")
+async def ai_suggestions_feedback(body: dict = Body()):
+    """Record user feedback on an AI suggestion (applied/dismissed)."""
+    tags = body.get("tags", [])
+    action = body.get("action", "")
+    if not tags or action not in ("applied_add", "applied_remove", "dismissed"):
+        raise HTTPException(400, "Invalid feedback: need tags and action")
+    config = get_config()
+    update_ai_history_feedback(config.ai_history_file, tags, action)
+    return {"ok": True}
 
 
 @app.get("/trash/{filename}")

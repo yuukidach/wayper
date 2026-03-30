@@ -78,45 +78,6 @@ def favorites_dir(config: WayperConfig, mode: str, orientation: str) -> Path:
     return config.download_dir / "favorites" / mode / orientation
 
 
-def _matches_exclude_combo(filename: str, metadata: dict, combos: list[list[str]]) -> bool:
-    """Return True if image's tags match any exclude combo rule."""
-    entry = metadata.get(filename)
-    if not entry:
-        return False
-    tag_set = set(extract_tag_names(entry.get("tags", [])))
-    return any(all(t in tag_set for t in combo) for combo in combos)
-
-
-def purge_combo_matches(config: WayperConfig) -> list[str]:
-    """Blocklist+trash pool images matching exclude_combos. Returns purged filenames."""
-    import logging
-
-    from .state import push_undo
-
-    combos = config.wallhaven.exclude_combos
-    if not combos:
-        return []
-
-    metadata = load_metadata(config)
-    if not metadata:
-        return []
-
-    log = logging.getLogger("wayper.pool")
-    purged: list[str] = []
-
-    for purity in ALL_PURITIES:
-        for orient in ("landscape", "portrait"):
-            for img in list_images(pool_dir(config, purity, orient)):
-                if _matches_exclude_combo(img.name, metadata, combos):
-                    add_to_blacklist(config, img.name)
-                    push_undo(config, img.name, img.parent)
-                    purged.append(img.name)
-
-    if purged:
-        log.info("Purged %d combo-matching images: %s", len(purged), purged)
-    return purged
-
-
 def pick_random(
     config: WayperConfig,
     purities: set[str],
@@ -126,8 +87,6 @@ def pick_random(
     """Pick a random image: choose a random purity first (equal weight), then a random image."""
     import random as _rand
 
-    combos = config.wallhaven.exclude_combos
-    metadata = load_metadata(config) if combos else {}
     bl = _blacklist_set(config)
 
     active = [p for p in ALL_PURITIES if p in purities]
@@ -141,10 +100,6 @@ def pick_random(
             images = [img for img in images if img != exclude]
         if bl:
             images = [img for img in images if img.name not in bl]
-        if combos:
-            images = [
-                img for img in images if not _matches_exclude_combo(img.name, metadata, combos)
-            ]
         if images:
             return _rand.choice(images)
     return None

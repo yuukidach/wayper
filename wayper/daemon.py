@@ -22,7 +22,6 @@ from .pool import (
     pick_random,
     pool_dir,
     prune_blacklist,
-    purge_combo_matches,
     should_download,
 )
 from .state import read_mode
@@ -172,7 +171,6 @@ async def run_daemon(config: WayperConfig) -> None:
     loop.add_signal_handler(signal.SIGHUP, _on_hup)
 
     log.info("Daemon started (PID %d)", os.getpid())
-    purge_combo_matches(config)
 
     client = WallhavenClient(config)
     greeter_count = 0
@@ -185,7 +183,6 @@ async def run_daemon(config: WayperConfig) -> None:
                 _reload_config = False
                 config = load_config()
                 client = WallhavenClient(config)
-                purge_combo_matches(config)
                 log.info("Configuration reloaded")
 
             if _reload_mode:

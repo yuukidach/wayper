@@ -78,11 +78,18 @@ wayper/
 ## Release Checklist
 
 1. Ensure all changes are committed and pushed — the tag snapshot is what CI builds
-2. Bump version in `pyproject.toml`, `wayper/__init__.py`, `wayper/electron/package.json`
-3. Commit and tag: `git tag v{version}`
-4. Push with tags: `git push origin main --tags`
+2. Review and update all docs (READMEs EN+zh-CN, example-config.toml) to reflect current features
+3. Bump version in `pyproject.toml`, `wayper/__init__.py`, `wayper/electron/package.json`
+4. Commit and tag: `git tag v{version}`
+5. Push with tags: `git push origin main --tags`
    - **macOS DMG**: built automatically via `.github/workflows/release-macos.yml`
    - **AUR**: updated automatically via `.github/workflows/release-aur.yml`
+
+## Debugging
+
+- **Logs first**: When something fails, always check server logs before guessing. The API server logs to stdout (uvicorn) — read the output file of the background task that started it
+- **Add logging for errors**: Every API error handler should log the error with context (error code, message) before returning HTTP status. Use `log.warning()` for client errors, `log.error()` for server errors
+- **Don't kill processes blindly**: Identify what a process is before killing it. Use `ss -tlnp` for port lookups, `pgrep -af` to see command lines
 
 ## Guidelines
 
