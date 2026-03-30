@@ -55,7 +55,6 @@ class WayperConfig:
     proxy: str | None = None
     download_dir: Path = field(default_factory=lambda: Path.home() / "Pictures" / "wallpaper")
     interval: int = 300
-    pool_target: int = 30
     quota_mb: int = 4000
     blacklist_ttl_days: int = 30
     pause_on_lock: bool = True
@@ -118,7 +117,6 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
         lines.append(f'proxy = "{_esc(config.proxy)}"')
     lines.append(f'download_dir = "{_esc(dl)}"')
     lines.append(f"interval = {config.interval}")
-    lines.append(f"pool_target = {config.pool_target}")
     lines.append(f"quota_mb = {config.quota_mb}")
     lines.append(f"blacklist_ttl_days = {config.blacklist_ttl_days}")
     lines.append(f"pause_on_lock = {str(config.pause_on_lock).lower()}")
@@ -226,7 +224,6 @@ def load_config(path: Path | None = None) -> WayperConfig:
         proxy=raw.get("proxy"),
         download_dir=download_dir,
         interval=raw.get("interval", 300),
-        pool_target=raw.get("pool_target", 30),
         quota_mb=raw.get("quota_mb", 4000),
         blacklist_ttl_days=raw.get("blacklist_ttl_days", 30),
         pause_on_lock=raw.get("pause_on_lock", True),

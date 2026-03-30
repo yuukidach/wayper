@@ -480,7 +480,6 @@ function populateSettingsForm() {
     // General
     document.getElementById('input-interval').value = Math.round(c.interval_min || 5);
     document.getElementById('input-quota').value = c.quota_mb;
-    document.getElementById('input-pool-target').value = c.pool_target;
 
     // Wallhaven
     document.getElementById('input-categories').value = w.categories;
@@ -705,7 +704,6 @@ async function saveSettings() {
     const updates = {
         interval_min: parseInt(document.getElementById('input-interval').value) || 5,
         quota_mb: parseInt(document.getElementById('input-quota').value) || 4000,
-        pool_target: parseInt(document.getElementById('input-pool-target').value) || 30,
         proxy: document.getElementById('input-proxy').value,
         pause_on_lock: document.getElementById('input-pause-on-lock').checked,
         wallhaven: {

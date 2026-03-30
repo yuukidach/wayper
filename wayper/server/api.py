@@ -139,7 +139,6 @@ class ConfigResponse(BaseModel):
     download_dir: str
     interval_min: int
     mode: list[str]
-    pool_target: int
     quota_mb: int
     proxy: str
     pause_on_lock: bool
@@ -168,7 +167,6 @@ def get_config_route():
         "download_dir": str(config.download_dir),
         "interval_min": config.interval // 60,
         "mode": sorted(read_mode(config)),
-        "pool_target": config.pool_target,
         "quota_mb": config.quota_mb,
         "proxy": config.proxy or "",
         "pause_on_lock": config.pause_on_lock,
@@ -192,8 +190,6 @@ def update_config_route(updates: dict = Body(...)):
     elif "interval" in updates:
         config.interval = updates["interval"]
 
-    if "pool_target" in updates:
-        config.pool_target = updates["pool_target"]
     if "quota_mb" in updates:
         config.quota_mb = updates["quota_mb"]
     if "proxy" in updates:

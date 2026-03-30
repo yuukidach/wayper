@@ -257,7 +257,7 @@ def should_download(config: WayperConfig, purities: set[str]) -> dict[str, bool]
     for purity in purities:
         needs = False
         for orient in ("portrait", "landscape"):
-            if count_images(pool_dir(config, purity, orient)) < config.pool_target:
+            if count_images(pool_dir(config, purity, orient)) < 30:
                 needs = True
                 break
         if not needs:
