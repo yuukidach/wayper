@@ -6,6 +6,7 @@ All state-modifying operations live here. CLI, API, and MCP are thin wrappers.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,15 +60,23 @@ def _resolve_monitor(
 
 def do_next(config: WayperConfig, monitor: str | None = None) -> CoreResult:
     """Switch to next wallpaper (forward history or random pick)."""
+    t0 = time.monotonic()
     monitor, mon_cfg, _ = _resolve_monitor(config, monitor)
+    t_resolve = time.monotonic() - t0
     if not mon_cfg:
+        log.warning("next: no monitor config found (%.0fms)", t_resolve * 1000)
         return CoreResult(action="next", ok=False, error="No monitor config found")
 
     img = pick_next(config, monitor, mon_cfg.orientation)
+    t_pick = time.monotonic() - t0
     if not img:
+        log.warning("next: no images available for %s (%.0fms)", monitor, t_pick * 1000)
         return CoreResult(action="next", ok=False, error="No images available")
 
     set_wallpaper(monitor, img, config.transition)
+    t_total = time.monotonic() - t0
+    log.info("next: %s → %s (resolve=%.0fms pick=%.0fms total=%.0fms)",
+             monitor, img.name, t_resolve * 1000, (t_pick - t_resolve) * 1000, t_total * 1000)
     return CoreResult(action="next", monitor=monitor, image=img)
 
 
@@ -75,6 +84,7 @@ def do_prev(config: WayperConfig, monitor: str | None = None) -> CoreResult:
     """Go back to previous wallpaper in history."""
     monitor, mon_cfg, _ = _resolve_monitor(config, monitor)
     if not mon_cfg:
+        log.warning("prev: no monitor config found")
         return CoreResult(action="prev", ok=False, error="No monitor config found")
 
     img = go_prev(config, monitor)
@@ -82,6 +92,7 @@ def do_prev(config: WayperConfig, monitor: str | None = None) -> CoreResult:
         return CoreResult(action="prev", ok=True, status="at_oldest")
 
     set_wallpaper(monitor, img, config.transition)
+    log.info("prev: %s → %s", monitor, img.name)
     return CoreResult(action="prev", monitor=monitor, image=img)
 
 
@@ -167,6 +178,7 @@ def do_dislike(
             except ValueError:
                 pass
 
+    log.info("dislike: %s → trashed %s", monitor, img.name)
     return CoreResult(action="dislike", monitor=monitor, image=img)
 
 

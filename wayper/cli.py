@@ -24,6 +24,9 @@ from .state import ALL_PURITIES, read_mode, toggle_base, toggle_purity, write_mo
 @click.pass_context
 def cli(ctx, use_json, config_path):
     """Wayper - Wayland wallpaper manager."""
+    from .logging import setup_logging
+
+    setup_logging()
     ctx.ensure_object(dict)
     ctx.obj["config"] = load_config(Path(config_path) if config_path else None)
     ctx.obj["json"] = use_json
