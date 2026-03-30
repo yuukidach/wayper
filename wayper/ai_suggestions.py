@@ -278,8 +278,8 @@ async def _invoke_claude(prompt: str, timeout: float = 60.0) -> dict:
     if "result" in result and isinstance(result["result"], str):
         try:
             result = json.loads(result["result"])
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as e:
+            raise AISuggestionError(f"Claude returned malformed JSON in result wrapper: {e}")
 
     return result
 
@@ -299,6 +299,12 @@ async def generate_ai_suggestions(config: WayperConfig) -> dict:
         raise AISuggestionError("No disliked images. Dislike some wallpapers first.")
 
     tag_groups = _collect_tag_groups(config, metadata)
+
+    if not tag_groups["dislike"]:
+        raise AISuggestionError(
+            "No tag metadata found for disliked images. "
+            "This may happen if images were downloaded before metadata tracking was enabled."
+        )
 
     # Collect file paths for thumbnails
     fav_paths: list[Path] = []
