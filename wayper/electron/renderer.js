@@ -755,6 +755,16 @@ async function setWallpaper(path) {
 
 async function toggleFavoriteImage(path) {
     removeImageFromState(path);
+    // Update local counts so fetchStatus won't detect a "change" and trigger full refresh
+    if (appState.status) {
+        if (appState.mode === 'favorites') {
+            appState.status.favorites_count--;
+            appState.status.pool_count++;
+        } else {
+            appState.status.pool_count--;
+            appState.status.favorites_count++;
+        }
+    }
     try {
         await fetch(`${API_URL}/api/image/favorite`, {
             method: 'POST',
@@ -769,6 +779,13 @@ async function toggleFavoriteImage(path) {
 
 async function dislikeImage(path) {
     removeImageFromState(path);
+    // Update local counts so fetchStatus won't detect a "change" and trigger full refresh
+    if (appState.status) {
+        if (appState.mode === 'favorites') appState.status.favorites_count--;
+        else if (appState.mode === 'trash') appState.status.pool_count--;
+        else appState.status.pool_count--;
+        appState.status.blocklist_count++;
+    }
     try {
         await fetch(`${API_URL}/api/image/dislike`, {
             method: 'POST',
@@ -974,6 +991,10 @@ async function unblockImage(filename) {
 
 async function restoreImage(path) {
     removeImageFromState(path);
+    // Update local counts so fetchStatus won't detect a "change" and trigger full refresh
+    if (appState.status) {
+        appState.status.pool_count++;
+    }
     try {
         await fetch(`${API_URL}/api/image/restore`, {
             method: 'POST',
