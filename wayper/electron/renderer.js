@@ -49,6 +49,8 @@ let appState = {
     reviewingTag: null, // tag currently being reviewed in blocklist
     comboContext: [], // drill-down context for combo exclusion [tag1, tag2, ...]
     comboRefinements: [], // refinement suggestions for current context
+    aiSuggestions: null,           // Result from /api/ai-suggestions
+    aiLoading: false,              // Whether AI analysis is in progress
 
     // Search
     searchQuery: '',
@@ -333,6 +335,11 @@ function handleGlobalKeydown(e) {
             e.preventDefault();
             els.searchInput.focus();
             return;
+        case 'a':
+            if (appState.mode === 'trash' && !appState.aiLoading) {
+                fetchAISuggestions();
+            }
+            break;
         case 's':
             switchView(appState.view === 'settings' ? 'grid' : 'settings');
             break;
@@ -611,6 +618,78 @@ async function fetchComboRefinements(contextTags) {
         console.error('Failed to fetch combo refinements:', e);
         appState.comboRefinements = [];
     }
+}
+
+async function fetchAISuggestions() {
+    appState.aiLoading = true;
+    renderBlocklistView();
+    try {
+        const res = await fetch(`${API_URL}/api/ai-suggestions`, { method: 'POST' });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            appState.aiSuggestions = { error: err.detail || 'AI analysis failed' };
+        } else {
+            appState.aiSuggestions = await res.json();
+        }
+    } catch (e) {
+        appState.aiSuggestions = { error: `Connection error: ${e.message}` };
+    }
+    appState.aiLoading = false;
+    renderBlocklistView();
+}
+
+async function applyAddSuggestion(suggestion) {
+    const config = appState.config;
+    if (suggestion.type === 'tag') {
+        const tags = [...(config.wallhaven.exclude_tags || []), ...suggestion.tags];
+        await fetch(`${API_URL}/api/config`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ wallhaven: { exclude_tags: tags } })
+        });
+    } else {
+        const combos = [...(config.wallhaven.exclude_combos || []), suggestion.tags];
+        await fetch(`${API_URL}/api/config`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ wallhaven: { exclude_combos: combos } })
+        });
+    }
+    await fetchConfig();
+    suggestion._applied = true;
+    renderBlocklistView();
+}
+
+async function applyRemoveSuggestion(suggestion) {
+    const config = appState.config;
+    if (suggestion.type === 'tag') {
+        const tags = (config.wallhaven.exclude_tags || []).filter(
+            t => !suggestion.tags.map(s => s.toLowerCase()).includes(t.toLowerCase())
+        );
+        await fetch(`${API_URL}/api/config`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ wallhaven: { exclude_tags: tags } })
+        });
+    } else {
+        const removeLower = new Set(suggestion.tags.map(t => t.toLowerCase()));
+        const combos = (config.wallhaven.exclude_combos || []).filter(existing => {
+            const existingLower = new Set(existing.map(t => t.toLowerCase()));
+            if (existingLower.size === removeLower.size &&
+                [...removeLower].every(t => existingLower.has(t))) {
+                return false;
+            }
+            return true;
+        });
+        await fetch(`${API_URL}/api/config`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ wallhaven: { exclude_combos: combos } })
+        });
+    }
+    await fetchConfig();
+    suggestion._applied = true;
+    renderBlocklistView();
 }
 
 async function saveSettings() {
@@ -1493,7 +1572,109 @@ function renderBlocklistView() {
             chip.appendChild(count);
             bar.appendChild(chip);
         }
+        // AI analysis button
+        const aiBtn = document.createElement('button');
+        aiBtn.className = 'ai-analyze-btn';
+        aiBtn.onclick = () => { if (!appState.aiLoading) fetchAISuggestions(); };
+        if (appState.aiLoading) {
+            aiBtn.disabled = true;
+            aiBtn.innerHTML = '<svg class="spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg> Analyzing...';
+        } else {
+            aiBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93L12 22"/><path d="M8 6a4 4 0 0 1 .68-2.24"/><circle cx="12" cy="6" r="1"/></svg> AI Analyze <kbd>A</kbd>';
+        }
+        bar.appendChild(aiBtn);
         els.wallpaperGrid.appendChild(bar);
+    }
+
+    // AI analysis results
+    if (appState.aiSuggestions && !appState.reviewingTag && !appState.searchQuery) {
+        const ai = appState.aiSuggestions;
+        const aiPanel = document.createElement('div');
+        aiPanel.className = 'ai-results-panel';
+
+        if (ai.error) {
+            aiPanel.innerHTML = `<div class="ai-error">${ai.error}</div>`;
+        } else {
+            // Analysis text
+            if (ai.analysis) {
+                const analysisDiv = document.createElement('div');
+                analysisDiv.className = 'ai-analysis-text';
+                analysisDiv.textContent = ai.analysis;
+                aiPanel.appendChild(analysisDiv);
+            }
+
+            // Add suggestions
+            if (ai.add_suggestions && ai.add_suggestions.length > 0) {
+                const addSection = document.createElement('div');
+                addSection.className = 'ai-section';
+                addSection.innerHTML = '<div class="ai-section-label">Suggested Additions</div>';
+                for (const s of ai.add_suggestions) {
+                    const row = document.createElement('div');
+                    row.className = 'ai-suggestion-row' + (s._applied ? ' applied' : '');
+                    const info = document.createElement('div');
+                    info.className = 'ai-suggestion-info';
+                    const tagText = s.tags.join(' + ');
+                    info.innerHTML = `<span class="ai-suggestion-tags">${tagText}</span>`
+                        + `<span class="ai-confidence ai-confidence-${s.confidence}">${s.confidence}</span>`
+                        + `<span class="ai-suggestion-reason">${s.reason}</span>`;
+                    row.appendChild(info);
+                    if (!s._applied) {
+                        const btn = document.createElement('button');
+                        btn.className = 'ai-btn-accept';
+                        btn.textContent = 'Exclude';
+                        btn.onclick = () => applyAddSuggestion(s);
+                        row.appendChild(btn);
+                    } else {
+                        const badge = document.createElement('span');
+                        badge.className = 'ai-applied-badge';
+                        badge.textContent = 'Applied';
+                        row.appendChild(badge);
+                    }
+                    addSection.appendChild(row);
+                }
+                aiPanel.appendChild(addSection);
+            }
+
+            // Remove suggestions
+            if (ai.remove_suggestions && ai.remove_suggestions.length > 0) {
+                const rmSection = document.createElement('div');
+                rmSection.className = 'ai-section';
+                rmSection.innerHTML = '<div class="ai-section-label">Suggested Removals</div>';
+                for (const s of ai.remove_suggestions) {
+                    const row = document.createElement('div');
+                    row.className = 'ai-suggestion-row' + (s._applied ? ' applied' : '');
+                    const info = document.createElement('div');
+                    info.className = 'ai-suggestion-info';
+                    const tagText = s.tags.join(' + ');
+                    info.innerHTML = `<span class="ai-suggestion-tags">${tagText}</span>`
+                        + `<span class="ai-suggestion-reason">${s.reason}</span>`;
+                    row.appendChild(info);
+                    if (!s._applied) {
+                        const btn = document.createElement('button');
+                        btn.className = 'ai-btn-remove';
+                        btn.textContent = 'Remove';
+                        btn.onclick = () => applyRemoveSuggestion(s);
+                        row.appendChild(btn);
+                    } else {
+                        const badge = document.createElement('span');
+                        badge.className = 'ai-applied-badge';
+                        badge.textContent = 'Removed';
+                        row.appendChild(badge);
+                    }
+                    rmSection.appendChild(row);
+                }
+                aiPanel.appendChild(rmSection);
+            }
+
+            // Close button
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'ai-close-btn';
+            closeBtn.textContent = 'Dismiss';
+            closeBtn.onclick = () => { appState.aiSuggestions = null; renderBlocklistView(); };
+            aiPanel.appendChild(closeBtn);
+        }
+
+        els.wallpaperGrid.appendChild(aiPanel);
     }
 
     if (appState.blocklistTab === 'recoverable') {
