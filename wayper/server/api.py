@@ -659,7 +659,9 @@ def serve_thumbnail(path: str):
 
 
 # Mount images directory
-app.mount("/images", StaticFiles(directory=get_config().download_dir), name="images")
+_dl_dir = get_config().download_dir
+_dl_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/images", StaticFiles(directory=_dl_dir), name="images")
 
 
 def run():

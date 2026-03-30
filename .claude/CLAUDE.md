@@ -27,7 +27,7 @@ ruff format --check wayper/
 - Config: `~/.config/wayper/config.toml` (see `example-config.toml`)
 - PID file: `~/.config/wayper/wayper.pid`
 - State files live inside `download_dir`: `.mode`, `.blacklist`, `.undo`, `.history`
-- Version: managed in `pyproject.toml` — keep `wayper/__init__.py` in sync
+- Version: managed in `pyproject.toml` — keep `wayper/__init__.py` and `wayper/electron/package.json` in sync
 
 ## Architecture
 
@@ -78,7 +78,7 @@ wayper/
 ## Release Checklist
 
 1. Ensure all changes are committed and pushed — the tag snapshot is what CI builds
-2. Bump version in `pyproject.toml`, `wayper/__init__.py`
+2. Bump version in `pyproject.toml`, `wayper/__init__.py`, `wayper/electron/package.json`
 3. Commit and tag: `git tag v{version}`
 4. Push with tags: `git push origin main --tags`
    - **macOS DMG**: built automatically via `.github/workflows/release-macos.yml`

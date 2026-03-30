@@ -1,6 +1,7 @@
 {
-  "name": "wayper-electron",
-  "version": "1.0.0",
+  "name": "wayper",
+  "version": "0.13.1",
+  "productName": "Wayper",
   "description": "Wayper Electron GUI",
   "main": "main.js",
   "scripts": {
@@ -9,7 +10,8 @@
     "dist": "npm run build:backend && ./node_modules/.bin/electron-builder"
   },
   "build": {
-    "appId": "com.wayper.electron",
+    "appId": "com.wayper.app",
+    "icon": "../../assets/icon.icns",
     "extraResources": [
       {
         "from": "../../dist/wayper-backend",
