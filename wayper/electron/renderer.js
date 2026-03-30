@@ -1025,14 +1025,15 @@ function removeImageFromState(path) {
 
     const card = document.querySelector(`.wallpaper-card[data-path="${path}"]`);
     if (card) {
-        // Preserve focus
+        // Preserve focus — preventScroll avoids the browser jumping to make the
+        // newly focused card fully visible (especially noticeable with tall portrait cards)
         if (document.activeElement === card) {
             const next = card.nextElementSibling;
             const prev = card.previousElementSibling;
             if (next && next.classList.contains('wallpaper-card')) {
-                next.focus();
+                next.focus({ preventScroll: true });
             } else if (prev && prev.classList.contains('wallpaper-card')) {
-                prev.focus();
+                prev.focus({ preventScroll: true });
             }
         }
         card.remove();
