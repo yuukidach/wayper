@@ -261,14 +261,12 @@ async def sse_events():
         try:
             wp = query_current()
             last_wallpapers = {k: str(v) if v else None for k, v in wp.items()}
-        except Exception:
+        except OSError:
             pass
 
         while True:
             await asyncio.sleep(0.3)
             tick += 1
-
-            # Check mode changes every tick
             try:
                 mtime = config.state_file.stat().st_mtime
                 if mtime != last_mtime:
@@ -290,7 +288,7 @@ async def sse_events():
                         last_wallpapers = wp_strs
                         payload = json_mod.dumps({"type": "wallpaper"})
                         yield f"data: {payload}\n\n"
-                except Exception:
+                except OSError:
                     pass
 
     return StreamingResponse(
@@ -522,11 +520,10 @@ def dislike_image_route(req: ActionRequest):
 
     # If in favorites, move back to pool first
     if "favorites" in req.image_path:
-        from wayper.state import purity_from_path
+        from wayper.state import orientation_from_path, purity_from_path
 
         purity = purity_from_path(config, img_full)
-        orientation = "portrait" if "portrait" in req.image_path else "landscape"
-        dest_dir = pool_dir(config, purity, orientation)
+        dest_dir = pool_dir(config, purity, orientation_from_path(config, img_full))
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / img_full.name
         img_full.rename(dest)

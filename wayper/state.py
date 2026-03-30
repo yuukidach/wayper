@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -75,6 +76,21 @@ def purity_from_path(config: WayperConfig, img: Path) -> str:
         return "sfw"
 
 
+_ORIENTATIONS = {"landscape", "portrait"}
+
+
+def orientation_from_path(config: WayperConfig, img: Path) -> str:
+    """Determine orientation from an image's filesystem path."""
+    try:
+        rel = img.relative_to(config.download_dir)
+        for part in rel.parts:
+            if part in _ORIENTATIONS:
+                return part
+    except (ValueError, IndexError):
+        pass
+    return "landscape"
+
+
 # ---------------------------------------------------------------------------
 # System trash helpers
 # ---------------------------------------------------------------------------
@@ -107,21 +123,17 @@ def _cleanup_trashinfo(filename: str) -> None:
 
 def _read_trash_map(config: WayperConfig) -> dict[str, str]:
     """Read the filename → trash path mapping."""
-    import json as _json
-
     if not config.trash_map_file.exists():
         return {}
     try:
-        return _json.loads(config.trash_map_file.read_text())
+        return json.loads(config.trash_map_file.read_text())
     except (ValueError, OSError):
         return {}
 
 
 def _write_trash_map(config: WayperConfig, mapping: dict[str, str]) -> None:
     """Write the filename → trash path mapping."""
-    import json as _json
-
-    atomic_write(config.trash_map_file, _json.dumps(mapping))
+    atomic_write(config.trash_map_file, json.dumps(mapping))
 
 
 def find_in_trash(config: WayperConfig, filename: str) -> Path | None:
@@ -216,7 +228,6 @@ def restore_from_trash(config: WayperConfig, filename: str, dest_dir: Path) -> P
     shutil.move(str(trashed), str(dest))
     _cleanup_trashinfo(filename)
 
-    # Remove from trash map
     mapping = _read_trash_map(config)
     mapping.pop(filename, None)
     _write_trash_map(config, mapping)
