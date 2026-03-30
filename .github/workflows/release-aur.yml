@@ -40,7 +40,11 @@ jobs:
 
       - name: Clone AUR repo and update
         run: |
-          git clone ssh://aur@aur.archlinux.org/wayper.git aur
+          for i in 1 2 3; do
+            git clone ssh://aur@aur.archlinux.org/wayper.git aur && break
+            echo "Retry $i: AUR SSH connection failed, waiting 10s..."
+            sleep 10
+          done
           cd aur
           git config user.name "Da Chen"
           git config user.email "dachen@connect.hku.hk"
