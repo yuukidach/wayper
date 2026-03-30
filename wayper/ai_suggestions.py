@@ -16,7 +16,7 @@ from .pool import (
     list_images,
     pool_dir,
 )
-from .state import ALL_PURITIES
+from .state import ALL_PURITIES, find_in_trash
 
 log = logging.getLogger("wayper.ai")
 
@@ -24,7 +24,7 @@ log = logging.getLogger("wayper.ai")
 def _collect_tag_groups(
     config: WayperConfig,
     metadata: dict[str, ImageMetadata],
-) -> dict:
+) -> dict[str, list[list[str]]]:
     """Split metadata into disliked, favorited, and pool groups with their tags."""
     blacklisted = {fn for _, fn in list_blacklist(config)}
 
@@ -106,8 +106,6 @@ def _sample_thumbnails(
                 break
         # Also check trash if not found in pool
         if not found:
-            from .state import find_in_trash
-
             trashed = find_in_trash(config, fn)
             if trashed:
                 dislike_paths.append(trashed)
