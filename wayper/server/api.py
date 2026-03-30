@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
-from wayper.ai_suggestions import AISuggestionError, generate_ai_suggestions
+from wayper.ai_suggestions import AISuggestionError, generate_ai_suggestions, get_ai_status
 from wayper.backend import FileLock, query_current, set_wallpaper
 from wayper.config import WayperConfig, load_config, save_config
 from wayper.core import do_dislike, do_fav, do_next, do_prev, do_undislike, do_unfav
@@ -344,17 +344,18 @@ def control_action(action: str, monitor_name: str | None = Body(None, embed=True
 
 
 @app.get("/api/status", response_model=StatusResponse)
-def get_status():
+def get_status(orient: str = ""):
     config = get_config()
     running, pid = is_daemon_running(config)
     purities = read_mode(config)
 
+    orientations = [orient] if orient in ("landscape", "portrait") else ["landscape", "portrait"]
     pool_c = 0
     fav_c = 0
     for purity in purities:
-        for orient in ["landscape", "portrait"]:
-            pool_c += count_images(pool_dir(config, purity, orient))
-            fav_c += count_images(favorites_dir(config, purity, orient))
+        for o in orientations:
+            pool_c += count_images(pool_dir(config, purity, o))
+            fav_c += count_images(favorites_dir(config, purity, o))
 
     entries = list_blacklist(config)
     blocklist_c = len(entries)
@@ -646,6 +647,12 @@ def tag_suggestions(context: str = ""):
     return {"suggestions": results}
 
 
+@app.get("/api/ai-suggestions/status")
+async def ai_suggestions_status():
+    """Return current AI analysis status for polling."""
+    return get_ai_status()
+
+
 @app.post("/api/ai-suggestions")
 async def ai_suggestions_route():
     """Generate AI-powered tag exclusion suggestions using Claude CLI."""
@@ -653,10 +660,8 @@ async def ai_suggestions_route():
     try:
         result = await generate_ai_suggestions(config)
     except AISuggestionError as e:
-        status = (
-            503 if "not found" in str(e).lower() else 504 if "timed out" in str(e).lower() else 400
-        )
-        raise HTTPException(status, str(e))
+        status_map = {"cli_not_found": 503, "timeout": 504}
+        raise HTTPException(status_map.get(e.code, 400), str(e))
     return result
 
 

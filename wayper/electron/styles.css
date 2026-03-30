@@ -868,6 +868,13 @@ main {
   gap: 8px;
 }
 
+.suggestion-bar-header {
+  flex: 0 0 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .suggestion-bar-label {
   font-size: 10px;
   text-transform: uppercase;
@@ -1575,49 +1582,58 @@ footer {
   display: none !important;
 }
 
-/* AI Analysis Button */
+/* AI Analyze button — subdued, highlights on hover */
 .ai-analyze-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  background: rgba(203, 166, 247, 0.08);
-  border: 1px solid rgba(203, 166, 247, 0.2);
-  color: var(--mauve);
-  padding: 4px 12px;
-  border-radius: 20px;
-  font-size: 11px;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid var(--surface1);
+  color: var(--overlay0);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s;
-  margin-left: auto;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  flex-shrink: 0;
+  min-width: 48px;
 }
 
 .ai-analyze-btn:hover {
-  background: rgba(203, 166, 247, 0.15);
-  border-color: rgba(203, 166, 247, 0.35);
+  color: var(--mauve);
+  border-color: rgba(203, 166, 247, 0.25);
+  background: rgba(203, 166, 247, 0.06);
 }
 
 .ai-analyze-btn:disabled {
-  opacity: 0.6;
   cursor: wait;
 }
 
 .ai-analyze-btn kbd {
   font-size: 9px;
-  padding: 1px 4px;
-  border: 1px solid rgba(203, 166, 247, 0.2);
-  border-radius: 3px;
-  background: rgba(203, 166, 247, 0.06);
+  padding: 0 3px;
+  border: 1px solid var(--surface2);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--overlay0);
   font-family: inherit;
+  line-height: 1.4;
 }
 
-.ai-analyze-btn .spinner {
-  animation: spin 1s linear infinite;
+.ai-analyze-btn.ai-loading {
+  color: var(--subtext0);
+  animation: ai-pulse 1.4s ease-in-out infinite;
 }
 
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+.ai-analyze-btn.ai-analyze-error {
+  border-color: rgba(243, 139, 168, 0.2);
+  color: var(--red);
+}
+
+@keyframes ai-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 /* AI Results Panel */
@@ -1630,11 +1646,6 @@ footer {
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-.ai-error {
-  color: var(--red);
-  font-size: 12px;
 }
 
 .ai-analysis-text {
@@ -1675,9 +1686,8 @@ footer {
 
 .ai-suggestion-info {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
-  flex-wrap: wrap;
   flex: 1;
   min-width: 0;
 }
@@ -1686,6 +1696,7 @@ footer {
   font-weight: 600;
   font-size: 12px;
   color: var(--text);
+  flex-shrink: 0;
 }
 
 .ai-confidence {
@@ -1695,6 +1706,7 @@ footer {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  flex-shrink: 0;
 }
 
 .ai-confidence-high {
@@ -1715,18 +1727,25 @@ footer {
 .ai-suggestion-reason {
   font-size: 11px;
   color: var(--subtext0);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.ai-btn-accept {
-  background: rgba(243, 139, 168, 0.1);
-  border: 1px solid rgba(243, 139, 168, 0.2);
-  color: var(--red);
+.ai-btn-accept,
+.ai-btn-remove {
   padding: 3px 10px;
   border-radius: var(--radius);
   font-size: 10px;
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ai-btn-accept {
+  background: rgba(243, 139, 168, 0.1);
+  border: 1px solid rgba(243, 139, 168, 0.2);
+  color: var(--red);
 }
 
 .ai-btn-accept:hover {
@@ -1738,12 +1757,6 @@ footer {
   background: rgba(249, 226, 175, 0.1);
   border: 1px solid rgba(249, 226, 175, 0.2);
   color: var(--yellow);
-  padding: 3px 10px;
-  border-radius: var(--radius);
-  font-size: 10px;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
 }
 
 .ai-btn-remove:hover {
@@ -1755,6 +1768,7 @@ footer {
   font-size: 10px;
   color: var(--green);
   font-weight: 500;
+  flex-shrink: 0;
 }
 
 .ai-close-btn {

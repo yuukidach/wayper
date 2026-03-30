@@ -40,6 +40,7 @@ let appState = {
     monitors: [],
     selectedMonitor: null, // monitor name
     status: { running: false, pid: null },
+    refreshing: false, // true while refreshImages is in-flight
     images: [],
     config: null, // Full config object
     view: 'grid', // grid, settings
@@ -51,6 +52,8 @@ let appState = {
     comboRefinements: [], // refinement suggestions for current context
     aiSuggestions: null,           // Result from /api/ai-suggestions
     aiLoading: false,              // Whether AI analysis is in progress
+    aiStartTime: null,             // Timestamp when AI analysis started
+    aiTimer: null,                 // Interval ID for elapsed time updates
 
     // Search
     searchQuery: '',
@@ -622,7 +625,27 @@ async function fetchComboRefinements(contextTags) {
 
 async function fetchAISuggestions() {
     appState.aiLoading = true;
+    appState.aiStartTime = Date.now();
+    appState.aiSuggestions = null;
     renderBlocklistView();
+    appState.aiTimer = setInterval(async () => {
+        const txt = document.querySelector('.ai-btn-text');
+        if (!txt || !appState.aiStartTime) return;
+        const elapsed = Math.floor((Date.now() - appState.aiStartTime) / 1000);
+        try {
+            const res = await fetch(`${API_URL}/api/ai-suggestions/status`);
+            const status = await res.json();
+            if (status.phase === 'preparing') {
+                txt.textContent = status.detail || 'Preparing\u2026';
+            } else if (status.phase === 'analyzing') {
+                txt.textContent = (status.detail ? status.detail + ' · ' : '') + elapsed + 's';
+            } else {
+                txt.textContent = elapsed + 's';
+            }
+        } catch {
+            txt.textContent = elapsed + 's';
+        }
+    }, 2000);
     try {
         const res = await fetch(`${API_URL}/api/ai-suggestions`, { method: 'POST' });
         if (!res.ok) {
@@ -633,60 +656,46 @@ async function fetchAISuggestions() {
         }
     } catch (e) {
         appState.aiSuggestions = { error: `Connection error: ${e.message}` };
+    } finally {
+        clearInterval(appState.aiTimer);
+        appState.aiTimer = null;
+        appState.aiLoading = false;
+        appState.aiStartTime = null;
+        renderBlocklistView();
     }
-    appState.aiLoading = false;
-    renderBlocklistView();
 }
 
-async function applyAddSuggestion(suggestion) {
+async function applyAISuggestion(suggestion, action) {
     const config = appState.config;
-    if (suggestion.type === 'tag') {
-        const tags = [...(config.wallhaven.exclude_tags || []), ...suggestion.tags];
-        await fetch(`${API_URL}/api/config`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ wallhaven: { exclude_tags: tags } })
-        });
-    } else {
-        const combos = [...(config.wallhaven.exclude_combos || []), suggestion.tags];
-        await fetch(`${API_URL}/api/config`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ wallhaven: { exclude_combos: combos } })
-        });
-    }
-    await fetchConfig();
-    suggestion._applied = true;
-    renderBlocklistView();
-}
-
-async function applyRemoveSuggestion(suggestion) {
-    const config = appState.config;
-    if (suggestion.type === 'tag') {
-        const tags = (config.wallhaven.exclude_tags || []).filter(
-            t => !suggestion.tags.map(s => s.toLowerCase()).includes(t.toLowerCase())
-        );
-        await fetch(`${API_URL}/api/config`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ wallhaven: { exclude_tags: tags } })
-        });
+    const isTag = suggestion.type === 'tag';
+    let update;
+    if (action === 'add') {
+        update = isTag
+            ? { exclude_tags: [...(config.wallhaven.exclude_tags || []), ...suggestion.tags] }
+            : { exclude_combos: [...(config.wallhaven.exclude_combos || []), suggestion.tags] };
     } else {
         const removeLower = new Set(suggestion.tags.map(t => t.toLowerCase()));
-        const combos = (config.wallhaven.exclude_combos || []).filter(existing => {
-            const existingLower = new Set(existing.map(t => t.toLowerCase()));
-            if (existingLower.size === removeLower.size &&
-                [...removeLower].every(t => existingLower.has(t))) {
-                return false;
-            }
-            return true;
-        });
-        await fetch(`${API_URL}/api/config`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ wallhaven: { exclude_combos: combos } })
-        });
+        if (isTag) {
+            update = {
+                exclude_tags: (config.wallhaven.exclude_tags || []).filter(
+                    t => !removeLower.has(t.toLowerCase())
+                ),
+            };
+        } else {
+            update = {
+                exclude_combos: (config.wallhaven.exclude_combos || []).filter(existing => {
+                    const existingLower = new Set(existing.map(t => t.toLowerCase()));
+                    return !(existingLower.size === removeLower.size &&
+                        [...removeLower].every(t => existingLower.has(t)));
+                }),
+            };
+        }
     }
+    await fetch(`${API_URL}/api/config`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wallhaven: update }),
+    });
     await fetchConfig();
     suggestion._applied = true;
     renderBlocklistView();
@@ -1164,7 +1173,9 @@ function connectSSE() {
 
 async function fetchStatus() {
     try {
-        const res = await fetch(`${API_URL}/api/status`);
+        const monitor = appState.monitors.find(m => m.name === appState.selectedMonitor);
+        const orient = monitor ? monitor.orientation : '';
+        const res = await fetch(`${API_URL}/api/status?orient=${orient}`);
         if (!res.ok) return;
         const data = await res.json();
 
@@ -1187,12 +1198,17 @@ async function fetchStatus() {
 
         appState.status = data;
         if (changed) {
+            console.log('[status] counts changed pool:', prev?.pool_count, '→', data.pool_count,
+                'fav:', prev?.favorites_count, '→', data.favorites_count);
             updateStatusUI();
-            // Refresh grid when image counts change (external add/remove/fav/dislike)
-            if (prev && (data.pool_count !== prev.pool_count
-                || data.favorites_count !== prev.favorites_count
-                || data.blocklist_count !== prev.blocklist_count)) {
-                refreshImages();
+            // Refresh grid when current mode's count changes externally
+            if (prev && !appState.refreshing) {
+                const countKey = appState.mode === 'favorites' ? 'favorites_count'
+                    : appState.mode === 'trash' ? 'blocklist_count' : 'pool_count';
+                if (data[countKey] !== prev[countKey]) {
+                    console.log('[status] triggering refreshImages for', countKey);
+                    refreshImages();
+                }
             }
         }
     } catch (e) {
@@ -1231,31 +1247,44 @@ async function fetchMonitors() {
 async function refreshImages() {
     if (!appState.selectedMonitor) return;
 
+    appState.refreshing = true;
     const monitor = appState.monitors.find(m => m.name === appState.selectedMonitor);
     const orient = monitor ? monitor.orientation : 'landscape';
+    console.log('[refresh] start', appState.mode, orient);
 
     if (appState.mode === 'trash') {
         const url = `${API_URL}/api/images?mode=trash&purity=sfw&orient=${orient}`;
         try {
-            const [imgRes] = await Promise.all([
+            const [imgRes, statusData] = await Promise.all([
                 fetch(url),
+                fetch(`${API_URL}/api/status?orient=${orient}`).then(r => r.json()),
                 fetchBlocklist(),
                 fetchTagSuggestions(),
             ]);
             appState.allImages = await imgRes.json();
+            appState.status = statusData;
+            updateStatusUI();
             applySearchFilter();
         } catch (e) { console.error(e); }
     } else {
         try {
-            const fetches = appState.purity.map(p =>
-                fetch(`${API_URL}/api/images?mode=${appState.mode}&purity=${p}&orient=${orient}`)
-                    .then(r => r.json())
-            );
-            const results = await Promise.all(fetches);
-            appState.allImages = results.flat();
+            const [statusData, ...imageResults] = await Promise.all([
+                fetch(`${API_URL}/api/status?orient=${orient}`)
+                    .then(r => r.json()),
+                ...appState.purity.map(p =>
+                    fetch(`${API_URL}/api/images?mode=${appState.mode}&purity=${p}&orient=${orient}`)
+                        .then(r => r.json())
+                ),
+            ]);
+            appState.allImages = imageResults.flat();
+            appState.status = statusData;
+            console.log('[refresh] done', appState.mode, orient,
+                'pool:', statusData.pool_count, 'fav:', statusData.favorites_count);
+            updateStatusUI();
             applySearchFilter();
         } catch (e) { console.error(e); }
     }
+    appState.refreshing = false;
 }
 
 // --- Rendering ---
@@ -1350,9 +1379,10 @@ function renderMonitors() {
         `;
 
         el.onclick = () => {
+            console.log('[monitor] switch to', m.name, m.orientation);
             appState.selectedMonitor = m.name;
-            renderMonitors(); // update active state
-            refreshImages(); // fetch images for this monitor's orientation
+            renderMonitors();
+            refreshImages();
         };
 
         els.monitorsList.appendChild(el);
@@ -1547,10 +1577,38 @@ function renderBlocklistView() {
         // Suggestions mode: show all suggestion chips
         const bar = document.createElement('div');
         bar.className = 'tag-suggestions-bar';
+        const header = document.createElement('div');
+        header.className = 'suggestion-bar-header';
         const label = document.createElement('span');
         label.className = 'suggestion-bar-label';
         label.textContent = 'Suggested exclusions';
-        bar.appendChild(label);
+        header.appendChild(label);
+
+        // AI button in header
+        const aiBtn = document.createElement('button');
+        aiBtn.className = 'ai-analyze-btn';
+        aiBtn.onclick = () => { if (!appState.aiLoading) fetchAISuggestions(); };
+        if (appState.aiLoading) {
+            aiBtn.disabled = true;
+            aiBtn.classList.add('ai-loading');
+            const elapsed = appState.aiStartTime ? Math.floor((Date.now() - appState.aiStartTime) / 1000) : 0;
+            const txt = document.createElement('span');
+            txt.className = 'ai-btn-text';
+            txt.textContent = elapsed + 's';
+            aiBtn.appendChild(txt);
+        } else {
+            if (appState.aiSuggestions && appState.aiSuggestions.error) {
+                aiBtn.classList.add('ai-analyze-error');
+                aiBtn.title = appState.aiSuggestions.error;
+            }
+            aiBtn.textContent = 'AI ';
+            const kbd = document.createElement('kbd');
+            kbd.textContent = 'A';
+            aiBtn.appendChild(kbd);
+        }
+        header.appendChild(aiBtn);
+        bar.appendChild(header);
+
         for (const s of appState.tagSuggestions) {
             const chip = document.createElement('span');
             chip.className = 'suggestion-chip';
@@ -1572,107 +1630,93 @@ function renderBlocklistView() {
             chip.appendChild(count);
             bar.appendChild(chip);
         }
-        // AI analysis button
-        const aiBtn = document.createElement('button');
-        aiBtn.className = 'ai-analyze-btn';
-        aiBtn.onclick = () => { if (!appState.aiLoading) fetchAISuggestions(); };
-        if (appState.aiLoading) {
-            aiBtn.disabled = true;
-            aiBtn.innerHTML = '<svg class="spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg> Analyzing...';
-        } else {
-            aiBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93L12 22"/><path d="M8 6a4 4 0 0 1 .68-2.24"/><circle cx="12" cy="6" r="1"/></svg> AI Analyze <kbd>A</kbd>';
-        }
-        bar.appendChild(aiBtn);
         els.wallpaperGrid.appendChild(bar);
     }
 
-    // AI analysis results
-    if (appState.aiSuggestions && !appState.reviewingTag && !appState.searchQuery) {
+    // AI analysis results panel
+    if (appState.aiSuggestions && !appState.aiSuggestions.error
+        && !appState.reviewingTag && !appState.searchQuery) {
         const ai = appState.aiSuggestions;
         const aiPanel = document.createElement('div');
         aiPanel.className = 'ai-results-panel';
 
-        if (ai.error) {
-            aiPanel.innerHTML = `<div class="ai-error">${ai.error}</div>`;
-        } else {
-            // Analysis text
-            if (ai.analysis) {
-                const analysisDiv = document.createElement('div');
-                analysisDiv.className = 'ai-analysis-text';
-                analysisDiv.textContent = ai.analysis;
-                aiPanel.appendChild(analysisDiv);
-            }
-
-            // Add suggestions
-            if (ai.add_suggestions && ai.add_suggestions.length > 0) {
-                const addSection = document.createElement('div');
-                addSection.className = 'ai-section';
-                addSection.innerHTML = '<div class="ai-section-label">Suggested Additions</div>';
-                for (const s of ai.add_suggestions) {
-                    const row = document.createElement('div');
-                    row.className = 'ai-suggestion-row' + (s._applied ? ' applied' : '');
-                    const info = document.createElement('div');
-                    info.className = 'ai-suggestion-info';
-                    const tagText = s.tags.join(' + ');
-                    info.innerHTML = `<span class="ai-suggestion-tags">${tagText}</span>`
-                        + `<span class="ai-confidence ai-confidence-${s.confidence}">${s.confidence}</span>`
-                        + `<span class="ai-suggestion-reason">${s.reason}</span>`;
-                    row.appendChild(info);
-                    if (!s._applied) {
-                        const btn = document.createElement('button');
-                        btn.className = 'ai-btn-accept';
-                        btn.textContent = 'Exclude';
-                        btn.onclick = () => applyAddSuggestion(s);
-                        row.appendChild(btn);
-                    } else {
-                        const badge = document.createElement('span');
-                        badge.className = 'ai-applied-badge';
-                        badge.textContent = 'Applied';
-                        row.appendChild(badge);
-                    }
-                    addSection.appendChild(row);
+        if (ai.analysis) {
+            const analysisDiv = document.createElement('div');
+            analysisDiv.className = 'ai-analysis-text';
+            analysisDiv.textContent = ai.analysis;
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'ai-copy-btn';
+            copyBtn.textContent = 'Copy';
+            copyBtn.onclick = () => {
+                const lines = [ai.analysis, ''];
+                for (const s of (ai.add_suggestions || [])) {
+                    lines.push(`+ [${s.confidence || ''}] ${s.tags.join(' + ')}: ${s.reason}`);
                 }
-                aiPanel.appendChild(addSection);
-            }
-
-            // Remove suggestions
-            if (ai.remove_suggestions && ai.remove_suggestions.length > 0) {
-                const rmSection = document.createElement('div');
-                rmSection.className = 'ai-section';
-                rmSection.innerHTML = '<div class="ai-section-label">Suggested Removals</div>';
-                for (const s of ai.remove_suggestions) {
-                    const row = document.createElement('div');
-                    row.className = 'ai-suggestion-row' + (s._applied ? ' applied' : '');
-                    const info = document.createElement('div');
-                    info.className = 'ai-suggestion-info';
-                    const tagText = s.tags.join(' + ');
-                    info.innerHTML = `<span class="ai-suggestion-tags">${tagText}</span>`
-                        + `<span class="ai-suggestion-reason">${s.reason}</span>`;
-                    row.appendChild(info);
-                    if (!s._applied) {
-                        const btn = document.createElement('button');
-                        btn.className = 'ai-btn-remove';
-                        btn.textContent = 'Remove';
-                        btn.onclick = () => applyRemoveSuggestion(s);
-                        row.appendChild(btn);
-                    } else {
-                        const badge = document.createElement('span');
-                        badge.className = 'ai-applied-badge';
-                        badge.textContent = 'Removed';
-                        row.appendChild(badge);
-                    }
-                    rmSection.appendChild(row);
+                for (const s of (ai.remove_suggestions || [])) {
+                    lines.push(`- ${s.tags.join(' + ')}: ${s.reason}`);
                 }
-                aiPanel.appendChild(rmSection);
-            }
-
-            // Close button
-            const closeBtn = document.createElement('button');
-            closeBtn.className = 'ai-close-btn';
-            closeBtn.textContent = 'Dismiss';
-            closeBtn.onclick = () => { appState.aiSuggestions = null; renderBlocklistView(); };
-            aiPanel.appendChild(closeBtn);
+                navigator.clipboard.writeText(lines.join('\n'));
+                copyBtn.textContent = 'Copied';
+                setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+            };
+            analysisDiv.appendChild(copyBtn);
+            aiPanel.appendChild(analysisDiv);
         }
+
+        const renderSection = (items, label, action, btnClass, btnLabel, appliedLabel) => {
+            if (!items || items.length === 0) return;
+            const section = document.createElement('div');
+            section.className = 'ai-section';
+            const sectionLabel = document.createElement('div');
+            sectionLabel.className = 'ai-section-label';
+            sectionLabel.textContent = label;
+            section.appendChild(sectionLabel);
+            for (const s of items) {
+                const row = document.createElement('div');
+                row.className = 'ai-suggestion-row' + (s._applied ? ' applied' : '');
+                const info = document.createElement('div');
+                info.className = 'ai-suggestion-info';
+                const tagsSpan = document.createElement('span');
+                tagsSpan.className = 'ai-suggestion-tags';
+                tagsSpan.textContent = s.tags.join(' + ');
+                info.appendChild(tagsSpan);
+                if (s.confidence) {
+                    const confSpan = document.createElement('span');
+                    const validConf = ['high', 'medium', 'low'].includes(s.confidence) ? s.confidence : 'low';
+                    confSpan.className = `ai-confidence ai-confidence-${validConf}`;
+                    confSpan.textContent = s.confidence;
+                    info.appendChild(confSpan);
+                }
+                const reasonSpan = document.createElement('span');
+                reasonSpan.className = 'ai-suggestion-reason';
+                reasonSpan.textContent = s.reason;
+                info.appendChild(reasonSpan);
+                row.appendChild(info);
+                if (!s._applied) {
+                    const btn = document.createElement('button');
+                    btn.className = btnClass;
+                    btn.textContent = btnLabel;
+                    btn.onclick = () => applyAISuggestion(s, action);
+                    row.appendChild(btn);
+                } else {
+                    const badge = document.createElement('span');
+                    badge.className = 'ai-applied-badge';
+                    badge.textContent = appliedLabel;
+                    row.appendChild(badge);
+                }
+                section.appendChild(row);
+            }
+            aiPanel.appendChild(section);
+        };
+
+        renderSection(ai.add_suggestions, 'Suggested Additions', 'add', 'ai-btn-accept', 'Exclude', 'Applied');
+        renderSection(ai.remove_suggestions, 'Suggested Removals', 'remove', 'ai-btn-remove', 'Remove', 'Removed');
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'ai-close-btn';
+        closeBtn.textContent = 'Dismiss';
+        closeBtn.onclick = () => { appState.aiSuggestions = null; renderBlocklistView(); };
+        aiPanel.appendChild(closeBtn);
 
         els.wallpaperGrid.appendChild(aiPanel);
     }

@@ -106,6 +106,11 @@ function createWindow () {
 
   mainWindow.loadFile('index.html')
 
+  // Forward renderer console to main process stdout
+  mainWindow.webContents.on('console-message', (_e, _level, msg) => {
+    console.log('[renderer]', msg)
+  })
+
   // Open external URLs in system browser instead of new Electron window
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
