@@ -60,4 +60,8 @@ jobs:
           git add PKGBUILD .SRCINFO
           git diff --cached --quiet && echo "No changes to commit" && exit 0
           git commit -m "bump: v$VERSION"
-          git push
+          for i in 1 2 3; do
+            git push && break
+            echo "Retry $i: AUR push failed, waiting 10s..."
+            sleep 10
+          done
