@@ -1,6 +1,6 @@
 {
   "name": "wayper",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "productName": "Wayper",
   "description": "Wayper Electron GUI",
   "main": "main.js",
