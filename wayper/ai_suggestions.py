@@ -141,8 +141,6 @@ async def _invoke_claude(prompt: str, timeout: float = 180.0) -> dict:
     proc = await asyncio.create_subprocess_exec(
         claude_bin,
         "-p",
-        "--model",
-        "sonnet",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
