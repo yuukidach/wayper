@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
+from wayper.ai_suggestions import AISuggestionError, generate_ai_suggestions
 from wayper.backend import FileLock, query_current, set_wallpaper
 from wayper.config import WayperConfig, load_config, save_config
 from wayper.core import do_dislike, do_fav, do_next, do_prev, do_undislike, do_unfav
@@ -643,6 +644,20 @@ def tag_suggestions(context: str = ""):
         metadata, blacklisted, config.wallhaven.exclude_tags, config.wallhaven.exclude_combos
     )
     return {"suggestions": results}
+
+
+@app.post("/api/ai-suggestions")
+async def ai_suggestions_route():
+    """Generate AI-powered tag exclusion suggestions using Claude CLI."""
+    config = get_config()
+    try:
+        result = await generate_ai_suggestions(config)
+    except AISuggestionError as e:
+        status = (
+            503 if "not found" in str(e).lower() else 504 if "timed out" in str(e).lower() else 400
+        )
+        raise HTTPException(status, str(e))
+    return result
 
 
 @app.get("/trash/{filename}")
