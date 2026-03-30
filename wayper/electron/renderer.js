@@ -586,17 +586,19 @@ function exitComboLevel() {
             const original = appState.tagSuggestions?.find(s => s.tag === ctx[0]);
             if (original) appState.reviewingTag = original;
         }
-        const searchFn = searchByTags(ctx);
-        searchFn.then(() => {
-            els.searchDropdown.classList.add('hidden');
-            fetchComboRefinements(ctx).then(() => renderBlocklistView());
-        });
+        navigateCombo(ctx).then(() => els.searchDropdown.classList.add('hidden'));
     } else {
         appState.reviewingTag = null;
         appState.comboContext = [];
         appState.comboRefinements = [];
         clearSearch();
     }
+}
+
+async function navigateCombo(ctx) {
+    await Promise.all([searchByTags(ctx), fetchComboRefinements(ctx)]);
+    appState.reviewingTag = { ...appState.reviewingTag, count: appState.images.length };
+    renderBlocklistView();
 }
 
 async function fetchComboRefinements(contextTags) {
@@ -1359,9 +1361,7 @@ function renderBlocklistView() {
                         const original = appState.tagSuggestions?.find(sg => sg.tag === newCtx[0]);
                         if (original) appState.reviewingTag = original;
                     }
-                    await searchByTags(newCtx);
-                    await fetchComboRefinements(newCtx);
-                    renderBlocklistView();
+                    await navigateCombo(newCtx);
                 };
             }
             textSpan.appendChild(tagEl);
@@ -1449,9 +1449,7 @@ function renderBlocklistView() {
                 chip.onclick = async () => {
                     appState.comboContext = [...ctx, r.tag];
                     appState.reviewingTag = r;
-                    await searchByTags(appState.comboContext);
-                    await fetchComboRefinements(appState.comboContext);
-                    renderBlocklistView();
+                    await navigateCombo(appState.comboContext);
                 };
                 const tagLabel = document.createElement('span');
                 tagLabel.className = 'suggestion-chip-name';
