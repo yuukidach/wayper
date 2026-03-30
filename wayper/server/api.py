@@ -539,7 +539,7 @@ def dislike_image_route(req: ActionRequest):
         for mon in config.monitors:
             current_path = current_wallpapers.get(mon.name)
             if current_path and current_path.resolve() == img_full.resolve():
-                next_img = pick_random(config, purities, mon.orientation)
+                next_img = pick_random(config, purities, mon.orientation, exclude=img_full)
                 if next_img:
                     set_wallpaper(mon.name, next_img, config.transition)
 

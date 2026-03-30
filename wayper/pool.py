@@ -117,12 +117,18 @@ def purge_combo_matches(config: WayperConfig) -> list[str]:
     return purged
 
 
-def pick_random(config: WayperConfig, purities: set[str], orientation: str) -> Path | None:
+def pick_random(
+    config: WayperConfig,
+    purities: set[str],
+    orientation: str,
+    exclude: Path | None = None,
+) -> Path | None:
     """Pick a random image: choose a random purity first (equal weight), then a random image."""
     import random as _rand
 
     combos = config.wallhaven.exclude_combos
     metadata = load_metadata(config) if combos else {}
+    bl = _blacklist_set(config)
 
     active = [p for p in ALL_PURITIES if p in purities]
     if not active:
@@ -131,6 +137,10 @@ def pick_random(config: WayperConfig, purities: set[str], orientation: str) -> P
     for purity in active:
         images = list_images(pool_dir(config, purity, orientation))
         images += list_images(favorites_dir(config, purity, orientation))
+        if exclude:
+            images = [img for img in images if img != exclude]
+        if bl:
+            images = [img for img in images if img.name not in bl]
         if combos:
             images = [
                 img for img in images if not _matches_exclude_combo(img.name, metadata, combos)

@@ -175,7 +175,7 @@ def do_dislike(
 
         # Switch wallpaper first for instant feedback
         purities = read_mode(config)
-        next_img = pick_random(config, purities, mon_cfg.orientation)
+        next_img = pick_random(config, purities, mon_cfg.orientation, exclude=img)
         if next_img:
             set_wallpaper(monitor, next_img, config.transition)
             push_history(config, monitor, next_img)
