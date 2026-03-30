@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
+from collections import Counter
 
 from .config import WayperConfig
 from .pool import (
@@ -42,76 +44,31 @@ def _collect_tag_frequencies(
     blacklisted: set[str],
     fav_files: set[str],
 ) -> dict[str, dict]:
-    """Aggregate tag frequencies per group instead of listing individual images.
+    """Aggregate tag frequencies per group in a single pass.
 
     Returns dict with keys: dislike, favorite, pool.
     Each value has: count (int), tags (dict[str, int]).
     """
-    from collections import Counter
-
-    groups: dict[str, list[list[str]]] = {"dislike": [], "favorite": [], "pool": []}
+    result = {k: {"count": 0, "tags": Counter()} for k in ("dislike", "favorite", "pool")}
 
     for filename, meta in metadata.items():
         tags = meta.get("tags", [])
         if not tags:
             continue
-        if filename in blacklisted:
-            groups["dislike"].append(tags)
-        elif filename in fav_files:
-            groups["favorite"].append(tags)
-        else:
-            groups["pool"].append(tags)
+        key = (
+            "dislike"
+            if filename in blacklisted
+            else "favorite"
+            if filename in fav_files
+            else "pool"
+        )
+        result[key]["count"] += 1
+        result[key]["tags"].update(tags)
 
-    result = {}
-    for group, tag_lists in groups.items():
-        freq: Counter[str] = Counter()
-        for tags in tag_lists:
-            freq.update(tags)
-        # Keep only top 150 most frequent tags — rare tags are noise
-        result[group] = {"count": len(tag_lists), "tags": dict(freq.most_common(150))}
+    for group in result.values():
+        group["tags"] = dict(group["tags"].most_common(150))
 
     return result
-
-
-AI_SCHEMA = {
-    "type": "object",
-    "required": ["analysis", "add_suggestions", "remove_suggestions"],
-    "properties": {
-        "analysis": {
-            "type": "string",
-            "description": (
-                "Natural language analysis of dislike patterns and exclusion rule health"
-            ),
-        },
-        "add_suggestions": {
-            "type": "array",
-            "description": "New tags/combos to add to exclusion rules",
-            "items": {
-                "type": "object",
-                "required": ["type", "tags", "reason", "confidence"],
-                "properties": {
-                    "type": {"enum": ["tag", "combo"]},
-                    "tags": {"type": "array", "items": {"type": "string"}},
-                    "reason": {"type": "string"},
-                    "confidence": {"enum": ["high", "medium", "low"]},
-                },
-            },
-        },
-        "remove_suggestions": {
-            "type": "array",
-            "description": "Existing exclusion rules to consider removing",
-            "items": {
-                "type": "object",
-                "required": ["type", "tags", "reason"],
-                "properties": {
-                    "type": {"enum": ["tag", "combo"]},
-                    "tags": {"type": "array", "items": {"type": "string"}},
-                    "reason": {"type": "string"},
-                },
-            },
-        },
-    },
-}
 
 
 def _build_prompt(
@@ -121,27 +78,33 @@ def _build_prompt(
 ) -> str:
     """Build a compact prompt using aggregated tag frequencies."""
     parts = [
-        "Analyze wallpaper tag data to suggest exclusion rule changes. "
-        "Data shows tag frequencies across three groups: Disliked (user rejected), "
-        "Favorites (user saved), Pool (kept, neutral). "
-        "Format: tag(count) — count = number of images with that tag.\n\n"
-        "Tasks:\n"
-        "1. Find tags/combos uniquely overrepresented in dislikes vs favorites+pool\n"
-        "2. Suggest new exclusions (tags appearing mostly in dislikes)\n"
-        "3. Flag existing exclusions to remove (if the tag also appears often in "
-        "favorites/pool, it's a false positive)\n"
-        "4. Brief analysis of patterns\n\n"
-        "Tags are from Wallhaven. Consider semantic relationships.\n",
+        "Analyze wallpaper tag frequencies. Format: tag(count) = images with that tag.\n\n"
+        "Focus areas:\n"
+        "1. COMBOS: tag pairs/groups that together signal unwanted content, "
+        "even if each tag alone is fine (e.g. 'blonde + model' is unwanted "
+        "but 'model' alone is fine since it appears in pool too)\n"
+        "2. SIMPLIFY existing combos: if one tag in a combo has 0 pool AND 0 favorites, "
+        "it MAY be upgradeable to single-tag exclude — but check if the tag crosses "
+        "subgroups the user might want to keep (e.g. 'pornstar' spans both Western and Asian)\n"
+        "3. SEMANTIC clusters: group related tags that point to the same dislike pattern "
+        "(e.g. several AV studio names, or overlapping video game tags)\n"
+        "4. OVER-BROAD exclusions: if an excluded tag also has significant pool/favorites "
+        "presence, the rule is too wide — suggest removing it or replacing with a narrower "
+        "combo (e.g. 'video games' excluded but 'video game girls' has 45 pool images "
+        "→ remove 'video games', add specific combos instead)\n\n"
+        "Respond with ONLY JSON (no markdown):\n"
+        '{"analysis":"pattern summary",'
+        '"add_suggestions":[{"type":"tag or combo","tags":["tag1","tag2"],'
+        '"reason":"why","confidence":"high/medium/low"}],'
+        '"remove_suggestions":[{"type":"tag or combo","tags":["tag1","tag2"],'
+        '"reason":"why this rule is wrong or too broad, and what to do instead"}]}\n',
     ]
 
     # Current exclusion rules
-    parts.append("## Current Exclusions\n")
     if exclude_tags:
-        parts.append(f"Tags: {', '.join(exclude_tags)}\n")
+        parts.append(f"\nExcluded tags: {', '.join(exclude_tags)}\n")
     if exclude_combos:
-        parts.append(f"Combos: {'; '.join(' + '.join(c) for c in exclude_combos)}\n")
-    if not exclude_tags and not exclude_combos:
-        parts.append("(none)\n")
+        parts.append(f"Excluded combos: {'; '.join(' + '.join(c) for c in exclude_combos)}\n")
 
     # Tag frequencies per group
     for label, key in [("Disliked", "dislike"), ("Favorites", "favorite"), ("Pool", "pool")]:
@@ -167,16 +130,11 @@ async def _invoke_claude(prompt: str, timeout: float = 180.0) -> dict:
             code="cli_not_found",
         )
 
-    schema_json = json.dumps(AI_SCHEMA)
     proc = await asyncio.create_subprocess_exec(
         claude_bin,
         "-p",
         "--model",
         "sonnet",
-        "--output-format",
-        "json",
-        "--json-schema",
-        schema_json,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -196,19 +154,17 @@ async def _invoke_claude(prompt: str, timeout: float = 180.0) -> dict:
         err = stderr.decode().strip()
         raise AISuggestionError(f"Claude CLI failed (exit {proc.returncode}): {err}")
 
+    text = stdout.decode().strip()
+    # Extract JSON from markdown code blocks if present
+    m = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+    if m:
+        text = m.group(1).strip()
+
     try:
-        result = json.loads(stdout.decode())
+        return json.loads(text)
     except json.JSONDecodeError as e:
+        log.warning("Claude response was not valid JSON: %s", text[:200])
         raise AISuggestionError(f"Claude returned invalid JSON: {e}")
-
-    # Handle claude --output-format json wrapping: result may be in result.result
-    if "result" in result and isinstance(result["result"], str):
-        try:
-            result = json.loads(result["result"])
-        except json.JSONDecodeError as e:
-            raise AISuggestionError(f"Claude returned malformed JSON in result wrapper: {e}")
-
-    return result
 
 
 async def generate_ai_suggestions(config: WayperConfig) -> dict:
@@ -217,11 +173,14 @@ async def generate_ai_suggestions(config: WayperConfig) -> dict:
     Returns dict with keys: analysis, add_suggestions, remove_suggestions.
     Raises AISuggestionError on failure.
     """
-    if _ai_lock.locked():
-        raise AISuggestionError("AI analysis already in progress")
-
-    async with _ai_lock:
+    try:
+        await asyncio.wait_for(_ai_lock.acquire(), timeout=0)
+    except TimeoutError:
+        raise AISuggestionError("AI analysis already in progress", code="in_progress")
+    try:
         return await _generate_ai_suggestions_impl(config)
+    finally:
+        _ai_lock.release()
 
 
 async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:

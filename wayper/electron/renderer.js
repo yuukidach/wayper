@@ -1655,7 +1655,12 @@ function renderBlocklistView() {
                 for (const s of (ai.remove_suggestions || [])) {
                     lines.push(`- ${s.tags.join(' + ')}: ${s.reason}`);
                 }
-                navigator.clipboard.writeText(lines.join('\n'));
+                const text = lines.join('\n');
+                if (window.electronAPI?.copyToClipboard) {
+                    window.electronAPI.copyToClipboard(text);
+                } else {
+                    navigator.clipboard.writeText(text).catch(() => {});
+                }
                 copyBtn.textContent = 'Copied';
                 setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
             };

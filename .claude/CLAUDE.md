@@ -90,3 +90,4 @@ wayper/
 - Pool directory structure: `download_dir/[sfw|sketchy|nsfw]/[portrait|landscape]` + `favorites/[sfw|sketchy|nsfw]/` + `.trash/`
 - All CLI commands support `--json` flag for machine-readable output
 - Keep platform-specific code in `backend/` — never in shared modules
+- Cross-platform: every change must work on both macOS and Linux. When using system tools (screenshots, process management, file paths), always handle both platforms. Don't assume X11 on Linux — support Wayland (Hyprland/Sway) too
