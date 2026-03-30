@@ -78,19 +78,27 @@ def _build_prompt(
 ) -> str:
     """Build a compact prompt using aggregated tag frequencies."""
     parts = [
-        "Analyze wallpaper tag frequencies. Format: tag(count) = images with that tag.\n\n"
+        "Analyze wallpaper tag frequencies to suggest exclusion rules.\n\n"
+        "Three groups below:\n"
+        "- Disliked: images the user explicitly rejected\n"
+        "- Favorites: images the user explicitly favorited\n"
+        "- Kept: images the user chose to keep (positive signal, NOT neutral)\n\n"
+        "CRITICAL RULE: If a tag has significant presence in Kept or Favorites, "
+        "the user LIKES that content. NEVER suggest excluding it as a single tag. "
+        "Only suggest it in a combo if the combo isolates a specific unwanted subset "
+        "(e.g. 'nude' alone is liked, but 'nude + specific_studio' might be unwanted).\n\n"
         "Focus areas:\n"
         "1. COMBOS: tag pairs/groups that together signal unwanted content, "
         "even if each tag alone is fine (e.g. 'blonde + model' is unwanted "
-        "but 'model' alone is fine since it appears in pool too)\n"
-        "2. SIMPLIFY existing combos: if one tag in a combo has 0 pool AND 0 favorites, "
+        "but 'model' alone is fine since it appears in Kept too)\n"
+        "2. SIMPLIFY existing combos: if one tag in a combo has 0 Kept AND 0 Favorites, "
         "it MAY be upgradeable to single-tag exclude — but check if the tag crosses "
         "subgroups the user might want to keep (e.g. 'pornstar' spans both Western and Asian)\n"
         "3. SEMANTIC clusters: group related tags that point to the same dislike pattern "
         "(e.g. several AV studio names, or overlapping video game tags)\n"
-        "4. OVER-BROAD exclusions: if an excluded tag also has significant pool/favorites "
+        "4. OVER-BROAD exclusions: if an excluded tag also has significant Kept/Favorites "
         "presence, the rule is too wide — suggest removing it or replacing with a narrower "
-        "combo (e.g. 'video games' excluded but 'video game girls' has 45 pool images "
+        "combo (e.g. 'video games' excluded but 'video game girls' has 45 Kept images "
         "→ remove 'video games', add specific combos instead)\n\n"
         "Respond with ONLY JSON (no markdown):\n"
         '{"analysis":"pattern summary",'
@@ -107,7 +115,7 @@ def _build_prompt(
         parts.append(f"Excluded combos: {'; '.join(' + '.join(c) for c in exclude_combos)}\n")
 
     # Tag frequencies per group
-    for label, key in [("Disliked", "dislike"), ("Favorites", "favorite"), ("Pool", "pool")]:
+    for label, key in [("Disliked", "dislike"), ("Favorites", "favorite"), ("Kept", "pool")]:
         group = freq_groups[key]
         count = group["count"]
         tags = group["tags"]
