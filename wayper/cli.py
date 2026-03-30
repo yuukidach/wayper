@@ -402,6 +402,71 @@ def status(ctx):
 
 
 @cli.command()
+@click.option("--ai", "use_ai", is_flag=True, help="Use Claude AI for intelligent analysis.")
+@click.pass_context
+def suggest(ctx, use_ai):
+    """Show tag exclusion suggestions.
+
+    Without --ai: shows frequency-based suggestions.
+    With --ai: calls Claude CLI for semantic analysis.
+    """
+    config = ctx.obj["config"]
+    use_json = ctx.obj["json"]
+
+    if use_ai:
+        from .ai_suggestions import AISuggestionError, generate_ai_suggestions
+
+        try:
+            result = asyncio.run(generate_ai_suggestions(config))
+        except AISuggestionError as e:
+            if use_json:
+                click.echo(json_mod.dumps({"error": str(e)}))
+            else:
+                click.echo(f"Error: {e}", err=True)
+            raise SystemExit(1)
+
+        if use_json:
+            click.echo(json_mod.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            click.echo(f"\n{result['analysis']}\n")
+            if result["add_suggestions"]:
+                click.echo("--- Suggested Additions ---")
+                for s in result["add_suggestions"]:
+                    tags = " + ".join(s["tags"])
+                    click.echo(f"  [{s['confidence']}] {s['type']}: {tags}")
+                    click.echo(f"         {s['reason']}")
+            if result["remove_suggestions"]:
+                click.echo("\n--- Suggested Removals ---")
+                for s in result["remove_suggestions"]:
+                    tags = " + ".join(s["tags"])
+                    click.echo(f"  {s['type']}: {tags}")
+                    click.echo(f"         {s['reason']}")
+            if not result["add_suggestions"] and not result["remove_suggestions"]:
+                click.echo("No suggestions at this time.")
+    else:
+        from .pool import list_blacklist, load_metadata
+        from .suggestions import suggest_tags_to_exclude
+
+        metadata = load_metadata(config)
+        blacklisted = {fn for _, fn in list_blacklist(config)}
+        results = suggest_tags_to_exclude(
+            metadata,
+            blacklisted,
+            config.wallhaven.exclude_tags,
+            config.wallhaven.exclude_combos,
+        )
+        if use_json:
+            click.echo(json_mod.dumps({"suggestions": results}, ensure_ascii=False, indent=2))
+        else:
+            if results:
+                click.echo("Suggested exclusions (by dislike frequency):")
+                for s in results:
+                    click.echo(f"  {s['tag']} (count: {s['count']}, ratio: {s['ratio']}x)")
+            else:
+                click.echo("No suggestions at this time.")
+
+
+@cli.command()
 def setup():
     """Install .desktop entry (Linux)."""
     import shutil
