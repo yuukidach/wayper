@@ -32,12 +32,12 @@ Data is aggregated as `tag(count)` frequencies (top 150 per group), not individu
 ### Claude CLI Invocation
 
 ```
-claude -p --model sonnet < prompt_with_data
+claude -p < prompt_with_data
 ```
 
 **Key decisions:**
 - **No `--json-schema`**: Constrained decoding is too slow (~150s+). Instead, the prompt instructs Claude to return raw JSON, which is parsed with markdown code block extraction as fallback
-- **`--model sonnet`**: Good balance of quality and speed
+- **Default model**: Uses whatever model the user has configured in their Claude CLI (no hardcoded model)
 - **Async execution**: `asyncio.create_subprocess_exec` to avoid blocking the API server
 - **180-second timeout**: Analysis typically takes 75-90 seconds
 - **`asyncio.Lock`**: Prevents concurrent Claude CLI processes
