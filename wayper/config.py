@@ -81,6 +81,10 @@ class WayperConfig:
         return self.download_dir / ".history"
 
     @property
+    def trash_map_file(self) -> Path:
+        return self.download_dir / ".trash_paths"
+
+    @property
     def metadata_file(self) -> Path:
         return self.download_dir / ".metadata.json"
 

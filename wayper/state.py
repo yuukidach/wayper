@@ -105,8 +105,36 @@ def _cleanup_trashinfo(filename: str) -> None:
         pass
 
 
-def find_in_trash(_config: WayperConfig, filename: str) -> Path | None:
-    """Find a file in system trash."""
+def _read_trash_map(config: WayperConfig) -> dict[str, str]:
+    """Read the filename → trash path mapping."""
+    import json as _json
+
+    if not config.trash_map_file.exists():
+        return {}
+    try:
+        return _json.loads(config.trash_map_file.read_text())
+    except (ValueError, OSError):
+        return {}
+
+
+def _write_trash_map(config: WayperConfig, mapping: dict[str, str]) -> None:
+    """Write the filename → trash path mapping."""
+    import json as _json
+
+    atomic_write(config.trash_map_file, _json.dumps(mapping))
+
+
+def find_in_trash(config: WayperConfig, filename: str) -> Path | None:
+    """Find a file in system trash — check stored path first, then scan dirs."""
+    # Check stored trash path (works without FDA)
+    mapping = _read_trash_map(config)
+    stored = mapping.get(filename)
+    if stored:
+        p = Path(stored)
+        if p.exists():
+            return p
+
+    # Fallback: scan system trash dirs (requires FDA on macOS)
     for d in _trash_search_dirs():
         candidate = d / filename
         if candidate.exists():
@@ -119,13 +147,42 @@ def find_in_trash(_config: WayperConfig, filename: str) -> Path | None:
 # ---------------------------------------------------------------------------
 
 
+def _trash_file(config: WayperConfig, src: Path) -> None:
+    """Move file to system trash and record the trash path."""
+    if not src.exists():
+        return
+
+    trash_path: str | None = None
+
+    if sys.platform == "darwin":
+        try:
+            from AppKit import NSFileManager
+            from Foundation import NSURL
+
+            fm = NSFileManager.defaultManager()
+            file_url = NSURL.fileURLWithPath_(str(src))
+            ok, result_url, err = fm.trashItemAtURL_resultingItemURL_error_(file_url, None, None)
+            if ok and result_url:
+                trash_path = result_url.path()
+        except ImportError:
+            import send2trash
+
+            send2trash.send2trash(src)
+    else:
+        import send2trash
+
+        send2trash.send2trash(src)
+
+    if trash_path:
+        mapping = _read_trash_map(config)
+        mapping[src.name] = trash_path
+        _write_trash_map(config, mapping)
+
+
 def push_undo(config: WayperConfig, filename: str, original_dir: Path) -> None:
     """Send file to system trash and record in undo log."""
-    import send2trash
-
     src = original_dir / filename
-    if src.exists():
-        send2trash.send2trash(src)
+    _trash_file(config, src)
 
     with open(config.undo_file, "a") as f:
         f.write(f"{filename} {original_dir}\n")
@@ -150,7 +207,7 @@ def pop_undo(config: WayperConfig) -> tuple[str, Path] | None:
 
 
 def restore_from_trash(config: WayperConfig, filename: str, dest_dir: Path) -> Path | None:
-    """Restore file from system trash or legacy .trash/ to dest_dir."""
+    """Restore file from system trash to dest_dir."""
     trashed = find_in_trash(config, filename)
     if not trashed:
         return None
@@ -158,4 +215,10 @@ def restore_from_trash(config: WayperConfig, filename: str, dest_dir: Path) -> P
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(trashed), str(dest))
     _cleanup_trashinfo(filename)
+
+    # Remove from trash map
+    mapping = _read_trash_map(config)
+    mapping.pop(filename, None)
+    _write_trash_map(config, mapping)
+
     return dest

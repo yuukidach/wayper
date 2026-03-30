@@ -568,6 +568,8 @@ async function searchByTags(tagList) {
     appState.searchQuery = tagList.join(' + ');
     appState.searchMatches = new Set(data.matches || []);
     els.searchInput.value = tagList.join(' + ');
+    els.searchClear.classList.remove('hidden');
+    document.querySelector('.search-kbd')?.classList.add('hidden');
     els.searchDropdown.classList.add('hidden');
     applySearchFilter();
     updateSearchCount();
@@ -838,6 +840,9 @@ function clearSearch() {
     els.searchInput.value = '';
     appState.searchQuery = '';
     appState.searchMatches = null;
+    appState.reviewingTag = null;
+    appState.comboContext = [];
+    appState.comboRefinements = [];
     searchHighlightIndex = -1;
     els.searchCount.classList.add('hidden');
     els.searchClear.classList.add('hidden');
@@ -1044,6 +1049,8 @@ function connectSSE() {
                     refreshImages();
                     fetchStatus();
                 }
+            } else if (data.type === 'wallpaper') {
+                fetchMonitors();
             }
         } catch (err) {
             console.error('SSE parse error', err);
@@ -1078,6 +1085,12 @@ async function fetchStatus() {
         appState.status = data;
         if (changed) {
             updateStatusUI();
+            // Refresh grid when image counts change (external add/remove/fav/dislike)
+            if (prev && (data.pool_count !== prev.pool_count
+                || data.favorites_count !== prev.favorites_count
+                || data.blocklist_count !== prev.blocklist_count)) {
+                refreshImages();
+            }
         }
     } catch (e) {
         if (appState.status.running !== false) {
@@ -1308,14 +1321,35 @@ function renderBlocklistView() {
         const bar = document.createElement('div');
         bar.className = 'tag-review-bar';
 
-        // Show breadcrumb for combo context
-        const breadcrumb = ctx.map(t => `<strong>${esc(t)}</strong>`).join(' + ');
-        bar.innerHTML = `
-            <span class="review-bar-text">
-                ${breadcrumb}
-                <span class="review-bar-count">${s.count} disliked</span>
-            </span>
-        `;
+        // Show breadcrumb for combo context — each tag is clickable to remove it
+        const textSpan = document.createElement('span');
+        textSpan.className = 'review-bar-text';
+        ctx.forEach((t, i) => {
+            if (i > 0) textSpan.appendChild(document.createTextNode(' + '));
+            const tagEl = document.createElement('strong');
+            tagEl.className = 'breadcrumb-tag';
+            tagEl.textContent = t;
+            if (ctx.length > 1) {
+                tagEl.title = `Remove "${t}" from combo`;
+                tagEl.onclick = async () => {
+                    const newCtx = ctx.filter((_, j) => j !== i);
+                    appState.comboContext = newCtx;
+                    if (newCtx.length === 1) {
+                        const original = appState.tagSuggestions?.find(sg => sg.tag === newCtx[0]);
+                        if (original) appState.reviewingTag = original;
+                    }
+                    await searchByTags(newCtx);
+                    await fetchComboRefinements(newCtx);
+                    renderBlocklistView();
+                };
+            }
+            textSpan.appendChild(tagEl);
+        });
+        const countEl = document.createElement('span');
+        countEl.className = 'review-bar-count';
+        countEl.textContent = `${s.count} disliked`;
+        textSpan.appendChild(countEl);
+        bar.appendChild(textSpan);
         const actions = document.createElement('div');
         actions.className = 'review-bar-actions';
 

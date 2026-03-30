@@ -75,8 +75,14 @@ def do_next(config: WayperConfig, monitor: str | None = None) -> CoreResult:
 
     set_wallpaper(monitor, img, config.transition)
     t_total = time.monotonic() - t0
-    log.info("next: %s → %s (resolve=%.0fms pick=%.0fms total=%.0fms)",
-             monitor, img.name, t_resolve * 1000, (t_pick - t_resolve) * 1000, t_total * 1000)
+    log.info(
+        "next: %s → %s (resolve=%.0fms pick=%.0fms total=%.0fms)",
+        monitor,
+        img.name,
+        t_resolve * 1000,
+        (t_pick - t_resolve) * 1000,
+        t_total * 1000,
+    )
     return CoreResult(action="next", monitor=monitor, image=img)
 
 
@@ -158,8 +164,14 @@ def do_dislike(
         if not img or not mon_cfg:
             return CoreResult(action="dislike", ok=False, error="No current wallpaper")
 
+        # If in favorites, move back to pool first
         if "favorites" in str(img):
-            return CoreResult(action="dislike", ok=True, status="is_favorite")
+            purity = purity_from_path(config, img)
+            dest_dir = pool_dir(config, purity, mon_cfg.orientation)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / img.name
+            img.rename(dest)
+            img = dest
 
         # Switch wallpaper first for instant feedback
         purities = read_mode(config)

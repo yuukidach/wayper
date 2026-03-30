@@ -244,21 +244,31 @@ def set_mode_route(req: SetModeRequest):
 
 @app.get("/api/events")
 async def sse_events():
-    """SSE stream for real-time state changes (mode, etc.)."""
+    """SSE stream for real-time state changes (mode, wallpaper)."""
     from starlette.responses import StreamingResponse
 
     async def event_stream():
         config = get_config()
         last_mtime = 0.0
         last_mode: set[str] = set()
+        last_wallpapers: dict[str, str | None] = {}
+        tick = 0
         try:
             last_mtime = config.state_file.stat().st_mtime
             last_mode = read_mode(config)
         except OSError:
             pass
+        try:
+            wp = query_current()
+            last_wallpapers = {k: str(v) if v else None for k, v in wp.items()}
+        except Exception:
+            pass
 
         while True:
             await asyncio.sleep(0.3)
+            tick += 1
+
+            # Check mode changes every tick
             try:
                 mtime = config.state_file.stat().st_mtime
                 if mtime != last_mtime:
@@ -270,6 +280,18 @@ async def sse_events():
                         yield f"data: {payload}\n\n"
             except OSError:
                 pass
+
+            # Check wallpaper changes every ~1s (every 3rd tick)
+            if tick % 3 == 0:
+                try:
+                    current_wp = query_current()
+                    wp_strs = {k: str(v) if v else None for k, v in current_wp.items()}
+                    if wp_strs != last_wallpapers:
+                        last_wallpapers = wp_strs
+                        payload = json_mod.dumps({"type": "wallpaper"})
+                        yield f"data: {payload}\n\n"
+                except Exception:
+                    pass
 
     return StreamingResponse(
         event_stream(),
@@ -498,8 +520,17 @@ def dislike_image_route(req: ActionRequest):
     config = get_config()
     img_full = _resolve_image(config, req.image_path)
 
+    # If in favorites, move back to pool first
     if "favorites" in req.image_path:
-        raise HTTPException(400, "Can't dislike a favorite")
+        from wayper.state import purity_from_path
+
+        purity = purity_from_path(config, img_full)
+        orientation = "portrait" if "portrait" in req.image_path else "landscape"
+        dest_dir = pool_dir(config, purity, orientation)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / img_full.name
+        img_full.rename(dest)
+        img_full = dest
 
     try:
         current_wallpapers = query_current()

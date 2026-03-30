@@ -952,6 +952,18 @@ main {
   font-weight: 600;
 }
 
+.breadcrumb-tag {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 1px 4px;
+  transition: background 0.15s;
+}
+
+.breadcrumb-tag:hover {
+  background: var(--surface1);
+  text-decoration: line-through;
+}
+
 .review-bar-count {
   font-size: 11px;
   color: var(--overlay1);
