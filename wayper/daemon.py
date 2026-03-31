@@ -177,7 +177,8 @@ async def run_daemon(config: WayperConfig) -> None:
 
     async def reload_config_if_needed() -> None:
         """Reload config and replace client if SIGHUP was received."""
-        nonlocal config, client, _reload_config
+        global _reload_config
+        nonlocal config, client
         if not _reload_config:
             return
         _reload_config = False
