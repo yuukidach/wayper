@@ -175,15 +175,21 @@ async def run_daemon(config: WayperConfig) -> None:
     client = WallhavenClient(config)
     greeter_count = 0
 
+    async def reload_config_if_needed() -> None:
+        """Reload config and replace client if SIGHUP was received."""
+        nonlocal config, client, _reload_config
+        if not _reload_config:
+            return
+        _reload_config = False
+        config = load_config()
+        old, client = client, WallhavenClient(config)
+        await old.close()
+        log.info("Configuration reloaded")
+
     try:
         while True:
             _change_now = False
-
-            if _reload_config:
-                _reload_config = False
-                config = load_config()
-                client = WallhavenClient(config)
-                log.info("Configuration reloaded")
+            await reload_config_if_needed()
 
             if _reload_mode:
                 _reload_mode = False
@@ -192,15 +198,17 @@ async def run_daemon(config: WayperConfig) -> None:
             if config.pause_on_lock and is_locked():
                 log.info("Session locked, waiting before rotation")
                 while config.pause_on_lock and is_locked():
-                    if _change_now or _reload_mode or _reload_config:
+                    if _change_now or _reload_mode:
                         break
+                    if _reload_config:
+                        await reload_config_if_needed()
                     _wake.clear()
                     try:
                         await asyncio.wait_for(_wake.wait(), timeout=5)
                     except TimeoutError:
                         pass
 
-                if _change_now or _reload_mode or _reload_config:
+                if _change_now or _reload_mode:
                     continue
 
             purities = read_mode(config)
@@ -232,15 +240,18 @@ async def run_daemon(config: WayperConfig) -> None:
             # Interruptible sleep — _wake.set() fires instantly on signal
             remaining = config.interval
             while remaining > 0:
-                if _change_now or _reload_mode or _reload_config:
+                if _change_now or _reload_mode:
                     break
+                await reload_config_if_needed()
 
                 # Pause if locked
                 if config.pause_on_lock and is_locked():
                     log.info("Session locked, pausing timer")
                     while config.pause_on_lock and is_locked():
-                        if _change_now or _reload_mode or _reload_config:
+                        if _change_now or _reload_mode:
                             break
+                        if _reload_config:
+                            await reload_config_if_needed()
                         _wake.clear()
                         try:
                             await asyncio.wait_for(_wake.wait(), timeout=5)
@@ -248,7 +259,7 @@ async def run_daemon(config: WayperConfig) -> None:
                             pass
                     log.info("Session unlocked, resuming timer")
 
-                    if _change_now or _reload_mode or _reload_config:
+                    if _change_now or _reload_mode:
                         break
 
                 _wake.clear()
