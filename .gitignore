@@ -9,3 +9,4 @@ uv.lock
 .claude/settings.local.json
 .claude/scheduled_tasks.*
 .claude/worktrees/
+.DS_Store
