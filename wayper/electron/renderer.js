@@ -1580,7 +1580,7 @@ function renderBlocklistView() {
             els.wallpaperGrid.appendChild(refBar);
         }
     } else if (!appState.searchQuery && appState.tagSuggestions && appState.tagSuggestions.length > 0) {
-        // Suggestions mode: show all suggestion chips
+        // Suggestions mode: wrapping chips with header
         const bar = document.createElement('div');
         bar.className = 'tag-suggestions-bar';
         const header = document.createElement('div');
@@ -1590,27 +1590,32 @@ function renderBlocklistView() {
         label.textContent = 'Suggested exclusions';
         header.appendChild(label);
 
-        // AI button in header
+        // Agent button in header
         const aiBtn = document.createElement('button');
-        aiBtn.className = 'ai-analyze-btn';
+        aiBtn.className = 'agent-analyze-btn';
         aiBtn.onclick = () => { if (!appState.aiLoading) fetchAISuggestions(); };
         if (appState.aiLoading) {
             aiBtn.disabled = true;
-            aiBtn.classList.add('ai-loading');
+            aiBtn.classList.add('agent-loading');
             const elapsed = appState.aiStartTime ? Math.floor((Date.now() - appState.aiStartTime) / 1000) : 0;
+            const spinner = document.createElement('span');
+            spinner.className = 'agent-spinner';
+            aiBtn.appendChild(spinner);
             const txt = document.createElement('span');
-            txt.className = 'ai-btn-text';
-            txt.textContent = elapsed + 's';
+            txt.className = 'agent-btn-text';
+            txt.textContent = `Analyzing ${elapsed}s`;
             aiBtn.appendChild(txt);
         } else {
-            aiBtn.textContent = 'AI ';
+            const icon = document.createElement('span');
+            icon.className = 'agent-icon';
+            icon.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><path d="M16 14H8a5 5 0 0 0-5 5v1h18v-1a5 5 0 0 0-5-5z"/></svg>';
+            aiBtn.appendChild(icon);
+            const label = document.createElement('span');
+            label.textContent = 'Agent';
+            aiBtn.appendChild(label);
             if (appState.aiSuggestions && appState.aiSuggestions.error) {
-                aiBtn.classList.add('ai-analyze-error');
+                aiBtn.classList.add('agent-error');
                 aiBtn.title = appState.aiSuggestions.error;
-                const errSpan = document.createElement('span');
-                errSpan.className = 'ai-error-text';
-                errSpan.textContent = appState.aiSuggestions.error;
-                aiBtn.appendChild(errSpan);
             } else {
                 const kbd = document.createElement('kbd');
                 kbd.textContent = 'A';
@@ -1814,8 +1819,11 @@ function renderNextBatch() {
     if (sentinel.parentNode) sentinel.remove();
 
     const fragment = document.createDocumentFragment();
-    batch.forEach(img => {
-        fragment.appendChild(createCard(img));
+    batch.forEach((img, i) => {
+        const card = createCard(img);
+        // Stagger entrance animation for visible cards
+        if (i < 20) card.style.animationDelay = `${i * 30}ms`;
+        fragment.appendChild(card);
     });
 
     els.wallpaperGrid.appendChild(fragment);
@@ -1865,7 +1873,7 @@ function createCard(img) {
         `;
         const cardImg = card.querySelector('img');
         cardImg.onload = () => cardImg.classList.remove('loading');
-        const btns = card.querySelectorAll('button');
+        const btns = card.querySelectorAll('.action-btn');
         btns[0].onclick = (e) => { e.stopPropagation(); restoreImage(img.path); };
         btns[1].onclick = (e) => { e.stopPropagation(); openWallhavenUrl(img.name); };
         card.onclick = () => showLightbox(img);
@@ -1882,7 +1890,7 @@ function createCard(img) {
         const cardImg = card.querySelector('img');
         cardImg.onload = () => cardImg.classList.remove('loading');
         card.onclick = () => showLightbox(img);
-        const btns = card.querySelectorAll('button');
+        const btns = card.querySelectorAll('.action-btn');
         btns[0].onclick = (e) => { e.stopPropagation(); setWallpaper(img.path); };
         btns[1].onclick = (e) => { e.stopPropagation(); toggleFavoriteImage(img.path); };
         btns[2].onclick = (e) => { e.stopPropagation(); dislikeImage(img.path); };
