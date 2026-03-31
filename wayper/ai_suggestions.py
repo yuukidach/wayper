@@ -252,9 +252,24 @@ def _build_prompt(
     return "".join(parts)
 
 
+def _find_claude_bin() -> str | None:
+    """Find claude CLI binary, checking PATH and common install locations."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    # PyInstaller / GUI apps often have a stripped PATH — check common locations
+    for candidate in (
+        Path.home() / ".local" / "bin" / "claude",
+        Path("/usr/local/bin/claude"),
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 async def _invoke_claude(prompt: str, timeout: float = 600.0) -> dict:
     """Call claude CLI in print mode and return parsed JSON response."""
-    claude_bin = shutil.which("claude")
+    claude_bin = _find_claude_bin()
     if not claude_bin:
         raise AISuggestionError(
             "AI analysis requires Claude CLI installed locally. "
