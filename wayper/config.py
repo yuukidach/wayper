@@ -58,6 +58,7 @@ class WayperConfig:
     quota_mb: int = 4000
     blacklist_ttl_days: int = 30
     pause_on_lock: bool = True
+    safe_mode: bool = False
     monitors: list[MonitorConfig] = field(default_factory=list)
     wallhaven: WallhavenConfig = field(default_factory=WallhavenConfig)
     transition: TransitionConfig = field(default_factory=TransitionConfig)
@@ -124,6 +125,7 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
     lines.append(f"quota_mb = {config.quota_mb}")
     lines.append(f"blacklist_ttl_days = {config.blacklist_ttl_days}")
     lines.append(f"pause_on_lock = {str(config.pause_on_lock).lower()}")
+    lines.append(f"safe_mode = {str(config.safe_mode).lower()}")
 
     for m in config.monitors:
         lines.append("")
@@ -231,6 +233,7 @@ def load_config(path: Path | None = None) -> WayperConfig:
         quota_mb=raw.get("quota_mb", 4000),
         blacklist_ttl_days=raw.get("blacklist_ttl_days", 30),
         pause_on_lock=raw.get("pause_on_lock", True),
+        safe_mode=raw.get("safe_mode", False),
         monitors=monitors,
         wallhaven=wallhaven,
         transition=transition,

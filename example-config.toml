@@ -5,6 +5,7 @@ interval = 300         # seconds between rotations
 quota_mb = 4000        # max disk usage
 blacklist_ttl_days = 30
 pause_on_lock = true       # pause rotation when session is locked
+safe_mode = false          # lock purity to SFW only
 
 # [greeter]
 # image = "/usr/share/backgrounds/greeter.jpg"

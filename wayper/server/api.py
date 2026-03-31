@@ -38,6 +38,7 @@ from wayper.pool import (
 from wayper.state import (
     ALL_PURITIES,
     find_in_trash,
+    purity_from_path,
     push_undo,
     read_mode,
     restore_from_trash,
@@ -147,6 +148,8 @@ class ConfigResponse(BaseModel):
     quota_mb: int
     proxy: str
     pause_on_lock: bool
+    safe_mode: bool
+    has_api_key: bool
     wallhaven: WallhavenConfigModel
 
 
@@ -175,6 +178,8 @@ def get_config_route():
         "quota_mb": config.quota_mb,
         "proxy": config.proxy or "",
         "pause_on_lock": config.pause_on_lock,
+        "safe_mode": config.safe_mode,
+        "has_api_key": bool(config.api_key),
         "wallhaven": {
             "categories": config.wallhaven.categories,
             "top_range": config.wallhaven.top_range,
@@ -201,6 +206,10 @@ def update_config_route(updates: dict = Body(...)):
         config.proxy = updates["proxy"].strip() or None
     if "pause_on_lock" in updates:
         config.pause_on_lock = bool(updates["pause_on_lock"])
+    if "safe_mode" in updates:
+        config.safe_mode = bool(updates["safe_mode"])
+    if "api_key" in updates:
+        config.api_key = updates["api_key"].strip()
 
     if "wallhaven" in updates:
         wh = updates["wallhaven"]
@@ -239,8 +248,17 @@ def set_mode_route(req: SetModeRequest):
     if not purities:
         raise HTTPException(400, "At least one valid purity required")
 
+    if config.safe_mode:
+        purities = {"sfw"}
+
     write_mode(config, purities)
     signal_daemon(config, signal.SIGUSR2)
+
+    current = query_current()
+    for monitor_name, img_path in current.items():
+        if img_path and purity_from_path(config, img_path) not in purities:
+            do_next(config, monitor_name)
+
     return {"status": "ok", "purities": sorted(purities)}
 
 

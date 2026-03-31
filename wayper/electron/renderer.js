@@ -496,6 +496,14 @@ function populateSettingsForm() {
 
     // Pause on lock
     document.getElementById('input-pause-on-lock').checked = c.pause_on_lock !== false;
+
+    // Safe mode
+    document.getElementById('input-safe-mode').checked = !!c.safe_mode;
+
+    // API key — show masked placeholder if set, empty if not
+    const apiKeyInput = document.getElementById('input-api-key');
+    apiKeyInput.value = '';
+    apiKeyInput.placeholder = c.has_api_key ? '••••••••••••••••' : 'Your Wallhaven API key';
 }
 
 function renderExcludeTags(tags) {
@@ -714,14 +722,20 @@ async function saveSettings() {
         quota_mb: parseInt(document.getElementById('input-quota').value) || 4000,
         proxy: document.getElementById('input-proxy').value,
         pause_on_lock: document.getElementById('input-pause-on-lock').checked,
-        wallhaven: {
-            categories: document.getElementById('input-categories').value,
-            top_range: document.getElementById('input-top-range').value,
-            sorting: document.getElementById('input-sorting').value,
-            ai_art_filter: parseInt(document.getElementById('input-ai-art').value),
-            exclude_tags: getExcludeTags(),
-            exclude_combos: getExcludeCombos()
-        }
+        safe_mode: document.getElementById('input-safe-mode').checked,
+    };
+
+    // Only send api_key if user entered a new value
+    const apiKeyVal = document.getElementById('input-api-key').value;
+    if (apiKeyVal) updates.api_key = apiKeyVal;
+
+    updates.wallhaven = {
+        categories: document.getElementById('input-categories').value,
+        top_range: document.getElementById('input-top-range').value,
+        sorting: document.getElementById('input-sorting').value,
+        ai_art_filter: parseInt(document.getElementById('input-ai-art').value),
+        exclude_tags: getExcludeTags(),
+        exclude_combos: getExcludeCombos()
     };
 
     // Calculate interval in seconds for backend if needed
@@ -770,7 +784,38 @@ async function setViewMode(mode) {
     debouncedRefreshImages();
 }
 
+function shakeButton(btn) {
+    btn.classList.remove('shake');
+    void btn.offsetWidth;
+    btn.classList.add('shake');
+}
+
+let _purityHintTimer;
+function showPurityHint(btn, message) {
+    shakeButton(btn);
+    const container = btn.closest('.purity-toggles');
+    let hint = container.parentElement.querySelector('.purity-hint');
+    if (!hint) {
+        hint = document.createElement('div');
+        hint.className = 'purity-hint';
+        container.after(hint);
+    }
+    hint.textContent = message;
+    hint.classList.add('visible');
+    clearTimeout(_purityHintTimer);
+    _purityHintTimer = setTimeout(() => hint.classList.remove('visible'), 2000);
+}
+
 function toggleSinglePurity(purity) {
+    if (appState.safeMode && purity !== 'sfw') {
+        const btn = purity === 'nsfw' ? els.btnPurityNsfw : els.btnPuritySketchy;
+        showPurityHint(btn, 'Safe mode is enabled');
+        return;
+    }
+    if (purity === 'nsfw' && !appState.purity.includes('nsfw') && !appState.hasApiKey) {
+        showPurityHint(els.btnPurityNsfw, 'API key required for NSFW');
+        return;
+    }
     const current = appState.purity;
     if (current.includes(purity)) {
         if (current.length <= 1) return;
@@ -1145,9 +1190,20 @@ async function fetchConfig() {
         const res = await fetch(`${API_URL}/api/config`);
         const data = await res.json();
         appState.config = data;
+        appState.hasApiKey = !!data.has_api_key;
+        appState.safeMode = !!data.safe_mode;
 
         // data.mode is now an array of purities
         appState.purity = Array.isArray(data.mode) ? data.mode : [data.mode];
+
+        if (appState.safeMode) {
+            appState.purity = ['sfw'];
+            els.btnPuritySketchy.classList.add('purity-disabled');
+            els.btnPurityNsfw.classList.add('purity-disabled');
+        } else {
+            els.btnPuritySketchy.classList.remove('purity-disabled');
+            els.btnPurityNsfw.classList.toggle('purity-disabled', !appState.hasApiKey);
+        }
 
         updateUI();
     } catch (e) { console.error(e); }

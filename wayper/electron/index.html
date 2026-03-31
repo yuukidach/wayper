@@ -153,10 +153,25 @@
                             </div>
                             <small class="hint">Pause wallpaper rotation when screen is locked</small>
                         </div>
+                        <div class="field">
+                            <label for="input-safe-mode">Safe Mode</label>
+                            <div class="toggle-label">
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="input-safe-mode">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </div>
+                            <small class="hint">Lock purity to SFW only</small>
+                        </div>
                     </div>
 
                     <div class="settings-card">
                         <h3>Wallhaven Source</h3>
+                        <div class="field">
+                            <label for="input-api-key">API Key</label>
+                            <input type="password" id="input-api-key" placeholder="Your Wallhaven API key" class="code-font">
+                            <small class="hint">Required for NSFW — <a href="#" onclick="window.open('https://wallhaven.cc/settings/account','_blank');return false">get your key</a></small>
+                        </div>
                         <div class="field">
                             <label for="input-categories">Categories (General/Anime/People)</label>
                             <input type="text" id="input-categories" placeholder="111" class="code-font">
