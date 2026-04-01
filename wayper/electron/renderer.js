@@ -641,7 +641,7 @@ async function fetchAISuggestions() {
     appState.aiSuggestions = null;
     renderBlocklistView();
     appState.aiTimer = setInterval(async () => {
-        const txt = document.querySelector('.ai-btn-text');
+        const txt = document.querySelector('.agent-btn-text');
         if (!txt || !appState.aiStartTime) return;
         const elapsed = Math.floor((Date.now() - appState.aiStartTime) / 1000);
         try {
@@ -657,7 +657,7 @@ async function fetchAISuggestions() {
         } catch {
             txt.textContent = elapsed + 's';
         }
-    }, 2000);
+    }, 1000);
     try {
         const res = await fetch(`${API_URL}/api/ai-suggestions`, { method: 'POST' });
         if (!res.ok) {
