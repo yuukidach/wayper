@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, shell } = require('electron')
+const { app, BrowserWindow, Menu, shell, ipcMain } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const http = require('http')
@@ -37,6 +37,11 @@ function getBackendPath() {
   }
 }
 
+function getPortFilePath() {
+  const home = process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME
+  return path.join(home, '.config', 'wayper', 'api.port')
+}
+
 function startBackend() {
   const binaryPath = getBackendPath()
   if (!binaryPath) {
@@ -56,6 +61,31 @@ function startBackend() {
 
   backendProcess.on('exit', (code, signal) => {
     console.log(`Backend exited with code ${code} signal ${signal}`)
+  })
+}
+
+function waitForPortFile(timeout = 10000) {
+  return new Promise((resolve) => {
+    const portFile = getPortFilePath()
+    const deadline = Date.now() + timeout
+    const check = () => {
+      try {
+        const port = parseInt(fs.readFileSync(portFile, 'utf-8').trim(), 10)
+        if (port > 0) {
+          console.log(`API port: ${port}`)
+          process.env.WAYPER_API_PORT = String(port)
+          resolve(port)
+          return
+        }
+      } catch (_) { /* not ready */ }
+      if (Date.now() < deadline) {
+        setTimeout(check, 200)
+      } else {
+        console.warn('Port file not found within timeout')
+        resolve(0)
+      }
+    }
+    check()
   })
 }
 
@@ -91,6 +121,11 @@ function buildMenu() {
   ]
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
+
+// IPC handler: renderer asks for the API port (cached from env var set by launcher/waitForPortFile)
+ipcMain.handle('get-api-port', () => {
+  return parseInt(process.env.WAYPER_API_PORT || '0', 10)
+})
 
 function createWindow () {
   const isMac = process.platform === 'darwin'
@@ -134,9 +169,13 @@ if (!gotTheLock) {
     }
   })
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     buildMenu()
     startBackend()
+    // In packaged mode, wait for the API to write its port file
+    if (getBackendPath()) {
+      await waitForPortFile()
+    }
     createWindow()
 
     app.on('activate', () => {

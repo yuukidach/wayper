@@ -706,6 +706,9 @@ def serve_trash_image(filename: str):
     trashed = find_in_trash(config, filename)
     if not trashed:
         raise HTTPException(404, "Image not found in trash")
+    if not os.access(trashed, os.R_OK):
+        log.warning("No permission to read %s — grant Full Disk Access to your terminal", trashed)
+        raise HTTPException(403, "Permission denied: grant Full Disk Access to terminal")
     return FileResponse(trashed)
 
 
@@ -744,16 +747,38 @@ _dl_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/images", StaticFiles(directory=_dl_dir), name="images")
 
 
+def _find_free_port() -> int:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def port_file() -> Path:
+    from wayper.config import CONFIG_DIR
+
+    return CONFIG_DIR / "api.port"
+
+
 def run():
+    import atexit
+
     import uvicorn
 
     from wayper.logging import setup_logging
 
     setup_logging()
-    uvicorn.run(app, host="127.0.0.1", port=8080, log_level="info")
+
+    port = _find_free_port()
+    pf = port_file()
+    pf.parent.mkdir(parents=True, exist_ok=True)
+    pf.write_text(str(port))
+    atexit.register(lambda: pf.unlink(missing_ok=True))
+
+    log.info("API server starting on port %d", port)
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
 
 
 if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="127.0.0.1", port=8080, log_level="info")
+    run()

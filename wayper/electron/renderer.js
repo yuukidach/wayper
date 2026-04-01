@@ -1,4 +1,4 @@
-const API_URL = 'http://127.0.0.1:8080';
+let API_URL = 'http://127.0.0.1:8080';
 
 const _escDiv = document.createElement('div');
 function esc(str) {
@@ -146,6 +146,11 @@ const els = {
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
+    // Resolve API port from main process (auto-selected free port)
+    if (window.electronAPI?.getApiPort) {
+        const port = await window.electronAPI.getApiPort();
+        if (port > 0) API_URL = `http://127.0.0.1:${port}`;
+    }
     setupEventListeners();
     setupInfiniteScroll();
 

@@ -9,27 +9,46 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from wayper.server.api import run as run_api
+from wayper.server.api import port_file, run as run_api
 
 
-def _wait_for_api(url: str = "http://127.0.0.1:8080/api/status", timeout: float = 10) -> None:
-    """Poll API until it responds or timeout."""
+def _wait_for_api(timeout: float = 10) -> int:
+    """Poll API port file and then the API until it responds. Returns the port."""
+    pf = port_file()
     deadline = time.monotonic() + timeout
+    port = 0
+    while time.monotonic() < deadline:
+        try:
+            port = int(pf.read_text().strip())
+            if port > 0:
+                break
+        except (FileNotFoundError, ValueError):
+            pass
+        time.sleep(0.2)
+
+    if port <= 0:
+        print("Warning: API port file not found within timeout, launching Electron anyway")
+        return 0
+
+    url = f"http://127.0.0.1:{port}/api/status"
     while time.monotonic() < deadline:
         try:
             urlopen(url, timeout=1)
-            return
+            return port
         except (URLError, OSError):
             time.sleep(0.2)
     print("Warning: API did not respond within timeout, launching Electron anyway")
+    return port
 
 
 def run_app():
+    import os
+
     # Start API in a separate thread
     api_thread = threading.Thread(target=run_api, daemon=True)
     api_thread.start()
 
-    _wait_for_api()
+    port = _wait_for_api()
 
     # Electron directory
     electron_dir = Path(__file__).parent.parent / "electron"
@@ -51,8 +70,13 @@ def run_app():
     else:
         cmd = [str(electron_bin), "."]
 
+    # Pass API port to Electron so preload.js can pick it up
+    env = {**os.environ, "WAYPER_DEV": "1"}
+    if port > 0:
+        env["WAYPER_API_PORT"] = str(port)
+
     # Start Electron
-    proc = subprocess.Popen(cmd, cwd=electron_dir)
+    proc = subprocess.Popen(cmd, cwd=electron_dir, env=env)
 
     def cleanup(signum, frame):
         print("Cleaning up...")
