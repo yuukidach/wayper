@@ -1460,6 +1460,7 @@ function renderImages() {
     console.log('[render]', appState.mode, 'images:', appState.images.length, 'search:', appState.searchQuery || '(none)');
     els.wallpaperGrid.innerHTML = '';
     appState.currentBatchIndex = 0;
+    _trashBannerShown = false;
 
     if (appState.mode === 'trash') {
         renderBlocklistView();
@@ -1898,6 +1899,25 @@ function renderNextBatch() {
     }
 }
 
+let _trashBannerShown = false;
+function showTrashPermissionBanner() {
+    if (_trashBannerShown) return;
+    _trashBannerShown = true;
+
+    const banner = document.createElement('div');
+    banner.className = 'permission-banner';
+    banner.innerHTML = `
+        <span>Cannot read images from Trash — grant <strong>Full Disk Access</strong> to your terminal in System Settings &gt; Privacy &amp; Security.</span>
+        <button class="banner-open" title="Open System Settings">Open Settings</button>
+        <button class="banner-close" title="Dismiss">&times;</button>
+    `;
+    banner.querySelector('.banner-open').onclick = () => {
+        window.open('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles');
+    };
+    banner.querySelector('.banner-close').onclick = () => banner.remove();
+    els.wallpaperGrid.prepend(banner);
+}
+
 function imageUrl(path) {
     if (path.startsWith('__trash/')) {
         return `${API_URL}/trash/${encodeURIComponent(path.slice(8))}`;
@@ -1934,6 +1954,11 @@ function createCard(img) {
         `;
         const cardImg = card.querySelector('img');
         cardImg.onload = () => cardImg.classList.remove('loading');
+        cardImg.onerror = () => {
+            fetch(thumbUrl, { method: 'HEAD' }).then(r => {
+                if (r.status === 403) showTrashPermissionBanner();
+            }).catch(() => {});
+        };
         const btns = card.querySelectorAll('.action-btn');
         btns[0].onclick = (e) => { e.stopPropagation(); restoreImage(img.path); };
         btns[1].onclick = (e) => { e.stopPropagation(); openWallhavenUrl(img.name); };

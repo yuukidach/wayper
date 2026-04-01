@@ -26,6 +26,7 @@ ruff format --check wayper/
 
 - Config: `~/.config/wayper/config.toml` (see `example-config.toml`)
 - PID file: `~/.config/wayper/wayper.pid`
+- API port file: `~/.config/wayper/api.port` (auto-selected free port, written by API server on startup)
 - State files live inside `download_dir`: `.mode`, `.blacklist`, `.undo`, `.history`
 - Version: managed in `pyproject.toml` — keep `wayper/__init__.py` and `wayper/electron/package.json` in sync
 
@@ -59,6 +60,7 @@ wayper/
 **Key patterns:**
 - Platform code is isolated in `backend/` — shared logic lives in top-level modules
 - GUI is Electron-based: Python FastAPI backend (`server/api.py`) + Electron frontend (`electron/`)
+- API server auto-selects a free port (no hardcoded port) and writes it to `~/.config/wayper/api.port`; Electron reads the port via IPC from main process
 - PyInstaller bundles the Python backend; electron-builder packages the full app
 - File-based state: TOML config, plain text blacklist/undo, JSON history
 - File locks (`flock`) prevent concurrent state modifications
@@ -94,7 +96,8 @@ wayper/
 ## Guidelines
 
 - No tests exist yet — do not add test infrastructure unless asked
-- Pool directory structure: `download_dir/[sfw|sketchy|nsfw]/[portrait|landscape]` + `favorites/[sfw|sketchy|nsfw]/` + `.trash/`
+- Pool directory structure: `download_dir/[sfw|sketchy|nsfw]/[portrait|landscape]` + `favorites/[sfw|sketchy|nsfw]/`
+- Disliked images go to **system trash** (macOS `~/.Trash/`, Linux freedesktop Trash) — wayper does not maintain its own `.trash/` directory. On macOS, reading from system trash requires Full Disk Access; the GUI shows a permission banner if access is denied
 - All CLI commands support `--json` flag for machine-readable output
 - Keep platform-specific code in `backend/` — never in shared modules
 - Cross-platform: every change must work on both macOS and Linux. When using system tools (screenshots, process management, file paths), always handle both platforms. Don't assume X11 on Linux — support Wayland (Hyprland/Sway) too

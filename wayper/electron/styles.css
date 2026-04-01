@@ -1302,6 +1302,49 @@ footer {
   font-weight: 400;
 }
 
+/* ---------- Permission Banner ---------- */
+
+.permission-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--peach) 12%, var(--mantle));
+  border: 1px solid color-mix(in srgb, var(--peach) 30%, transparent);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--subtext1);
+  grid-column: 1 / -1;
+}
+
+.permission-banner strong { color: var(--peach); }
+
+.permission-banner .banner-open {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--peach);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--peach);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.permission-banner .banner-open:hover { background: color-mix(in srgb, var(--peach) 15%, transparent); }
+
+.permission-banner .banner-close {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: var(--overlay1);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.permission-banner .banner-close:hover { color: var(--text); }
+
 /* ---------- Blocklist Tabs ---------- */
 
 .blocklist-tabs {
