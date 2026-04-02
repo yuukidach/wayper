@@ -910,6 +910,7 @@ async function toggleFavoriteImage(path) {
             appState.status.pool_count--;
             appState.status.favorites_count++;
         }
+        updateStatusUI();
     }
     try {
         await fetch(`${API_URL}/api/image/favorite`, {
@@ -931,6 +932,7 @@ async function dislikeImage(path) {
         else if (appState.mode === 'trash') appState.status.pool_count--;
         else appState.status.pool_count--;
         appState.status.blocklist_count++;
+        updateStatusUI();
     }
     try {
         await fetch(`${API_URL}/api/image/dislike`, {
@@ -1130,6 +1132,10 @@ async function unblockImage(filename) {
             appState.blocklistData.total--;
         }
         renderBlocklistView();
+        if (appState.status) {
+            appState.status.blocklist_count--;
+            updateStatusUI();
+        }
     } catch (e) {
         console.error("Unblock failed", e);
     }
@@ -1140,6 +1146,8 @@ async function restoreImage(path) {
     // Update local counts so fetchStatus won't detect a "change" and trigger full refresh
     if (appState.status) {
         appState.status.pool_count++;
+        appState.status.blocklist_count--;
+        updateStatusUI();
     }
     try {
         await fetch(`${API_URL}/api/image/restore`, {
