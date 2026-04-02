@@ -67,7 +67,7 @@ uv venv && uv pip install -e .
 | `/` | 聚焦搜索栏 | `Esc` | 清除搜索 / 取消聚焦 |
 | `Enter` / `Space` | 预览（灯箱） | 方向键 | 网格导航 |
 | `[` / `]` | 黑名单：可恢复 / 全部 | `a` | AI 分析（黑名单视图） |
-| `4`–`9` | 切换显示器 | | |
+| `g` | 定位当前壁纸 | `4`–`9` | 切换显示器 |
 
 **灯箱预览：**
 
@@ -152,7 +152,7 @@ mkdir -p ~/.config/wayper
 cp example-config.toml ~/.config/wayper/config.toml
 ```
 
-详见 [`example-config.toml`](../example-config.toml) — 显示器、API key、代理、轮换间隔、配额、转场效果等。
+详见 [`example-config.toml`](../example-config.toml) — API key、代理、轮换间隔、配额、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
 
 ## 依赖
 

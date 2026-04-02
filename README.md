@@ -67,7 +67,7 @@ uv venv && uv pip install -e .
 | `/` | Focus search bar | `Esc` | Clear search / Unfocus |
 | `Enter` / `Space` | Preview (lightbox) | Arrow keys | Navigate grid |
 | `[` / `]` | Blocklist: Recoverable / All | `a` | AI analysis (Blocklist) |
-| `4`–`9` | Switch monitor | | |
+| `g` | Locate current wallpaper | `4`–`9` | Switch monitor |
 
 **Lightbox preview:**
 
@@ -152,7 +152,7 @@ mkdir -p ~/.config/wayper
 cp example-config.toml ~/.config/wayper/config.toml
 ```
 
-See [`example-config.toml`](example-config.toml) for all options — monitors, API key, proxy, intervals, quota, transitions, etc.
+See [`example-config.toml`](example-config.toml) for all options — API key, proxy, intervals, quota, transitions, etc. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
 
 ## Requirements
 

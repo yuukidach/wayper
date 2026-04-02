@@ -12,17 +12,12 @@ safe_mode = false          # lock purity to SFW only
 # interval = 12
 # sudo_password = ""
 
-[[monitors]]
-name = "DP-1"
-width = 3840
-height = 2160
-orientation = "landscape"
-
+# Monitors are auto-detected. Use [[monitors]] only if detection fails.
 # [[monitors]]
-# name = "DP-2"
-# width = 1440
-# height = 2560
-# orientation = "portrait"
+# name = "DP-1"
+# width = 3840
+# height = 2160
+# orientation = "landscape"
 
 [wallhaven]
 categories = "111"     # 1=general, 1=anime, 1=people
