@@ -2,7 +2,8 @@
   <img src="../assets/icon.svg" width="100" alt="wayper logo">
   <h1 align="center">wayper</h1>
   <p align="center">
-    跨平台壁纸管理器，集成 <a href="https://wallhaven.cc">Wallhaven</a> 和 AI 原生控制。
+    越用越懂你的壁纸管理器。<br>
+    Wallhaven 集成 · AI 原生 · 全键盘操作。
   </p>
   <p align="center">
     <a href="#安装">安装</a> · <a href="#gui">GUI</a> · <a href="#cli">CLI</a> · <a href="#mcp-服务">MCP</a> · <a href="#配置">配置</a> · <a href="../README.md">English</a>
@@ -15,15 +16,21 @@
 
 ## 为什么选 wayper？
 
-- **Wallhaven 集成** — 根据搜索偏好自动从 [Wallhaven](https://wallhaven.cc) 下载壁纸，无需手动找图。
-- **自动匹配方向** — 竖屏显示器自动用竖屏壁纸，横屏用横屏。无需手动分类。
-- **壁纸池管理** — 验证图片、裁剪至显示器分辨率、定时轮换。
+大多数壁纸工具止步于"设置桌面图片"。wayper 是一个完整的 **Wallhaven 客户端**，自动下载、筛选、轮换壁纸——而且越用越懂你的口味。
+
+**核心差异：**
+
+- **越用越聪明** — 拉黑壁纸后，wayper 分析你的模式。AI 驱动的标签分析会建议下一步排除什么，支持多轮迭代反馈追踪。
+- **AI 原生（MCP）** — 内置 [MCP](https://modelcontextprotocol.io/) 服务器。对 Claude 说 *"换一张有山的壁纸"* 或 *"收藏这张"* 就行。首个原生支持 AI 助手的壁纸管理器。
+- **全键盘操作 GUI** — 每个操作都有快捷键。网格导航、灯箱预览、收藏、设置——完全不需要鼠标。为重度用户打造。
+
+**基础能力：**
+
+- **Wallhaven 集成** — 根据搜索偏好自动下载，无需手动找图。
+- **自动匹配方向** — 竖屏显示器自动用竖屏壁纸，无需分类。
 - **三档纯度** — SFW、Sketchy、NSFW 独立开关，跨会话持久化。
-- **智能标签排除** — 分析拉黑历史，自动发现反复拉黑的标签。支持单标签和组合排除（如"tattoo + nude"），精细过滤。排除规则仅在下载时过滤——已保留的壁纸池图片不会被移除。
-- **AI 分析** — 通过 Claude CLI 深度分析拉黑模式，生成排除规则建议，支持多轮迭代历史追踪。每轮分析会反思历史建议和用户反馈。
-- **跨平台 GUI** — 浏览、预览、搜索和管理整个壁纸集合。标签搜索、智能建议、AI 分析、daemon 控制、设置——全键盘操作。
-- **AI 原生** — 内置 MCP 服务器，AI 助手可以直接控制壁纸。
-- **JSON 输出** — 所有命令支持 `--json`，方便脚本和自动化。
+- **跨平台** — macOS 和 Linux（Hyprland/Sway）。CLI + GUI + MCP。
+- **`--json` 全覆盖** — 所有命令支持机器可读输出。
 
 ## 安装
 

@@ -2,7 +2,8 @@
   <img src="assets/icon.svg" width="100" alt="wayper logo">
   <h1 align="center">wayper</h1>
   <p align="center">
-    Cross-platform wallpaper manager with <a href="https://wallhaven.cc">Wallhaven</a> integration and AI-native control.
+    The wallpaper manager that learns what you like.<br>
+    Wallhaven integration · AI-native · keyboard-driven.
   </p>
   <p align="center">
     <a href="https://yuukidach.github.io/wayper/">Home</a> · <a href="#install">Install</a> · <a href="#gui">GUI</a> · <a href="#cli">CLI</a> · <a href="#mcp">MCP</a> · <a href="#config">Config</a> · <a href="docs/README.zh-CN.md">中文</a>
@@ -15,15 +16,21 @@
 
 ## Why wayper?
 
-- **Wallhaven integration** — auto-downloads wallpapers from [Wallhaven](https://wallhaven.cc) based on your search preferences. No manual sourcing.
-- **Auto orientation matching** — portrait monitors get portrait wallpapers, landscape gets landscape. No manual sorting.
-- **Pool management** — validates images, resizes to your exact resolution, and rotates automatically.
-- **Three-tier purity** — SFW, Sketchy, NSFW — independently toggleable. Persistent across sessions.
-- **Smart tag exclusion** — analyzes your dislike history to surface tags you repeatedly block. Supports single-tag and combo exclusion (e.g., "tattoo + nude") for fine-grained filtering. Exclusion rules filter at download time — existing pool images you've kept are never removed.
-- **AI-powered analysis** — Claude CLI analyzes your dislike patterns to suggest exclusion rules with iterative history tracking. Each round reflects on past suggestions and your feedback.
-- **Cross-platform GUI** — browse, preview, search, and manage your entire collection. Tag search, smart suggestions, AI analysis, daemon control, settings — all keyboard-driven.
-- **AI-native** — built-in MCP server lets AI assistants control your wallpapers directly.
-- **JSON output** — `--json` flag on every command for scripting and automation.
+Most wallpaper tools stop at "set image on desktop." wayper is a full **Wallhaven client** that auto-downloads, curates, and rotates wallpapers — and gets smarter the more you use it.
+
+**What makes it different:**
+
+- **Learns from you** — dislike a wallpaper and wayper analyzes the pattern. AI-powered tag analysis suggests what to exclude next, with iterative feedback tracking across sessions.
+- **AI-native (MCP)** — built-in [MCP](https://modelcontextprotocol.io/) server. Tell Claude *"switch to something with mountains"* or *"favorite this one"* — it just works. First wallpaper manager with native AI assistant integration.
+- **Keyboard-driven GUI** — every single action has a shortcut. Grid navigation, lightbox, favorites, settings — fully operable without a mouse. Built for power users.
+
+**And the fundamentals:**
+
+- **Wallhaven integration** — auto-downloads based on your search preferences. No manual sourcing.
+- **Auto orientation** — portrait monitors get portrait wallpapers. No sorting needed.
+- **Three-tier purity** — SFW, Sketchy, NSFW — independently toggleable, persistent across sessions.
+- **Cross-platform** — macOS and Linux (Hyprland/Sway). CLI + GUI + MCP.
+- **`--json` everywhere** — every command supports machine-readable output.
 
 ## Install
 

@@ -3,19 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>wayper — Wallhaven Desktop App & Wallpaper Manager</title>
-<meta name="description" content="Desktop wallpaper manager for Wallhaven. Auto-download, rotate, and manage wallpapers with GUI, CLI, and AI control. macOS and Linux.">
-<meta name="keywords" content="wallhaven, wallhaven app, wallhaven desktop, wallpaper manager, wallpaper changer, wallhaven client, desktop wallpaper, auto wallpaper, hyprland wallpaper, macos wallpaper, linux wallpaper, wayland wallpaper">
+<title>wayper — Wallhaven Client & AI Wallpaper Manager for Linux & macOS</title>
+<meta name="description" content="The wallpaper manager that learns what you like. Wallhaven integration, AI-native control, keyboard-driven GUI. macOS and Linux.">
+<meta name="keywords" content="wallhaven, wallhaven app, wallhaven desktop, wallhaven client, wallpaper manager, wallpaper changer, wallpaper rotation, wallpaper daemon, desktop wallpaper, auto wallpaper, ai wallpaper, mcp server wallpaper, hyprland wallpaper, sway wallpaper, wayland wallpaper, macos wallpaper, linux wallpaper, swww alternative, variety alternative, nitrogen alternative">
 <link rel="canonical" href="https://yuukidach.github.io/wayper/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://yuukidach.github.io/wayper/">
-<meta property="og:title" content="wayper — Wallhaven Desktop App & Wallpaper Manager">
-<meta property="og:description" content="Desktop wallpaper manager for Wallhaven. Auto-download, rotate, and manage wallpapers with GUI, CLI, and AI control.">
-<meta property="og:image" content="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/icon-512.png">
+<meta property="og:title" content="wayper — Wallhaven Client & AI Wallpaper Manager for Linux & macOS">
+<meta property="og:description" content="The wallpaper manager that learns what you like. Wallhaven integration, AI-native control, keyboard-driven GUI. macOS and Linux.">
+<meta property="og:image" content="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="wayper — Wallhaven Desktop App & Wallpaper Manager">
-<meta name="twitter:description" content="Desktop wallpaper manager for Wallhaven. Auto-download, rotate, and manage wallpapers with GUI, CLI, and AI control.">
-<meta name="twitter:image" content="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/icon-512.png">
+<meta name="twitter:title" content="wayper — Wallhaven Client & AI Wallpaper Manager for Linux & macOS">
+<meta name="twitter:description" content="The wallpaper manager that learns what you like. Wallhaven integration, AI-native control, keyboard-driven GUI. macOS and Linux.">
+<meta name="twitter:image" content="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -23,7 +23,7 @@
   "name": "wayper",
   "applicationCategory": "DesktopEnhancement",
   "operatingSystem": "macOS, Linux",
-  "description": "Desktop wallpaper manager for Wallhaven. Auto-download, rotate, and manage wallpapers with GUI, CLI, and AI control.",
+  "description": "The wallpaper manager that learns what you like. Wallhaven integration, AI-native control, keyboard-driven GUI. macOS and Linux.",
   "url": "https://yuukidach.github.io/wayper/",
   "downloadUrl": "https://github.com/yuukidach/wayper/releases",
   "license": "https://opensource.org/licenses/MIT",
@@ -262,7 +262,7 @@ footer .links a { color: var(--subtext); }
     </svg>
     <h1>wayper</h1>
   </div>
-  <p class="tagline">Wallhaven desktop app &mdash; auto-download, rotate, and manage wallpapers with AI-native control.</p>
+  <p class="tagline">The wallpaper manager that learns what you like. Wallhaven integration, AI-native, keyboard-driven.</p>
   <div class="badges">
     <a href="https://github.com/yuukidach/wayper"><img src="https://img.shields.io/github/stars/yuukidach/wayper?style=flat&color=89b4fa&labelColor=313244&logo=github" alt="GitHub stars"></a>
     <a href="https://github.com/yuukidach/wayper/blob/main/LICENSE"><img src="https://img.shields.io/github/license/yuukidach/wayper?style=flat&color=a6e3a1&labelColor=313244" alt="License"></a>
@@ -284,41 +284,41 @@ footer .links a { color: var(--subtext); }
 <section id="features">
   <h2>Features</h2>
   <div class="features">
+    <div class="feature" style="border-color: var(--blue);">
+      <strong style="color: var(--blue);">Learns from you</strong>
+      <p>Dislike a wallpaper and wayper analyzes the pattern. AI suggests what to exclude next, with iterative feedback tracking.</p>
+    </div>
+    <div class="feature" style="border-color: var(--teal);">
+      <strong style="color: var(--teal);">AI-native (MCP)</strong>
+      <p>Tell Claude "switch to something with mountains" — it just works. First wallpaper manager with native AI assistant integration.</p>
+    </div>
+    <div class="feature" style="border-color: var(--mauve);">
+      <strong style="color: var(--mauve);">Keyboard-driven</strong>
+      <p>Every action has a shortcut. Grid navigation, lightbox, favorites, settings — fully operable without a mouse.</p>
+    </div>
     <div class="feature">
-      <strong>Wallhaven</strong>
-      <p>Auto-downloads wallpapers based on your preferences. Browse and search Wallhaven online from the GUI.</p>
+      <strong>Wallhaven client</strong>
+      <p>Auto-downloads wallpapers based on your preferences. Browse and search Wallhaven directly from the GUI.</p>
     </div>
     <div class="feature">
       <strong>Auto orientation</strong>
-      <p>Portrait monitors get portrait wallpapers. No manual sorting.</p>
-    </div>
-    <div class="feature">
-      <strong>Pool management</strong>
-      <p>Validates, resizes, rotates. Favorites, blacklist, history navigation — all built in.</p>
+      <p>Portrait monitors get portrait wallpapers. No manual sorting needed.</p>
     </div>
     <div class="feature">
       <strong>Three-tier purity</strong>
       <p>SFW, Sketchy, NSFW — independently toggleable. Persistent across sessions.</p>
     </div>
     <div class="feature">
-      <strong>Smart tag suggestions</strong>
-      <p>Analyzes your dislikes to find tags you keep blocking. Preview matches, then exclude with one click. Related tags are automatically suppressed.</p>
+      <strong>Cross-platform</strong>
+      <p>macOS and Linux (Hyprland/Sway). CLI + GUI + MCP — pick your interface.</p>
     </div>
     <div class="feature">
-      <strong>Cross-platform GUI</strong>
-      <p>Browse, preview, search by tags, and manage your collection. Works on Linux and macOS.</p>
-    </div>
-    <div class="feature">
-      <strong>Keyboard-driven</strong>
-      <p>Every action has a shortcut. Grid navigation, lightbox preview, favorites — no mouse required.</p>
-    </div>
-    <div class="feature">
-      <strong>AI-native</strong>
-      <p>Built-in MCP server for Claude Code and other assistants.</p>
+      <strong>Pool management</strong>
+      <p>Validates, resizes, rotates. Favorites, blacklist, history navigation — all built in.</p>
     </div>
     <div class="feature">
       <strong>JSON output</strong>
-      <p><code>--json</code> flag on every command for scripting.</p>
+      <p><code>--json</code> flag on every command for scripting and automation.</p>
     </div>
   </div>
 </section>
