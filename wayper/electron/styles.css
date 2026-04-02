@@ -669,6 +669,18 @@ main {
   }
 }
 
+@keyframes card-exit {
+  to {
+    opacity: 0;
+    transform: scale(0.94) translateY(6px);
+  }
+}
+
+.wallpaper-card.removing {
+  animation: card-exit 0.25s cubic-bezier(0.4, 0, 1, 1) forwards;
+  pointer-events: none;
+}
+
 .wallpaper-card:hover,
 .wallpaper-card:focus-visible {
   transform: translateY(-4px) scale(1.02);

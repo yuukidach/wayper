@@ -1047,15 +1047,90 @@ function updateSearchCount() {
     els.searchCount.classList.remove('hidden');
 }
 
-function applySearchFilter() {
+function applySearchFilter(preserveFocus = false) {
     if (appState.searchMatches) {
         appState.images = appState.allImages.filter(img => appState.searchMatches.has(img.name));
         console.log('[filter]', appState.allImages.length, '→', appState.images.length, 'images (mode:', appState.mode + ')');
     } else {
         appState.images = [...appState.allImages];
     }
-    els.mainContent.scrollTop = 0;
-    renderImages();
+
+    if (!preserveFocus || appState.mode === 'trash') {
+        els.mainContent.scrollTop = 0;
+        renderImages();
+        return;
+    }
+
+    // --- Diff-based update: only add/remove changed cards, never touch existing ones ---
+
+    const existingCards = new Map();
+    for (const card of [...els.wallpaperGrid.querySelectorAll('.wallpaper-card')]) {
+        existingCards.set(card.dataset.path, card);
+    }
+
+    // First render — nothing to diff against
+    if (existingCards.size === 0) {
+        renderImages();
+        return;
+    }
+
+    const newPaths = new Set(appState.images.map(img => img.path));
+
+    // Remove cards for images no longer present (animated)
+    for (const [path, card] of existingCards) {
+        if (!newPaths.has(path)) {
+            if (document.activeElement === card) {
+                const neighbor = card.nextElementSibling?.classList?.contains('wallpaper-card')
+                    ? card.nextElementSibling
+                    : card.previousElementSibling?.classList?.contains('wallpaper-card')
+                        ? card.previousElementSibling : null;
+                if (neighbor) neighbor.focus({ preventScroll: true });
+            }
+            card.classList.add('removing');
+            card.addEventListener('animationend', () => card.remove(), { once: true });
+            existingCards.delete(path);
+        }
+    }
+
+    // Insert new cards at correct positions in the new order
+    const renderUpTo = Math.min(
+        Math.max(appState.currentBatchIndex, existingCards.size),
+        appState.images.length,
+    );
+
+    if (sentinel.parentNode) sentinel.remove();
+
+    let ref = els.wallpaperGrid.firstElementChild;
+    for (let i = 0; i < renderUpTo; i++) {
+        const img = appState.images[i];
+        if (existingCards.has(img.path)) {
+            // Card exists — advance ref pointer if it matches
+            if (ref?.dataset?.path === img.path) {
+                ref = ref.nextElementSibling;
+                while (ref && !ref.classList?.contains('wallpaper-card')) ref = ref.nextElementSibling;
+            }
+        } else {
+            // New image — insert at this position
+            const card = createCard(img);
+            if (ref) {
+                els.wallpaperGrid.insertBefore(card, ref);
+            } else {
+                els.wallpaperGrid.appendChild(card);
+            }
+        }
+    }
+
+    appState.currentBatchIndex = renderUpTo;
+
+    if (appState.currentBatchIndex < appState.images.length) {
+        els.wallpaperGrid.appendChild(sentinel);
+        observer.observe(sentinel);
+    } else {
+        observer.unobserve(sentinel);
+    }
+
+    if (!document.querySelector('.wallpaper-card.current')) markCurrentWallpaper();
+    setTimeout(updateGridMetrics, 100);
 }
 
 function renderSearchSuggestions(suggestions) {
@@ -1304,7 +1379,7 @@ async function fetchStatus() {
                     : appState.mode === 'trash' ? 'blocklist_count' : 'pool_count';
                 if (data[countKey] !== prev[countKey]) {
                     console.log('[status] triggering refreshImages for', countKey);
-                    refreshImages();
+                    refreshImages(true);
                 }
             }
         }
@@ -1342,7 +1417,7 @@ async function fetchMonitors() {
     } catch (e) { console.error(e); }
 }
 
-async function refreshImages() {
+async function refreshImages(preserveFocus = false) {
     if (!appState.selectedMonitor) return;
 
     appState.refreshing = true;
@@ -1362,7 +1437,7 @@ async function refreshImages() {
             appState.allImages = await imgRes.json();
             appState.status = statusData;
             updateStatusUI();
-            applySearchFilter();
+            applySearchFilter(preserveFocus);
         } catch (e) { console.error(e); }
     } else {
         try {
@@ -1379,7 +1454,7 @@ async function refreshImages() {
             console.log('[refresh] done', appState.mode, orient,
                 'pool:', statusData.pool_count, 'fav:', statusData.favorites_count);
             updateStatusUI();
-            applySearchFilter();
+            applySearchFilter(preserveFocus);
         } catch (e) { console.error(e); }
     }
     appState.refreshing = false;
