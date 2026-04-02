@@ -103,6 +103,7 @@ const els = {
     btnNext: document.getElementById('btn-next'),
     btnUndo: document.getElementById('btn-undo'),
     btnFav: document.getElementById('btn-fav-current'),
+    btnLocate: document.getElementById('btn-locate-current'),
     btnDislike: document.getElementById('btn-dislike-current'),
 
     btnPool: document.getElementById('btn-pool'),
@@ -183,6 +184,7 @@ function setupEventListeners() {
     els.btnNext.onclick = () => controlAction('next');
     els.btnUndo.onclick = () => undoDislike();
     els.btnFav.onclick = () => controlAction('fav');
+    els.btnLocate.onclick = () => scrollToCurrentWallpaper();
     els.btnDislike.onclick = () => controlAction('dislike');
 
     // Sidebar: Library
@@ -329,6 +331,9 @@ function handleGlobalKeydown(e) {
             break;
         case 'z':
             undoDislike();
+            break;
+        case 'g':
+            scrollToCurrentWallpaper();
             break;
         case '1':
             setViewMode('pool');
@@ -1316,6 +1321,7 @@ async function fetchMonitors() {
         }
 
         renderMonitors();
+        markCurrentWallpaper();
     } catch (e) { console.error(e); }
 }
 
@@ -1414,6 +1420,44 @@ function updateStatusUI() {
         els.btnDaemon.innerText = 'Start Daemon';
         els.btnDaemon.classList.remove('danger');
         els.btnDaemon.classList.add('primary'); // Encourage starting
+    }
+}
+
+function markCurrentWallpaper() {
+    const prev = document.querySelector('.wallpaper-card.current');
+    if (prev) prev.classList.remove('current');
+    const monitor = appState.monitors.find(m => m.name === appState.selectedMonitor);
+    if (!monitor?.current_image) return;
+    const card = document.querySelector(`.wallpaper-card[data-path="${CSS.escape(monitor.current_image)}"]`);
+    if (card) card.classList.add('current');
+}
+
+function scrollToCurrentWallpaper() {
+    let card = document.querySelector('.wallpaper-card.current');
+    if (!card) {
+        // Card not rendered yet — find its index and render up to that batch
+        const monitor = appState.monitors.find(m => m.name === appState.selectedMonitor);
+        if (!monitor?.current_image) return;
+        const targetIdx = appState.images.findIndex(img => img.path === monitor.current_image);
+        if (targetIdx < 0) return;
+        const targetEnd = Math.min(targetIdx + appState.batchSize, appState.images.length);
+        if (sentinel.parentNode) sentinel.remove();
+        const fragment = document.createDocumentFragment();
+        while (appState.currentBatchIndex < targetEnd && appState.currentBatchIndex < appState.images.length) {
+            fragment.appendChild(createCard(appState.images[appState.currentBatchIndex]));
+            appState.currentBatchIndex++;
+        }
+        els.wallpaperGrid.appendChild(fragment);
+        if (appState.currentBatchIndex < appState.images.length) {
+            els.wallpaperGrid.appendChild(sentinel);
+            observer.observe(sentinel);
+        }
+        markCurrentWallpaper();
+        card = document.querySelector('.wallpaper-card.current');
+    }
+    if (card) {
+        card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        card.focus({ preventScroll: true });
     }
 }
 
@@ -1898,6 +1942,7 @@ function renderNextBatch() {
 
     els.wallpaperGrid.appendChild(fragment);
     appState.currentBatchIndex = end;
+    if (!document.querySelector('.wallpaper-card.current')) markCurrentWallpaper();
 
     if (appState.currentBatchIndex < appState.images.length) {
         els.wallpaperGrid.appendChild(sentinel);

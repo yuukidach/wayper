@@ -64,7 +64,7 @@ _cached_mtime: float = 0
 
 
 def get_config() -> WayperConfig:
-    """Return cached config, reloading only when the file changes on disk."""
+    """Return cached config, reloading when file changes. Monitors are auto-detected."""
     global _cached_config, _cached_mtime
     from wayper.config import CONFIG_FILE
 
@@ -75,6 +75,14 @@ def get_config() -> WayperConfig:
     if _cached_config is None or mtime != _cached_mtime:
         _cached_config = load_config()
         _cached_mtime = mtime
+    else:
+        # Refresh monitors (backend caches until display change event)
+        try:
+            from wayper.backend import detect_monitors
+
+            _cached_config.monitors = detect_monitors()
+        except Exception:
+            pass
     return _cached_config
 
 

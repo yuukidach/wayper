@@ -127,14 +127,6 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
     lines.append(f"pause_on_lock = {str(config.pause_on_lock).lower()}")
     lines.append(f"safe_mode = {str(config.safe_mode).lower()}")
 
-    for m in config.monitors:
-        lines.append("")
-        lines.append("[[monitors]]")
-        lines.append(f'name = "{_esc(m.name)}"')
-        lines.append(f"width = {m.width}")
-        lines.append(f"height = {m.height}")
-        lines.append(f'orientation = "{m.orientation}"')
-
     wh = config.wallhaven
     lines.append("")
     lines.append("[wallhaven]")
@@ -181,17 +173,13 @@ def load_config(path: Path | None = None) -> WayperConfig:
     if path.exists():
         raw = tomllib.loads(path.read_text())
 
-    monitors = [MonitorConfig(**m) for m in raw.get("monitors", [])]
+    # Always auto-detect monitors; fall back to config if detection fails
+    try:
+        from .backend import detect_monitors
 
-    if not monitors:
-        # Auto-detect monitors if none are configured
-        try:
-            from .backend import detect_monitors
-
-            monitors = detect_monitors()
-        except Exception:
-            # Fallback to empty list if detection fails (e.g. headless, missing deps)
-            pass
+        monitors = detect_monitors()
+    except Exception:
+        monitors = [MonitorConfig(**m) for m in raw.get("monitors", [])]
 
     wallhaven_raw = raw.get("wallhaven", {})
     wallhaven = WallhavenConfig(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import os
 import sys
+import time
 from pathlib import Path
 
 from ..config import MonitorConfig, TransitionConfig, WayperConfig
@@ -52,6 +53,27 @@ def _create_backend() -> WallpaperBackend:
 _backend = _create_backend()
 
 
+def _setup_display_listener() -> None:
+    """Register platform-specific display change listener to invalidate monitor cache."""
+    global _has_display_listener
+    if sys.platform == "darwin":
+        try:
+            import Quartz
+
+            def _on_display_change(_display, _flags, _userinfo):
+                # Skip the "begin" phase — only invalidate once reconfiguration is complete
+                if not (_flags & Quartz.kCGDisplayBeginConfigurationFlag):
+                    _invalidate_monitors()
+
+            Quartz.CGDisplayRegisterReconfigurationCallback(_on_display_change, None)
+            _has_display_listener = True
+        except (ImportError, AttributeError):
+            pass
+
+
+_setup_display_listener()
+
+
 # ── Module-level functions for backward compatibility ──
 
 
@@ -67,9 +89,29 @@ def query_current() -> dict[str, Path | None]:
     return _backend.query_current()
 
 
+_monitors_cache: list[MonitorConfig] = []
+_monitors_dirty = True
+_monitors_cache_at: float = 0
+_has_display_listener = False
+
+
+def _invalidate_monitors() -> None:
+    """Mark monitor cache as stale (called by platform-specific display change listeners)."""
+    global _monitors_dirty
+    _monitors_dirty = True
+
+
 def detect_monitors() -> list[MonitorConfig]:
-    """Detect current monitor configuration."""
-    return _backend.detect_monitors()
+    """Detect current monitor configuration, cached until invalidated."""
+    global _monitors_cache, _monitors_dirty, _monitors_cache_at
+    # Event-driven invalidation (macOS) or periodic fallback (Linux)
+    if not _monitors_dirty and _monitors_cache:
+        if _has_display_listener or time.monotonic() - _monitors_cache_at < 10:
+            return _monitors_cache
+    _monitors_dirty = False
+    _monitors_cache = _backend.detect_monitors()
+    _monitors_cache_at = time.monotonic()
+    return _monitors_cache
 
 
 def get_context(config: WayperConfig) -> tuple[str | None, MonitorConfig | None, Path | None]:
