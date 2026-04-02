@@ -189,17 +189,30 @@ header {
   border-bottom: 1px solid rgba(69, 71, 90, 0.3);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
   -webkit-app-region: drag;
   z-index: 100;
   flex-shrink: 0;
 }
 
-.brand {
+.header-brand {
+  width: 220px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
+  padding: 0 12px;
+  border-right: 1px solid rgba(69, 71, 90, 0.3);
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.header-content {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  min-width: 0;
+  gap: 12px;
 }
 
 h1 {
@@ -1702,8 +1715,7 @@ footer {
   position: relative;
   flex: 1;
   max-width: 400px;
-  min-width: 200px;
-  margin: 0 16px;
+  min-width: 160px;
   -webkit-app-region: no-drag;
 }
 

@@ -69,7 +69,7 @@ uv venv && uv pip install -e .
 |-----|--------|-----|--------|
 | `1` `2` `3` | Pool / Favorites / Blocklist | `F1` `F2` `F3` | Toggle SFW / Sketchy / NSFW |
 | `h` / `l` | Prev / Next wallpaper | `f` | Favorite (focused card or current) |
-| `x` / `Del` | Dislike / Remove | `z` | Undo dislike |
+| `x` / `Del` | Ban / Remove | `u` | Undo ban |
 | `o` | Open on Wallhaven | `s` | Settings |
 | `/` | Focus search bar | `Esc` | Clear search / Unfocus |
 | `Enter` / `Space` | Preview (lightbox) | Arrow keys | Navigate grid |

@@ -331,7 +331,7 @@ function handleGlobalKeydown(e) {
         case 'o':
             { const img = focusedCardImage(); if (img) openWallhavenUrl(img.name); }
             break;
-        case 'z':
+        case 'u':
             undoDislike();
             break;
         case 'g':
