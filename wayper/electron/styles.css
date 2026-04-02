@@ -232,6 +232,13 @@ h1 {
   margin-left: 2px;
 }
 
+@media (max-width: 720px) {
+  .controls .label,
+  .controls kbd {
+    display: none;
+  }
+}
+
 .divider {
   width: 1px;
   height: 18px;
