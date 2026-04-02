@@ -601,7 +601,8 @@ main {
 .wallpaper-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px;
+  column-gap: 12px;
+  row-gap: 18px;
   padding: 16px;
 }
 
@@ -609,6 +610,7 @@ main {
 
 .wallpaper-card {
   position: relative;
+  z-index: 1;
   border-radius: 10px;
   overflow: hidden;
   background-color: var(--mantle);
@@ -624,9 +626,8 @@ main {
   animation: card-enter 0.4s cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 
-/* Portrait images still show as 16:9 in grid — full image visible in lightbox */
 .wallpaper-card.portrait {
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 9 / 16;
 }
 
 .wallpaper-card img {
@@ -675,6 +676,7 @@ main {
   z-index: 5;
   outline: none;
 }
+
 
 .wallpaper-card:focus-visible {
   box-shadow: 0 0 0 2px var(--crust), 0 0 0 4px var(--blue);

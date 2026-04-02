@@ -456,7 +456,9 @@ function navigateGrid(direction) {
         return;
     }
 
-    const cols = appState.gridColumns || 1;
+    // Read actual column count from CSS grid computed style
+    const gridStyle = getComputedStyle(els.wallpaperGrid);
+    const cols = gridStyle.gridTemplateColumns.split(' ').length || 1;
     let nextIndex = index;
 
     switch(direction) {
