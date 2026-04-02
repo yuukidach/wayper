@@ -52,6 +52,8 @@ class GreeterConfig:
 @dataclass
 class WayperConfig:
     api_key: str = ""
+    wallhaven_username: str = ""
+    wallhaven_password: str = ""
     proxy: str | None = None
     download_dir: Path = field(default_factory=lambda: Path.home() / "Pictures" / "wallpaper")
     interval: int = 300
@@ -118,6 +120,10 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
     lines: list[str] = []
 
     lines.append(f'api_key = "{_esc(config.api_key)}"')
+    if config.wallhaven_username:
+        lines.append(f'wallhaven_username = "{_esc(config.wallhaven_username)}"')
+    if config.wallhaven_password:
+        lines.append(f'wallhaven_password = "{_esc(config.wallhaven_password)}"')
     if config.proxy:
         lines.append(f'proxy = "{_esc(config.proxy)}"')
     lines.append(f'download_dir = "{_esc(dl)}"')
@@ -215,6 +221,8 @@ def load_config(path: Path | None = None) -> WayperConfig:
 
     return WayperConfig(
         api_key=raw.get("api_key", ""),
+        wallhaven_username=raw.get("wallhaven_username", ""),
+        wallhaven_password=raw.get("wallhaven_password", ""),
         proxy=raw.get("proxy"),
         download_dir=download_dir,
         interval=raw.get("interval", 300),

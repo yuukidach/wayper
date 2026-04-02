@@ -29,6 +29,8 @@ from .wallhaven import WallhavenClient
 
 log = logging.getLogger("wayper")
 
+FAV_SYNC_INTERVAL = 12  # sync remote favorites every ~12 rotation cycles
+
 _change_now = False
 _reload_mode = False
 _wake: asyncio.Event | None = None
@@ -174,17 +176,19 @@ async def run_daemon(config: WayperConfig) -> None:
 
     client = WallhavenClient(config)
     greeter_count = 0
+    fav_sync_count = FAV_SYNC_INTERVAL  # trigger sync on first cycle
 
     async def reload_config_if_needed() -> None:
         """Reload config and replace client if SIGHUP was received."""
         global _reload_config
-        nonlocal config, client
+        nonlocal config, client, fav_sync_count
         if not _reload_config:
             return
         _reload_config = False
         config = load_config()
         old, client = client, WallhavenClient(config)
         await old.close()
+        fav_sync_count = FAV_SYNC_INTERVAL  # trigger sync on next cycle
         log.info("Configuration reloaded")
 
     try:
@@ -231,6 +235,14 @@ async def run_daemon(config: WayperConfig) -> None:
 
             enforce_quota(config)
             prune_blacklist(config)
+
+            fav_sync_count += 1
+            if fav_sync_count >= FAV_SYNC_INTERVAL:
+                _, remote_files = await client.sync_remote_favorites()
+                from .wallhaven import push_local_favorites
+
+                await asyncio.to_thread(push_local_favorites, config, remote_files)
+                fav_sync_count = 0
 
             # Greeter update
             greeter_count += 1

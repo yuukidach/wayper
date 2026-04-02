@@ -20,7 +20,7 @@ Most wallpaper tools stop at "set image on desktop." wayper is a full **Wallhave
 
 **What makes it different:**
 
-- **Learns from you** — dislike a wallpaper and wayper analyzes the pattern. AI-powered tag analysis suggests what to exclude next, with iterative feedback tracking across sessions.
+- **Learns from you** — ban a wallpaper and wayper analyzes the pattern. AI-powered tag analysis suggests what to exclude next, with iterative feedback tracking across sessions.
 - **AI-native (MCP)** — built-in [MCP](https://modelcontextprotocol.io/) server. Tell Claude *"switch to something with mountains"* or *"favorite this one"* — it just works. First wallpaper manager with native AI assistant integration.
 - **Keyboard-driven GUI** — every single action has a shortcut. Grid navigation, lightbox, favorites, settings — fully operable without a mouse. Built for power users.
 
@@ -58,10 +58,10 @@ uv venv && uv pip install -e .
 
 - **Browse & preview** — grid view with thumbnail caching, lightbox preview, set wallpaper with Enter
 - **Tag search** — search by Wallhaven tags, category, or filename with autocomplete
-- **Smart suggestions** — analyzes dislike patterns to recommend tags to exclude; drill into combo exclusions (e.g., "tattoo + nude") for precise filtering
-- **AI analysis** — Claude-powered deep analysis of dislike patterns with iterative feedback. Click suggested tags to preview matching images
+- **Smart suggestions** — analyzes ban patterns to recommend tags to exclude; drill into combo exclusions (e.g., "tattoo + nude") for precise filtering
+- **AI analysis** — Claude-powered deep analysis of ban patterns with iterative feedback. Click suggested tags to preview matching images
 - **Settings** — configure Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI. Changes apply to the running daemon instantly
-- **Keyboard-driven** — every action has a shortcut: grid navigation, tab switching, lightbox, favorites, dislike, undo
+- **Keyboard-driven** — every action has a shortcut: grid navigation, tab switching, lightbox, favorites, ban, undo
 
 **Grid view:**
 
@@ -97,8 +97,8 @@ wayper next                 # next wallpaper (forward history or new random)
 wayper prev                 # previous wallpaper from history
 wayper fav [--open]         # favorite current wallpaper
 wayper unfav                # remove from favorites
-wayper dislike              # blacklist + switch
-wayper undislike            # undo last dislike
+wayper ban                  # blacklist + switch
+wayper unban                # undo last ban
 wayper mode                 # toggle sfw↔nsfw (preserves sketchy)
 wayper mode sketchy         # toggle sketchy on/off
 wayper mode sfw,sketchy     # set exact purity combination
@@ -115,8 +115,8 @@ wayper --json status        # machine-readable output
 **Hyprland:**
 
 ```ini
-bind = $mod, F9,       exec, wayper dislike
-bind = $mod SHIFT, F9, exec, wayper undislike
+bind = $mod, F9,       exec, wayper ban
+bind = $mod SHIFT, F9, exec, wayper unban
 bind = $mod, F10,      exec, wayper fav
 bind = $mod SHIFT, F10,exec, wayper unfav
 bind = $mod CTRL, F10, exec, wayper fav --open
@@ -131,7 +131,7 @@ exec-once = wayper daemon
 
 ```toml
 cmd-shift-n = 'exec-and-forget wayper next'
-cmd-shift-b = 'exec-and-forget wayper dislike'
+cmd-shift-b = 'exec-and-forget wayper ban'
 cmd-shift-f = 'exec-and-forget wayper fav'
 ```
 
@@ -151,7 +151,7 @@ Add to your Claude Code config (`~/.claude/.mcp.json`):
 }
 ```
 
-Available tools: `status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `unfav` · `dislike` · `undislike` · `set_mode` · `delete_wallpaper`
+Available tools: `status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `unfav` · `ban` · `unban` · `set_mode` · `delete_wallpaper`
 
 ## Config
 

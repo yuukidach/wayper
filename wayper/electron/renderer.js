@@ -10,7 +10,7 @@ function esc(str) {
 const ICONS = {
     setWallpaper: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`,
     favorite: (s = 16, filled = false) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`,
-    dislike: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`,
+    ban: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`,
     restore: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path></svg>`,
     externalLink: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`,
     chevronLeft: (s = 24) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>`,
@@ -104,7 +104,7 @@ const els = {
     btnUndo: document.getElementById('btn-undo'),
     btnFav: document.getElementById('btn-fav-current'),
     btnLocate: document.getElementById('btn-locate-current'),
-    btnDislike: document.getElementById('btn-dislike-current'),
+    btnBan: document.getElementById('btn-ban-current'),
 
     btnPool: document.getElementById('btn-pool'),
     btnFavorites: document.getElementById('btn-favorites'),
@@ -182,10 +182,10 @@ function setupEventListeners() {
     // Top Controls
     els.btnPrev.onclick = () => controlAction('prev');
     els.btnNext.onclick = () => controlAction('next');
-    els.btnUndo.onclick = () => undoDislike();
+    els.btnUndo.onclick = () => undoBan();
     els.btnFav.onclick = () => controlAction('fav');
     els.btnLocate.onclick = () => scrollToCurrentWallpaper();
-    els.btnDislike.onclick = () => controlAction('dislike');
+    els.btnBan.onclick = () => controlAction('ban');
 
     // Sidebar: Library
     els.btnPool.onclick = () => setViewMode('pool');
@@ -280,7 +280,7 @@ function handleGlobalKeydown(e) {
                 return;
             case 'x':
             case 'Delete':
-                if (lightboxImg) { dislikeImage(lightboxImg.path); closeLightbox(); }
+                if (lightboxImg) { banImage(lightboxImg.path); closeLightbox(); }
                 return;
             case 'o':
                 if (lightboxImg) openWallhavenUrl(lightboxImg.name);
@@ -323,16 +323,16 @@ function handleGlobalKeydown(e) {
         case 'x':
         case 'Delete':
             if (focusedCard) {
-                dislikeImage(focusedCard.dataset.path);
+                banImage(focusedCard.dataset.path);
             } else {
-                controlAction('dislike');
+                controlAction('ban');
             }
             break;
         case 'o':
             { const img = focusedCardImage(); if (img) openWallhavenUrl(img.name); }
             break;
         case 'u':
-            undoDislike();
+            undoBan();
             break;
         case 'g':
             if (_pendingG) {
@@ -531,6 +531,22 @@ function populateSettingsForm() {
     const apiKeyInput = document.getElementById('input-api-key');
     apiKeyInput.value = '';
     apiKeyInput.placeholder = c.has_api_key ? '••••••••••••••••' : 'Your Wallhaven API key';
+
+    // Wallhaven account
+    document.getElementById('input-wh-username').value = c.wallhaven_username || '';
+    const whPwdInput = document.getElementById('input-wh-password');
+    whPwdInput.value = '';
+    whPwdInput.placeholder = c.has_wh_password ? '••••••••••••••••' : 'Password';
+
+    // Blacklist TTL
+    const ttlInput = document.getElementById('input-blacklist-ttl');
+    const neverCheckbox = document.getElementById('input-blacklist-never');
+    if (ttlInput) {
+        ttlInput.value = c.blacklist_ttl_days === 0 ? '' : (c.blacklist_ttl_days || 30);
+        neverCheckbox.checked = c.blacklist_ttl_days === 0;
+        ttlInput.disabled = c.blacklist_ttl_days === 0;
+        neverCheckbox.onchange = () => { ttlInput.disabled = neverCheckbox.checked; };
+    }
 }
 
 function renderExcludeTags(tags) {
@@ -752,9 +768,22 @@ async function saveSettings() {
         safe_mode: document.getElementById('input-safe-mode').checked,
     };
 
-    // Only send api_key if user entered a new value
+    // Only send credentials if user entered a new value
     const apiKeyVal = document.getElementById('input-api-key').value;
     if (apiKeyVal) updates.api_key = apiKeyVal;
+
+    const whUsername = document.getElementById('input-wh-username').value.trim();
+    updates.wallhaven_username = whUsername;
+    const whPwdVal = document.getElementById('input-wh-password').value;
+    if (whPwdVal) updates.wallhaven_password = whPwdVal;
+
+    // Blacklist TTL: 0 = never expire
+    const neverExpire = document.getElementById('input-blacklist-never')?.checked;
+    if (neverExpire) {
+        updates.blacklist_ttl_days = 0;
+    } else {
+        updates.blacklist_ttl_days = parseInt(document.getElementById('input-blacklist-ttl').value) || 30;
+    }
 
     updates.wallhaven = {
         categories: document.getElementById('input-categories').value,
@@ -946,7 +975,7 @@ async function toggleFavoriteImage(path) {
     }
 }
 
-async function dislikeImage(path) {
+async function banImage(path) {
     removeImageFromState(path);
     // Update local counts so fetchStatus won't detect a "change" and trigger full refresh
     if (appState.status) {
@@ -957,21 +986,21 @@ async function dislikeImage(path) {
         updateStatusUI();
     }
     try {
-        await fetch(`${API_URL}/api/image/dislike`, {
+        await fetch(`${API_URL}/api/image/ban`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ image_path: path })
         });
         setTimeout(fetchMonitors, 500);
     } catch (e) {
-        console.error("Dislike failed", e);
+        console.error("Ban failed", e);
         refreshImages();
     }
 }
 
-async function undoDislike() {
+async function undoBan() {
     try {
-        await controlAction('undislike');
+        await controlAction('unban');
         // Refresh grid to show restored image
         refreshImages();
     } catch (e) {
@@ -1717,7 +1746,7 @@ function renderBlocklistView() {
         });
         const countEl = document.createElement('span');
         countEl.className = 'review-bar-count';
-        countEl.textContent = `${s.count} disliked`;
+        countEl.textContent = `${s.count} banned`;
         textSpan.appendChild(countEl);
         bar.appendChild(textSpan);
         const actions = document.createElement('div');
@@ -2141,7 +2170,7 @@ function createCard(img) {
             <div class="overlay">
                 <button class="action-btn" title="Set Wallpaper">${ICONS.setWallpaper()}</button>
                 <button class="action-btn fav ${img.is_favorite ? 'active' : ''}" title="Favorite">${ICONS.favorite(16, img.is_favorite)}</button>
-                <button class="action-btn dislike" title="Dislike">${ICONS.dislike()}</button>
+                <button class="action-btn ban" title="Ban">${ICONS.ban()}</button>
                 <button class="action-btn url" title="Open on Wallhaven">${ICONS.externalLink()}</button>
             </div>
         `;
@@ -2151,7 +2180,7 @@ function createCard(img) {
         const btns = card.querySelectorAll('.action-btn');
         btns[0].onclick = (e) => { e.stopPropagation(); setWallpaper(img.path); };
         btns[1].onclick = (e) => { e.stopPropagation(); toggleFavoriteImage(img.path); };
-        btns[2].onclick = (e) => { e.stopPropagation(); dislikeImage(img.path); };
+        btns[2].onclick = (e) => { e.stopPropagation(); banImage(img.path); };
         btns[3].onclick = (e) => { e.stopPropagation(); openWallhavenUrl(img.name); };
     }
 
@@ -2190,8 +2219,8 @@ function showLightbox(img) {
                 <button class="lb-btn" data-action="fav" title="Favorite (F)">
                     ${ICONS.favorite(18)}<span>Fav</span><kbd>F</kbd>
                 </button>
-                <button class="lb-btn" data-action="dislike" title="Dislike (X)">
-                    ${ICONS.dislike(18)}<span>Dislike</span><kbd>X</kbd>
+                <button class="lb-btn" data-action="ban" title="Ban (X)">
+                    ${ICONS.ban(18)}<span>Ban</span><kbd>X</kbd>
                 </button>
             `}
             <div class="lb-spacer"></div>
@@ -2199,7 +2228,7 @@ function showLightbox(img) {
                 ${ICONS.externalLink(18)}<span>Wallhaven</span><kbd>O</kbd>
             </button>
         </div>
-        <button class="lightbox-close" title="Close (Esc)">${ICONS.dislike(20)}</button>
+        <button class="lightbox-close" title="Close (Esc)">${ICONS.ban(20)}</button>
         <button class="lightbox-nav prev" title="Previous image">${ICONS.chevronLeft()}</button>
         <button class="lightbox-nav next" title="Next image">${ICONS.chevronRight()}</button>
     `;
@@ -2220,7 +2249,7 @@ function showLightbox(img) {
             const action = btn.dataset.action;
             if (action === 'set') { setWallpaper(lightboxImg.path); closeLightbox(); }
             else if (action === 'fav') { toggleFavoriteImage(lightboxImg.path); closeLightbox(); }
-            else if (action === 'dislike') { dislikeImage(lightboxImg.path); closeLightbox(); }
+            else if (action === 'ban') { banImage(lightboxImg.path); closeLightbox(); }
             else if (action === 'restore') { restoreImage(lightboxImg.path); closeLightbox(); }
             else if (action === 'url') { openWallhavenUrl(lightboxImg.name); }
         };

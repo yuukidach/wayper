@@ -9,7 +9,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .backend import get_context, notify, query_current
 from .config import load_config
-from .core import do_dislike, do_fav, do_next, do_prev, do_undislike, do_unfav
+from .core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
 from .daemon import is_daemon_running, signal_daemon
 from .pool import (
     add_to_blacklist,
@@ -112,23 +112,23 @@ def unfav() -> dict:
 
 
 @mcp.tool()
-def dislike() -> dict:
-    """Blacklist the current wallpaper and switch to a new one."""
+def ban() -> dict:
+    """Ban the current wallpaper: blacklist and switch to a new one."""
     config = _config()
-    result = do_dislike(config)
+    result = do_ban(config)
     if not result.ok:
         return {"error": result.error}
     if result.status == "is_favorite":
-        return {"error": "Can't dislike a favorite"}
-    notify("Wallpaper", "Disliked")
-    return {"action": "dislike", "image": str(result.image)}
+        return {"error": "Can't ban a favorite"}
+    notify("Wallpaper", "Banned")
+    return {"action": "ban", "image": str(result.image)}
 
 
 @mcp.tool()
-def undislike() -> dict:
-    """Undo the last dislike, restoring the wallpaper from trash."""
+def unban() -> dict:
+    """Undo the last ban, restoring the wallpaper from trash."""
     config = _config()
-    result = do_undislike(config)
+    result = do_unban(config)
     if not result.ok:
         return {"error": result.error}
     if result.status == "nothing_to_undo":
@@ -136,7 +136,7 @@ def undislike() -> dict:
     if result.status == "file_missing":
         return {"status": "file_missing"}
     notify("Wallpaper", f"Restored: {result.image.name if result.image else 'unknown'}")
-    return {"action": "undislike", "image": str(result.image)}
+    return {"action": "unban", "image": str(result.image)}
 
 
 @mcp.tool()

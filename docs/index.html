@@ -286,7 +286,7 @@ footer .links a { color: var(--subtext); }
   <div class="features">
     <div class="feature" style="border-color: var(--blue);">
       <strong style="color: var(--blue);">Learns from you</strong>
-      <p>Dislike a wallpaper and wayper analyzes the pattern. AI suggests what to exclude next, with iterative feedback tracking.</p>
+      <p>Ban a wallpaper and wayper analyzes the pattern. AI suggests what to exclude next, with iterative feedback tracking.</p>
     </div>
     <div class="feature" style="border-color: var(--teal);">
       <strong style="color: var(--teal);">AI-native (MCP)</strong>
@@ -354,8 +354,8 @@ wayper next                 # next wallpaper (forward or new random)
 wayper prev                 # previous wallpaper from history
 wayper fav [--open]         # favorite current wallpaper
 wayper unfav                # remove from favorites
-wayper dislike              # blacklist + switch
-wayper undislike            # undo last dislike
+wayper ban                  # blacklist + switch
+wayper unban                # undo last ban
 wayper mode                 # toggle sfw↔nsfw (preserves sketchy)
 wayper mode sketchy         # toggle sketchy on/off
 wayper mode sfw,sketchy     # set exact purity combination
@@ -371,7 +371,7 @@ wayper --json status        # machine-readable output</code></pre>
     <img src="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png" alt="browse window" loading="lazy">
   </p>
   <p class="gui-desc">
-    <code>wayper-gui</code> — browse your pool, favorites, and disliked wallpapers. Quick actions, daemon control, settings. Designed to be fully operable without a mouse.
+    <code>wayper-gui</code> — browse your pool, favorites, and banned wallpapers. Quick actions, daemon control, settings. Designed to be fully operable without a mouse.
   </p>
   <p class="kbd-label">Grid view</p>
   <div class="kbd-grid kbd-grid-gap">
@@ -379,8 +379,8 @@ wayper --json status        # machine-readable output</code></pre>
     <div><kbd>Enter</kbd> / <kbd>Space</kbd> <span class="label">preview (lightbox)</span></div>
     <div><kbd>h</kbd> / <kbd>l</kbd> <span class="label">prev / next wallpaper</span></div>
     <div><kbd>f</kbd> <span class="label">favorite</span></div>
-    <div><kbd>x</kbd> / <kbd>Del</kbd> <span class="label">dislike / remove</span></div>
-    <div><kbd>z</kbd> <span class="label">undo dislike</span></div>
+    <div><kbd>x</kbd> / <kbd>Del</kbd> <span class="label">ban / remove</span></div>
+    <div><kbd>z</kbd> <span class="label">undo ban</span></div>
     <div><kbd>o</kbd> <span class="label">open on Wallhaven</span></div>
     <div><kbd>F1</kbd> <kbd>F2</kbd> <kbd>F3</kbd> <span class="label">toggle SFW / Sketchy / NSFW</span></div>
     <div><kbd>s</kbd> <span class="label">settings</span></div>
@@ -395,7 +395,7 @@ wayper --json status        # machine-readable output</code></pre>
     <div><kbd>←</kbd> / <kbd>→</kbd> <span class="label">previous / next image</span></div>
     <div><kbd>Enter</kbd> <span class="label">set as wallpaper</span></div>
     <div><kbd>f</kbd> <span class="label">favorite</span></div>
-    <div><kbd>x</kbd> / <kbd>Del</kbd> <span class="label">dislike</span></div>
+    <div><kbd>x</kbd> / <kbd>Del</kbd> <span class="label">ban</span></div>
     <div><kbd>o</kbd> <span class="label">open on Wallhaven</span></div>
     <div><kbd>Space</kbd> / <kbd>Esc</kbd> <span class="label">close lightbox</span></div>
   </div>
@@ -412,7 +412,7 @@ wayper --json status        # machine-readable output</code></pre>
   }
 }</code></pre>
   <p class="mcp-tools">
-    Tools: <code>status</code> <code>next_wallpaper</code> <code>prev_wallpaper</code> <code>fav</code> <code>unfav</code> <code>dislike</code> <code>undislike</code> <code>set_mode</code> <code>delete_wallpaper</code>
+    Tools: <code>status</code> <code>next_wallpaper</code> <code>prev_wallpaper</code> <code>fav</code> <code>unfav</code> <code>ban</code> <code>unban</code> <code>set_mode</code> <code>delete_wallpaper</code>
   </p>
 </section>
 
@@ -424,8 +424,8 @@ wayper --json status        # machine-readable output</code></pre>
     <div class="tab" onclick="switchTab(event, 'tab-aero')">AeroSpace (macOS)</div>
   </div>
   <div id="tab-hypr" class="tab-content active">
-    <pre><code>bind = $mod, F9,       exec, wayper dislike
-bind = $mod SHIFT, F9, exec, wayper undislike
+    <pre><code>bind = $mod, F9,       exec, wayper ban
+bind = $mod SHIFT, F9, exec, wayper unban
 bind = $mod, F10,      exec, wayper fav
 bind = $mod SHIFT, F10,exec, wayper unfav
 bind = $mod CTRL, F10, exec, wayper fav --open
@@ -437,7 +437,7 @@ exec-once = wayper daemon</code></pre>
   </div>
   <div id="tab-aero" class="tab-content">
     <pre><code>cmd-shift-n = 'exec-and-forget wayper next'
-cmd-shift-b = 'exec-and-forget wayper dislike'
+cmd-shift-b = 'exec-and-forget wayper ban'
 cmd-shift-f = 'exec-and-forget wayper fav'</code></pre>
   </div>
 </section>

@@ -1,4 +1,4 @@
-"""Tag exclusion suggestions based on dislike history."""
+"""Tag exclusion suggestions based on ban history."""
 
 from __future__ import annotations
 

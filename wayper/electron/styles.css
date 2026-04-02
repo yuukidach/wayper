@@ -766,7 +766,7 @@ main {
   color: var(--crust);
 }
 
-.action-btn.dislike:hover {
+.action-btn.ban:hover {
   background: var(--red);
   border-color: var(--red);
   color: var(--crust);
@@ -1694,7 +1694,7 @@ footer {
   color: var(--yellow);
 }
 
-.lb-btn[data-action="dislike"]:hover {
+.lb-btn[data-action="ban"]:hover {
   background: rgba(243, 139, 168, 0.1);
   color: var(--red);
 }

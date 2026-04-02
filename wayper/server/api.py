@@ -23,7 +23,7 @@ from wayper.ai_suggestions import (
 )
 from wayper.backend import FileLock, query_current, set_wallpaper
 from wayper.config import WayperConfig, load_config, save_config
-from wayper.core import do_dislike, do_fav, do_next, do_prev, do_undislike, do_unfav
+from wayper.core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
 from wayper.daemon import is_daemon_running, signal_daemon
 from wayper.pool import (
     add_to_blacklist,
@@ -158,6 +158,9 @@ class ConfigResponse(BaseModel):
     pause_on_lock: bool
     safe_mode: bool
     has_api_key: bool
+    has_wh_password: bool
+    wallhaven_username: str
+    blacklist_ttl_days: int
     wallhaven: WallhavenConfigModel
 
 
@@ -188,6 +191,9 @@ def get_config_route():
         "pause_on_lock": config.pause_on_lock,
         "safe_mode": config.safe_mode,
         "has_api_key": bool(config.api_key),
+        "has_wh_password": bool(config.wallhaven_password),
+        "wallhaven_username": config.wallhaven_username,
+        "blacklist_ttl_days": config.blacklist_ttl_days,
         "wallhaven": {
             "categories": config.wallhaven.categories,
             "top_range": config.wallhaven.top_range,
@@ -218,6 +224,13 @@ def update_config_route(updates: dict = Body(...)):
         config.safe_mode = bool(updates["safe_mode"])
     if "api_key" in updates:
         config.api_key = updates["api_key"].strip()
+    if "wallhaven_username" in updates:
+        config.wallhaven_username = updates["wallhaven_username"].strip()
+    if "wallhaven_password" in updates:
+        config.wallhaven_password = updates["wallhaven_password"]
+    if "blacklist_ttl_days" in updates:
+        val = int(updates["blacklist_ttl_days"])
+        config.blacklist_ttl_days = val if val > 0 else 0
 
     if "wallhaven" in updates:
         wh = updates["wallhaven"]
@@ -353,10 +366,10 @@ def control_action(action: str, monitor_name: str | None = Body(None, embed=True
         result = do_fav(config, monitor)
     elif action == "unfav":
         result = do_unfav(config, monitor)
-    elif action == "dislike":
-        result = do_dislike(config, monitor, clear_thumbnail=lambda p: _remove_thumbnail(config, p))
-    elif action == "undislike":
-        result = do_undislike(config, monitor)
+    elif action == "ban":
+        result = do_ban(config, monitor, clear_thumbnail=lambda p: _remove_thumbnail(config, p))
+    elif action == "unban":
+        result = do_unban(config, monitor)
     else:
         raise HTTPException(400, f"Unknown action: {action}")
 
@@ -539,11 +552,21 @@ def favorite_image(req: ActionRequest):
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     img_full.rename(dest)
+
+    if is_fav:
+        from wayper.wallhaven import wallhaven_web_unfav
+
+        wallhaven_web_unfav(config, dest.name)
+    else:
+        from wayper.wallhaven import wallhaven_web_fav
+
+        wallhaven_web_fav(config, dest.name)
+
     return {"status": "ok", "new_path": str(dest.relative_to(config.download_dir))}
 
 
-@app.post("/api/image/dislike")
-def dislike_image_route(req: ActionRequest):
+@app.post("/api/image/ban")
+def ban_image_route(req: ActionRequest):
     config = get_config()
     img_full = _resolve_image(config, req.image_path)
 
@@ -575,6 +598,10 @@ def dislike_image_route(req: ActionRequest):
         add_to_blacklist(config, img_full.name)
         push_undo(config, img_full.name, img_full.parent)
         _remove_thumbnail(config, req.image_path)
+
+    from wayper.wallhaven import wallhaven_web_unfav
+
+    wallhaven_web_unfav(config, img_full.name)
 
     return {"status": "ok"}
 

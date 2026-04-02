@@ -169,8 +169,11 @@ def remove_from_blacklist(config: WayperConfig, filename: str) -> None:
 
 
 def prune_blacklist(config: WayperConfig) -> None:
-    """Remove blacklist entries older than TTL."""
+    """Remove blacklist entries older than TTL. TTL of 0 means never expire."""
     import time
+
+    if config.blacklist_ttl_days == 0:
+        return
 
     bf = config.blacklist_file
     if not bf.exists():

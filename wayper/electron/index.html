@@ -59,7 +59,7 @@
                 <kbd>U</kbd>
             </button>
             <div class="divider"></div>
-            <button id="btn-dislike-current" class="danger" title="Ban (Block)">
+            <button id="btn-ban-current" class="danger" title="Ban (Block)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"/>
                     <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
@@ -168,6 +168,16 @@
                             </div>
                             <small class="hint">Lock purity to SFW only</small>
                         </div>
+                        <div class="field">
+                            <label for="input-blacklist-ttl">Blacklist Expiry (days)</label>
+                            <div style="display:flex;align-items:center;gap:8px">
+                                <input type="number" id="input-blacklist-ttl" min="1" value="30" style="flex:1">
+                                <label style="white-space:nowrap;font-size:0.85em;display:flex;align-items:center;gap:4px;cursor:pointer">
+                                    <input type="checkbox" id="input-blacklist-never"> Never expire
+                                </label>
+                            </div>
+                            <small class="hint">How long disliked images stay blacklisted</small>
+                        </div>
                     </div>
 
                     <div class="settings-card">
@@ -176,6 +186,15 @@
                             <label for="input-api-key">API Key</label>
                             <input type="password" id="input-api-key" placeholder="Your Wallhaven API key" class="code-font">
                             <small class="hint">Required for NSFW — <a href="#" onclick="window.open('https://wallhaven.cc/settings/account','_blank');return false">get your key</a></small>
+                        </div>
+                        <div class="field">
+                            <label for="input-wh-username">Wallhaven Username</label>
+                            <input type="text" id="input-wh-username" placeholder="Username" class="code-font">
+                        </div>
+                        <div class="field">
+                            <label for="input-wh-password">Wallhaven Password</label>
+                            <input type="password" id="input-wh-password" class="code-font">
+                            <small class="hint">For syncing favorites to your Wallhaven account</small>
                         </div>
                         <div class="field">
                             <label for="input-categories">Categories (General/Anime/People)</label>

@@ -214,7 +214,7 @@ def _build_prompt(
         "2. SIMPLIFY existing combos: if one tag in a combo has 0 Kept AND 0 Favorites, "
         "it MAY be upgradeable to single-tag exclude — but check if the tag crosses "
         "subgroups the user might want to keep (e.g. 'pornstar' spans both Western and Asian)\n"
-        "3. SEMANTIC clusters: group related tags that point to the same dislike pattern "
+        "3. SEMANTIC clusters: group related tags that point to the same ban pattern "
         "(e.g. several AV studio names, or overlapping video game tags)\n"
         "4. OVER-BROAD exclusions: if an excluded tag also has significant Kept/Favorites "
         "presence, the rule is too wide — suggest removing it or replacing with a narrower "
@@ -235,7 +235,7 @@ def _build_prompt(
         parts.append(f"Excluded combos: {'; '.join(' + '.join(c) for c in exclude_combos)}\n")
 
     # Tag frequencies per group
-    for label, key in [("Disliked", "dislike"), ("Favorites", "favorite"), ("Kept", "pool")]:
+    for label, key in [("Banned", "dislike"), ("Favorites", "favorite"), ("Kept", "pool")]:
         group = freq_groups[key]
         count = group["count"]
         tags = group["tags"]
@@ -338,7 +338,7 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
 
     blacklist_entries = list_blacklist(config)
     if not blacklist_entries:
-        raise AISuggestionError("No disliked images. Dislike some wallpapers first.")
+        raise AISuggestionError("No banned images. Ban some wallpapers first.")
 
     blacklisted = {fn for _, fn in blacklist_entries}
     fav_files_set: set[str] = set()
@@ -353,7 +353,7 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
 
     if not freq_groups["dislike"]["tags"]:
         raise AISuggestionError(
-            "No tag metadata found for disliked images. "
+            "No tag metadata found for banned images. "
             "This may happen if images were downloaded before metadata tracking was enabled."
         )
 

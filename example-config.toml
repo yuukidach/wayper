@@ -1,4 +1,6 @@
 api_key = ""  # https://wallhaven.cc/settings/account
+# wallhaven_username = ""  # for syncing favorites to wallhaven.cc
+# wallhaven_password = ""
 # proxy = "http://127.0.0.1:7897"
 download_dir = "~/Pictures/wallpaper"
 interval = 300         # seconds between rotations

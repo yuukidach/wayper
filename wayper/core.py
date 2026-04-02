@@ -123,6 +123,10 @@ def do_fav(
         img.rename(dest)
         set_wallpaper(monitor, dest, NO_TRANSITION)
 
+    from .wallhaven import wallhaven_web_fav
+
+    wallhaven_web_fav(config, dest.name)
+
     if open_url:
         import webbrowser
 
@@ -150,19 +154,23 @@ def do_unfav(config: WayperConfig, monitor: str | None = None) -> CoreResult:
         img.rename(dest)
         set_wallpaper(monitor, dest, NO_TRANSITION)
 
+    from .wallhaven import wallhaven_web_unfav
+
+    wallhaven_web_unfav(config, dest.name)
+
     return CoreResult(action="unfav", monitor=monitor, image=dest)
 
 
-def do_dislike(
+def do_ban(
     config: WayperConfig,
     monitor: str | None = None,
     clear_thumbnail: Callable[[str], None] | None = None,
 ) -> CoreResult:
-    """Dislike current wallpaper: blacklist, trash, switch to next."""
+    """Ban current wallpaper: blacklist, trash, switch to next."""
     with FileLock():
         monitor, mon_cfg, img = _resolve_monitor(config, monitor)
         if not img or not mon_cfg:
-            return CoreResult(action="dislike", ok=False, error="No current wallpaper")
+            return CoreResult(action="ban", ok=False, error="No current wallpaper")
 
         # If in favorites, move back to pool first
         if "favorites" in str(img):
@@ -190,16 +198,20 @@ def do_dislike(
             except ValueError:
                 pass
 
-    log.info("dislike: %s → trashed %s", monitor, img.name)
-    return CoreResult(action="dislike", monitor=monitor, image=img)
+    from .wallhaven import wallhaven_web_unfav
+
+    wallhaven_web_unfav(config, img.name)
+
+    log.info("ban: %s → trashed %s", monitor, img.name)
+    return CoreResult(action="ban", monitor=monitor, image=img)
 
 
-def do_undislike(config: WayperConfig, monitor: str | None = None) -> CoreResult:
-    """Undo the last dislike: restore from trash, remove from blacklist."""
+def do_unban(config: WayperConfig, monitor: str | None = None) -> CoreResult:
+    """Undo the last ban: restore from trash, remove from blacklist."""
     with FileLock():
         entry = pop_undo(config)
         if not entry:
-            return CoreResult(action="undislike", ok=True, status="nothing_to_undo")
+            return CoreResult(action="unban", ok=True, status="nothing_to_undo")
 
         filename, orig_dir = entry
         restored = restore_from_trash(config, filename, orig_dir)
@@ -210,10 +222,10 @@ def do_undislike(config: WayperConfig, monitor: str | None = None) -> CoreResult
                 monitor = get_focused_monitor()
             if monitor:
                 set_wallpaper(monitor, restored, config.transition)
-            return CoreResult(action="undislike", monitor=monitor, image=restored)
+            return CoreResult(action="unban", monitor=monitor, image=restored)
 
         return CoreResult(
-            action="undislike",
+            action="unban",
             ok=True,
             status="file_missing",
             extra={"note": "blacklist entry removed but file not found in trash"},

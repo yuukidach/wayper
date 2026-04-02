@@ -13,7 +13,7 @@ import click
 
 from .backend import notify, query_current
 from .config import load_config
-from .core import do_dislike, do_fav, do_next, do_prev, do_undislike, do_unfav
+from .core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
 from .pool import count_images, favorites_dir, pool_dir, should_download
 from .state import ALL_PURITIES, read_mode, toggle_base, toggle_purity, write_mode
 
@@ -248,12 +248,12 @@ def unfav(ctx):
 
 @cli.command()
 @click.pass_context
-def dislike(ctx):
+def ban(ctx):
     """Blacklist current wallpaper and switch to a new one."""
     config = ctx.obj["config"]
     use_json = ctx.obj["json"]
 
-    result = do_dislike(config)
+    result = do_ban(config)
     if not result.ok:
         if use_json:
             click.echo(json_mod.dumps({"error": result.error}))
@@ -263,42 +263,42 @@ def dislike(ctx):
 
     if result.status == "is_favorite":
         if use_json:
-            click.echo(json_mod.dumps({"action": "dislike", "status": "is_favorite"}))
+            click.echo(json_mod.dumps({"action": "ban", "status": "is_favorite"}))
         else:
-            notify("Wallpaper", "Can't dislike a favorite")
+            notify("Wallpaper", "Can't ban a favorite")
         return
 
     if use_json:
-        click.echo(json_mod.dumps({"action": "dislike", "image": str(result.image)}))
+        click.echo(json_mod.dumps({"action": "ban", "image": str(result.image)}))
     else:
-        notify("Wallpaper", "Disliked")
+        notify("Wallpaper", "Banned")
 
 
 @cli.command()
 @click.pass_context
-def undislike(ctx):
-    """Undo the last dislike."""
+def unban(ctx):
+    """Undo the last ban."""
     config = ctx.obj["config"]
     use_json = ctx.obj["json"]
 
-    result = do_undislike(config)
+    result = do_unban(config)
 
     if result.status == "nothing_to_undo":
         if use_json:
-            click.echo(json_mod.dumps({"action": "undislike", "status": "nothing_to_undo"}))
+            click.echo(json_mod.dumps({"action": "unban", "status": "nothing_to_undo"}))
         else:
             notify("Wallpaper", "Nothing to undo")
         return
 
     if result.status == "file_missing":
         if use_json:
-            click.echo(json_mod.dumps({"action": "undislike", "status": "file_missing"}))
+            click.echo(json_mod.dumps({"action": "unban", "status": "file_missing"}))
         else:
             notify("Wallpaper", "Can't restore (file missing)")
         return
 
     if use_json:
-        click.echo(json_mod.dumps({"action": "undislike", "image": str(result.image)}))
+        click.echo(json_mod.dumps({"action": "unban", "image": str(result.image)}))
     else:
         filename = result.image.name if result.image else "unknown"
         notify("Wallpaper", f"Restored: {filename}")
@@ -459,7 +459,7 @@ def suggest(ctx, use_ai):
             click.echo(json_mod.dumps({"suggestions": results}, ensure_ascii=False, indent=2))
         else:
             if results:
-                click.echo("Suggested exclusions (by dislike frequency):")
+                click.echo("Suggested exclusions (by ban frequency):")
                 for s in results:
                     click.echo(f"  {s['tag']} (count: {s['count']}, ratio: {s['ratio']}x)")
             else:
