@@ -21,17 +21,15 @@ from wayper.ai_suggestions import (
     get_ai_status,
     update_ai_history_feedback,
 )
-from wayper.backend import FileLock, query_current, set_wallpaper
+from wayper.backend import query_current, set_wallpaper
 from wayper.config import WayperConfig, load_config, save_config
 from wayper.core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
 from wayper.daemon import is_daemon_running, signal_daemon
 from wayper.pool import (
-    add_to_blacklist,
     count_images,
     favorites_dir,
     list_blacklist,
     list_images,
-    pick_random,
     pool_dir,
     remove_from_blacklist,
 )
@@ -39,7 +37,6 @@ from wayper.state import (
     ALL_PURITIES,
     find_in_trash,
     purity_from_path,
-    push_undo,
     read_mode,
     restore_from_trash,
     write_mode,
@@ -539,30 +536,16 @@ def favorite_image(req: ActionRequest):
     img_full = _resolve_image(config, req.image_path)
 
     is_fav = img_full.is_relative_to(config.download_dir / "favorites")
-
     if is_fav:
-        try:
-            rel_path = img_full.relative_to(config.download_dir / "favorites")
-            dest = config.download_dir / rel_path
-        except ValueError:
-            raise HTTPException(400, "Invalid file structure for favorite")
+        result = do_unfav(config, image=img_full)
     else:
-        rel_path = img_full.relative_to(config.download_dir)
-        dest = config.download_dir / "favorites" / rel_path
+        result = do_fav(config, image=img_full)
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    img_full.rename(dest)
+    if not result.ok:
+        raise HTTPException(400, result.error)
 
-    if is_fav:
-        from wayper.wallhaven import wallhaven_web_unfav
-
-        wallhaven_web_unfav(config, dest.name)
-    else:
-        from wayper.wallhaven import wallhaven_web_fav
-
-        wallhaven_web_fav(config, dest.name)
-
-    return {"status": "ok", "new_path": str(dest.relative_to(config.download_dir))}
+    new_path = str(result.image.relative_to(config.download_dir)) if result.image else ""
+    return {"status": "ok", "new_path": new_path}
 
 
 @app.post("/api/image/ban")
@@ -570,38 +553,13 @@ def ban_image_route(req: ActionRequest):
     config = get_config()
     img_full = _resolve_image(config, req.image_path)
 
-    # If in favorites, move back to pool first
-    if "favorites" in req.image_path:
-        from wayper.state import orientation_from_path, purity_from_path
-
-        purity = purity_from_path(config, img_full)
-        dest_dir = pool_dir(config, purity, orientation_from_path(config, img_full))
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / img_full.name
-        img_full.rename(dest)
-        img_full = dest
-
-    try:
-        current_wallpapers = query_current()
-    except Exception:
-        current_wallpapers = {}
-
-    with FileLock(blocking=False):
-        purities = read_mode(config)
-        for mon in config.monitors:
-            current_path = current_wallpapers.get(mon.name)
-            if current_path and current_path.resolve() == img_full.resolve():
-                next_img = pick_random(config, purities, mon.orientation, exclude=img_full)
-                if next_img:
-                    set_wallpaper(mon.name, next_img, config.transition)
-
-        add_to_blacklist(config, img_full.name)
-        push_undo(config, img_full.name, img_full.parent)
-        _remove_thumbnail(config, req.image_path)
-
-    from wayper.wallhaven import wallhaven_web_unfav
-
-    wallhaven_web_unfav(config, img_full.name)
+    result = do_ban(
+        config,
+        image=img_full,
+        clear_thumbnail=lambda p: _remove_thumbnail(config, p),
+    )
+    if not result.ok:
+        raise HTTPException(400, result.error)
 
     return {"status": "ok"}
 

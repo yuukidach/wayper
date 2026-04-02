@@ -29,7 +29,14 @@ from .pool import (
     pool_dir,
     remove_from_blacklist,
 )
-from .state import pop_undo, purity_from_path, push_undo, read_mode, restore_from_trash
+from .state import (
+    orientation_from_path,
+    pop_undo,
+    purity_from_path,
+    push_undo,
+    read_mode,
+    restore_from_trash,
+)
 
 log = logging.getLogger("wayper.core")
 
@@ -56,6 +63,32 @@ def _resolve_monitor(
     mon_cfg = find_monitor(config, monitor)
     current = query_current()
     return monitor, mon_cfg, current.get(monitor)
+
+
+def _update_monitors_for_moved_image(config: WayperConfig, old_path: Path, new_path: Path) -> None:
+    """If any monitor is showing old_path, update it to new_path (no transition)."""
+    try:
+        current = query_current()
+    except Exception:
+        return
+    for mon_name, cur in current.items():
+        if cur and cur.resolve() == old_path.resolve():
+            set_wallpaper(mon_name, new_path, NO_TRANSITION)
+
+
+def _replace_on_all_monitors(config: WayperConfig, banned_img: Path, purities: set[str]) -> None:
+    """Replace banned_img on any monitor currently showing it."""
+    try:
+        current = query_current()
+    except Exception:
+        return
+    for mon in config.monitors:
+        cur = current.get(mon.name)
+        if cur and cur.resolve() == banned_img.resolve():
+            next_img = pick_random(config, purities, mon.orientation, exclude=banned_img)
+            if next_img:
+                set_wallpaper(mon.name, next_img, config.transition)
+                push_history(config, mon.name, next_img)
 
 
 def do_next(config: WayperConfig, monitor: str | None = None) -> CoreResult:
@@ -106,24 +139,39 @@ def do_fav(
     config: WayperConfig,
     monitor: str | None = None,
     open_url: bool = False,
+    *,
+    image: Path | None = None,
 ) -> CoreResult:
-    """Favorite the current wallpaper."""
+    """Favorite a wallpaper.
+
+    If `image` is given, operate on that path directly.
+    Otherwise, operate on the current wallpaper of `monitor`.
+    """
     with FileLock():
-        monitor, mon_cfg, img = _resolve_monitor(config, monitor)
-        if not img or not mon_cfg:
-            return CoreResult(action="fav", ok=False, error="No current wallpaper")
+        if image is not None:
+            img = image
+        else:
+            monitor, mon_cfg, img = _resolve_monitor(config, monitor)
+            if not img or not mon_cfg:
+                return CoreResult(action="fav", ok=False, error="No current wallpaper")
 
         if "favorites" in str(img):
             return CoreResult(action="fav", ok=True, status="already_favorite")
 
         purity = purity_from_path(config, img)
-        dest_dir = favorites_dir(config, purity, mon_cfg.orientation)
+        orientation = orientation_from_path(config, img)
+        dest_dir = favorites_dir(config, purity, orientation)
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / img.name
         img.rename(dest)
-        set_wallpaper(monitor, dest, NO_TRANSITION)
 
-    from .wallhaven import wallhaven_web_fav
+        # Update wallpaper display if this image is currently shown
+        if image is not None:
+            _update_monitors_for_moved_image(config, img, dest)
+        else:
+            set_wallpaper(monitor, dest, NO_TRANSITION)
+
+    from .wallhaven_web import wallhaven_web_fav
 
     wallhaven_web_fav(config, dest.name)
 
@@ -137,24 +185,41 @@ def do_fav(
     return CoreResult(action="fav", monitor=monitor, image=dest, extra={"opened": open_url})
 
 
-def do_unfav(config: WayperConfig, monitor: str | None = None) -> CoreResult:
-    """Remove the current wallpaper from favorites."""
+def do_unfav(
+    config: WayperConfig,
+    monitor: str | None = None,
+    *,
+    image: Path | None = None,
+) -> CoreResult:
+    """Remove a wallpaper from favorites.
+
+    If `image` is given, operate on that path directly.
+    Otherwise, operate on the current wallpaper of `monitor`.
+    """
     with FileLock():
-        monitor, mon_cfg, img = _resolve_monitor(config, monitor)
-        if not img or not mon_cfg:
-            return CoreResult(action="unfav", ok=False, error="No current wallpaper")
+        if image is not None:
+            img = image
+        else:
+            monitor, mon_cfg, img = _resolve_monitor(config, monitor)
+            if not img or not mon_cfg:
+                return CoreResult(action="unfav", ok=False, error="No current wallpaper")
 
         if "favorites" not in str(img):
             return CoreResult(action="unfav", ok=True, status="not_favorite")
 
         purity = purity_from_path(config, img)
-        dest_dir = pool_dir(config, purity, mon_cfg.orientation)
+        orientation = orientation_from_path(config, img)
+        dest_dir = pool_dir(config, purity, orientation)
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / img.name
         img.rename(dest)
-        set_wallpaper(monitor, dest, NO_TRANSITION)
 
-    from .wallhaven import wallhaven_web_unfav
+        if image is not None:
+            _update_monitors_for_moved_image(config, img, dest)
+        else:
+            set_wallpaper(monitor, dest, NO_TRANSITION)
+
+    from .wallhaven_web import wallhaven_web_unfav
 
     wallhaven_web_unfav(config, dest.name)
 
@@ -165,28 +230,42 @@ def do_ban(
     config: WayperConfig,
     monitor: str | None = None,
     clear_thumbnail: Callable[[str], None] | None = None,
+    *,
+    image: Path | None = None,
 ) -> CoreResult:
-    """Ban current wallpaper: blacklist, trash, switch to next."""
+    """Ban a wallpaper: blacklist, trash, switch to next.
+
+    If `image` is given, operate on that path directly and replace it on
+    any monitor currently showing it.
+    Otherwise, operate on the current wallpaper of `monitor`.
+    """
     with FileLock():
-        monitor, mon_cfg, img = _resolve_monitor(config, monitor)
-        if not img or not mon_cfg:
-            return CoreResult(action="ban", ok=False, error="No current wallpaper")
+        if image is not None:
+            img = image
+        else:
+            monitor, mon_cfg, img = _resolve_monitor(config, monitor)
+            if not img or not mon_cfg:
+                return CoreResult(action="ban", ok=False, error="No current wallpaper")
 
         # If in favorites, move back to pool first
         if "favorites" in str(img):
             purity = purity_from_path(config, img)
-            dest_dir = pool_dir(config, purity, mon_cfg.orientation)
+            orientation = orientation_from_path(config, img)
+            dest_dir = pool_dir(config, purity, orientation)
             dest_dir.mkdir(parents=True, exist_ok=True)
             dest = dest_dir / img.name
             img.rename(dest)
             img = dest
 
-        # Switch wallpaper first for instant feedback
+        # Replace on affected monitors
         purities = read_mode(config)
-        next_img = pick_random(config, purities, mon_cfg.orientation, exclude=img)
-        if next_img:
-            set_wallpaper(monitor, next_img, config.transition)
-            push_history(config, monitor, next_img)
+        if image is not None:
+            _replace_on_all_monitors(config, img, purities)
+        else:
+            next_img = pick_random(config, purities, mon_cfg.orientation, exclude=img)
+            if next_img:
+                set_wallpaper(monitor, next_img, config.transition)
+                push_history(config, monitor, next_img)
 
         add_to_blacklist(config, img.name)
         push_undo(config, img.name, img.parent)
@@ -198,7 +277,7 @@ def do_ban(
             except ValueError:
                 pass
 
-    from .wallhaven import wallhaven_web_unfav
+    from .wallhaven_web import wallhaven_web_unfav
 
     wallhaven_web_unfav(config, img.name)
 

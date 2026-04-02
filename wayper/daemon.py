@@ -239,7 +239,7 @@ async def run_daemon(config: WayperConfig) -> None:
             fav_sync_count += 1
             if fav_sync_count >= FAV_SYNC_INTERVAL:
                 _, remote_files = await client.sync_remote_favorites()
-                from .wallhaven import push_local_favorites
+                from .wallhaven_web import push_local_favorites
 
                 await asyncio.to_thread(push_local_favorites, config, remote_files)
                 fav_sync_count = 0
