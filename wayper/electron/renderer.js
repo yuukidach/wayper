@@ -245,6 +245,8 @@ function handleMouseBack(e) {
     }
 }
 
+let _pendingG = null;
+
 function handleGlobalKeydown(e) {
     // Ignore if typing in an input
     if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
@@ -333,7 +335,20 @@ function handleGlobalKeydown(e) {
             undoDislike();
             break;
         case 'g':
-            scrollToCurrentWallpaper();
+            if (_pendingG) {
+                clearTimeout(_pendingG);
+                _pendingG = null;
+                scrollToFirst();
+            } else {
+                _pendingG = setTimeout(() => {
+                    _pendingG = null;
+                    scrollToCurrentWallpaper();
+                }, 300);
+            }
+            break;
+        case 'G':
+            if (_pendingG) { clearTimeout(_pendingG); _pendingG = null; }
+            scrollToLast();
             break;
         case '1':
             setViewMode('pool');
@@ -1430,6 +1445,33 @@ function markCurrentWallpaper() {
     if (!monitor?.current_image) return;
     const card = document.querySelector(`.wallpaper-card[data-path="${CSS.escape(monitor.current_image)}"]`);
     if (card) card.classList.add('current');
+}
+
+function scrollToFirst() {
+    const cards = document.getElementsByClassName('wallpaper-card');
+    if (cards.length === 0) return;
+    cards[0].scrollIntoView({ block: 'start', behavior: 'smooth' });
+    cards[0].focus({ preventScroll: true });
+}
+
+function scrollToLast() {
+    if (appState.images.length === 0) return;
+    // Render all remaining cards
+    if (appState.currentBatchIndex < appState.images.length) {
+        if (sentinel.parentNode) sentinel.remove();
+        const fragment = document.createDocumentFragment();
+        while (appState.currentBatchIndex < appState.images.length) {
+            fragment.appendChild(createCard(appState.images[appState.currentBatchIndex]));
+            appState.currentBatchIndex++;
+        }
+        els.wallpaperGrid.appendChild(fragment);
+    }
+    const cards = document.getElementsByClassName('wallpaper-card');
+    const last = cards[cards.length - 1];
+    if (last) {
+        last.scrollIntoView({ block: 'end', behavior: 'smooth' });
+        last.focus({ preventScroll: true });
+    }
 }
 
 function scrollToCurrentWallpaper() {

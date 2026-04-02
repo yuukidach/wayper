@@ -67,7 +67,8 @@ uv venv && uv pip install -e .
 | `/` | Focus search bar | `Esc` | Clear search / Unfocus |
 | `Enter` / `Space` | Preview (lightbox) | Arrow keys | Navigate grid |
 | `[` / `]` | Blocklist: Recoverable / All | `a` | AI analysis (Blocklist) |
-| `g` | Locate current wallpaper | `4`–`9` | Switch monitor |
+| `g` | Locate current wallpaper | `gg` / `G` | Jump to first / last |
+| `4`–`9` | Switch monitor | | |
 
 **Lightbox preview:**
 
