@@ -197,6 +197,8 @@ def _build_prompt(
     exclude_combos: list[list[str]],
     history: list[dict] | None = None,
     discovered_patterns: list[dict] | None = None,
+    full_kept_counts: dict[str, int] | None = None,
+    full_fav_counts: dict[str, int] | None = None,
 ) -> str:
     """Build a compact prompt using aggregated tag frequencies."""
     parts = [
@@ -247,8 +249,8 @@ def _build_prompt(
 
     # Statistically discovered patterns (high-precision combos from contrast mining)
     if discovered_patterns:
-        kept_tags = freq_groups["pool"]["tags"]
-        fav_tags = freq_groups["favorite"]["tags"]
+        kept_tags = full_kept_counts or {}
+        fav_tags = full_fav_counts or {}
         parts.append(
             "\n## Discovered Patterns (auto-mined high-precision combos)\n"
             "These tag combinations are statistically associated with banning. "
@@ -403,6 +405,18 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
         max_results=15,
     )
 
+    # Compute full (untruncated) kept/fav counts for pattern tags
+    full_kept: dict[str, int] = {}
+    full_fav: dict[str, int] = {}
+    for filename, meta in metadata.items():
+        if filename in blacklisted:
+            continue
+        is_fav = filename in fav_files_set
+        for tag in meta.get("tags", []):
+            full_kept[tag] = full_kept.get(tag, 0) + 1
+            if is_fav:
+                full_fav[tag] = full_fav.get(tag, 0) + 1
+
     history = _load_ai_history(config.ai_history_file)
 
     prompt = _build_prompt(
@@ -411,6 +425,8 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
         config.wallhaven.exclude_combos,
         history=history,
         discovered_patterns=combo_patterns,
+        full_kept_counts=full_kept,
+        full_fav_counts=full_fav,
     )
 
     prompt_kb = len(prompt.encode()) // 1024
