@@ -41,7 +41,7 @@ from wayper.state import (
     restore_from_trash,
     write_mode,
 )
-from wayper.suggestions import suggest_tags_to_exclude
+from wayper.suggestions import suggest_combo_patterns, suggest_tags_to_exclude
 
 log = logging.getLogger("wayper.api")
 
@@ -640,6 +640,14 @@ def tag_suggestions(context: str = ""):
     metadata = _get_metadata()
     blacklisted = {fn for _, fn in list_blacklist(config)}
 
+    # Build favorites set from filesystem
+    fav_base = config.download_dir / "favorites"
+    favs: set[str] = set()
+    if fav_base.is_dir():
+        for f in fav_base.rglob("*"):
+            if f.is_file() and not f.name.startswith("."):
+                favs.add(f.name)
+
     if context:
         from wayper.suggestions import suggest_combo_refinements
 
@@ -650,13 +658,17 @@ def tag_suggestions(context: str = ""):
             context_tags,
             config.wallhaven.exclude_tags,
             config.wallhaven.exclude_combos,
+            favs,
         )
         return {"suggestions": results, "context": context_tags}
 
     results = suggest_tags_to_exclude(
-        metadata, blacklisted, config.wallhaven.exclude_tags, config.wallhaven.exclude_combos
+        metadata, blacklisted, config.wallhaven.exclude_tags, config.wallhaven.exclude_combos, favs
     )
-    return {"suggestions": results}
+    combos = suggest_combo_patterns(
+        metadata, blacklisted, config.wallhaven.exclude_tags, config.wallhaven.exclude_combos, favs
+    )
+    return {"suggestions": results, "combo_suggestions": combos}
 
 
 @app.get("/api/ai-suggestions/status")

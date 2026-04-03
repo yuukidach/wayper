@@ -47,6 +47,7 @@ let appState = {
     blocklistTab: 'recoverable', // recoverable, blocked
     blocklistData: null, // cached blocklist data
     tagSuggestions: null, // tag exclusion suggestions
+    comboSuggestions: null, // auto-discovered combo exclusion suggestions
     reviewingTag: null, // tag currently being reviewed in blocklist
     comboContext: [], // drill-down context for combo exclusion [tag1, tag2, ...]
     comboRefinements: [], // refinement suggestions for current context
@@ -614,6 +615,7 @@ async function fetchTagSuggestions() {
         if (!res.ok) return;
         const data = await res.json();
         appState.tagSuggestions = data.suggestions || [];
+        appState.comboSuggestions = data.combo_suggestions || [];
     } catch (e) {
         console.error('Failed to fetch tag suggestions:', e);
     }
@@ -1841,7 +1843,7 @@ function renderBlocklistView() {
             }
             els.wallpaperGrid.appendChild(refBar);
         }
-    } else if (!appState.searchQuery && appState.tagSuggestions && appState.tagSuggestions.length > 0) {
+    } else if (!appState.searchQuery && ((appState.tagSuggestions && appState.tagSuggestions.length > 0) || (appState.comboSuggestions && appState.comboSuggestions.length > 0))) {
         // Suggestions mode: wrapping chips with header
         const bar = document.createElement('div');
         bar.className = 'tag-suggestions-bar';
@@ -1904,6 +1906,28 @@ function renderBlocklistView() {
             const count = document.createElement('span');
             count.className = 'suggestion-chip-count';
             count.textContent = `${s.count}`;
+            chip.appendChild(tagLabel);
+            chip.appendChild(count);
+            bar.appendChild(chip);
+        }
+        // Auto-discovered combo suggestions
+        for (const c of (appState.comboSuggestions || [])) {
+            const chip = document.createElement('span');
+            chip.className = 'suggestion-chip combo-chip';
+            chip.title = `Review combo "${c.tags.join(' + ')}" in blocklist`;
+            chip.onclick = async () => {
+                appState.reviewingTag = {tag: c.tags.join(' + '), count: c.count};
+                appState.comboContext = [...c.tags];
+                await searchByTags(c.tags);
+                await fetchComboRefinements(c.tags);
+                renderBlocklistView();
+            };
+            const tagLabel = document.createElement('span');
+            tagLabel.className = 'suggestion-chip-name';
+            tagLabel.textContent = c.tags.join(' + ');
+            const count = document.createElement('span');
+            count.className = 'suggestion-chip-count';
+            count.textContent = `${c.count}`;
             chip.appendChild(tagLabel);
             chip.appendChild(count);
             bar.appendChild(chip);

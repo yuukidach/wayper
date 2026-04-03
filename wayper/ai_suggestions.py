@@ -195,6 +195,7 @@ def _build_prompt(
     exclude_tags: list[str],
     exclude_combos: list[list[str]],
     history: list[dict] | None = None,
+    discovered_patterns: list[dict] | None = None,
 ) -> str:
     """Build a compact prompt using aggregated tag frequencies."""
     parts = [
@@ -207,19 +208,28 @@ def _build_prompt(
         "the user LIKES that content. NEVER suggest excluding it as a single tag. "
         "Only suggest it in a combo if the combo isolates a specific unwanted subset "
         "(e.g. 'nude' alone is liked, but 'nude + specific_studio' might be unwanted).\n\n"
-        "Focus areas:\n"
-        "1. COMBOS: tag pairs/groups that together signal unwanted content, "
-        "even if each tag alone is fine (e.g. 'blonde + model' is unwanted "
-        "but 'model' alone is fine since it appears in Kept too)\n"
-        "2. SIMPLIFY existing combos: if one tag in a combo has 0 Kept AND 0 Favorites, "
-        "it MAY be upgradeable to single-tag exclude — but check if the tag crosses "
-        "subgroups the user might want to keep (e.g. 'pornstar' spans both Western and Asian)\n"
-        "3. SEMANTIC clusters: group related tags that point to the same ban pattern "
-        "(e.g. several AV studio names, or overlapping video game tags)\n"
-        "4. OVER-BROAD exclusions: if an excluded tag also has significant Kept/Favorites "
-        "presence, the rule is too wide — suggest removing it or replacing with a narrower "
-        "combo (e.g. 'video games' excluded but 'video game girls' has 45 Kept images "
-        "→ remove 'video games', add specific combos instead)\n\n"
+        "PRIORITY ORDER for suggestions (most to least valuable):\n"
+        "1. SPECIFIC IDENTIFIERS: studio names, photographer names, source sites, "
+        "model names — these are the most precise exclusion targets with minimal "
+        "collateral damage (e.g. 'MetArt', 'Femjoy', 'Suicide Girls')\n"
+        "2. NATIONALITY/ETHNICITY tags that distinguish content styles "
+        "(e.g. 'American women', 'Ukrainian' if the user only bans that origin)\n"
+        "3. STYLE-SPECIFIC descriptors unique to unwanted content genres "
+        "(e.g. 'studio', 'seductive pose', body-type tags like 'fit body')\n"
+        "4. NARROW COMBOS using the specific tags above — only if a single tag "
+        "would be too broad (e.g. 'blonde' alone is fine, but 'blonde + studio_name' "
+        "targets a specific genre)\n\n"
+        "AVOID suggesting combos of broad/generic tags (e.g. 'nude + women', "
+        "'boobs + model') — these have high statistical precision but catch "
+        "content the user wants to keep. The user's ban pattern is about GENRE "
+        "and SOURCE, not about basic content attributes.\n\n"
+        "OTHER focus areas:\n"
+        "- SEMANTIC clusters: group related specific tags that point to the same "
+        "ban pattern (e.g. multiple Western photography studios → one theme)\n"
+        "- SIMPLIFY existing combos: if one tag in a combo has 0 Kept AND "
+        "0 Favorites, it may be upgradeable to a single-tag exclude\n"
+        "- OVER-BROAD exclusions: if an excluded tag has significant Kept/Favorites "
+        "presence, suggest removing it or replacing with narrower rules\n\n"
         "Respond with ONLY JSON (no markdown):\n"
         '{"analysis":"pattern summary",'
         '"add_suggestions":[{"type":"tag or combo","tags":["tag1","tag2"],'
@@ -233,6 +243,18 @@ def _build_prompt(
         parts.append(f"\nExcluded tags: {', '.join(exclude_tags)}\n")
     if exclude_combos:
         parts.append(f"Excluded combos: {'; '.join(' + '.join(c) for c in exclude_combos)}\n")
+
+    # Statistically discovered patterns (high-precision combos from contrast mining)
+    if discovered_patterns:
+        parts.append(
+            "\n## Discovered Patterns (auto-mined high-precision combos)\n"
+            "These tag combinations are statistically associated with banning. "
+            "Use them as starting points — look for underlying themes, group related "
+            "combos, and suggest higher-level exclusion rules.\n"
+        )
+        for p in discovered_patterns:
+            tags_str = " + ".join(p["tags"])
+            parts.append(f"  {tags_str} (ban={p['count']}, precision={p['precision']})\n")
 
     # Tag frequencies per group
     for label, key in [("Banned", "dislike"), ("Favorites", "favorite"), ("Kept", "pool")]:
@@ -357,6 +379,18 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
             "This may happen if images were downloaded before metadata tracking was enabled."
         )
 
+    # Run contrast pattern mining to feed AI with discovered combos
+    from wayper.suggestions import suggest_combo_patterns
+
+    combo_patterns = suggest_combo_patterns(
+        metadata,
+        blacklisted,
+        config.wallhaven.exclude_tags,
+        config.wallhaven.exclude_combos,
+        fav_files_set,
+        max_results=15,
+    )
+
     history = _load_ai_history(config.ai_history_file)
 
     prompt = _build_prompt(
@@ -364,6 +398,7 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
         config.wallhaven.exclude_tags,
         config.wallhaven.exclude_combos,
         history=history,
+        discovered_patterns=combo_patterns,
     )
 
     prompt_kb = len(prompt.encode()) // 1024

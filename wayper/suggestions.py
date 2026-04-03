@@ -6,6 +6,12 @@ from typing import TypedDict
 
 from .pool import ImageMetadata
 
+# Cost-benefit weights for suggestion scoring.
+# Losing a good image costs ~5x more than seeing a bad one.
+# Each favorited image counts as 3 additional kept images on top.
+KEPT_WEIGHT = 5
+FAV_WEIGHT = 3
+
 
 class TagSuggestion(TypedDict):
     tag: str
@@ -13,19 +19,25 @@ class TagSuggestion(TypedDict):
     ratio: float
 
 
+class ComboSuggestion(TypedDict):
+    tags: list[str]
+    count: int
+    precision: float
+
+
 def suggest_tags_to_exclude(
     metadata: dict[str, ImageMetadata],
     blacklisted: set[str],
     excluded_tags: list[str],
     excluded_combos: list[list[str]] | None = None,
+    favorites: set[str] | None = None,
     *,
     max_results: int = 10,
 ) -> list[TagSuggestion]:
-    """Suggest tags to exclude based on dislike history vs same-purity pool.
+    """Suggest tags to exclude using cost-benefit scoring.
 
-    Compares tag frequency in disliked images against the overall pool within
-    each purity group.  Tags that appear disproportionately in dislikes are
-    returned as exclusion candidates.
+    Uses net benefit = ban_count - KEPT_WEIGHT * kept_count - FAV_WEIGHT * fav_count.
+    Only tags with positive net benefit are returned, sorted by ban count (impact).
 
     Already-excluded tags are skipped, and candidates whose disliked images are
     mostly covered by the *union* of all exclusion rules' images are filtered out.
@@ -33,11 +45,15 @@ def suggest_tags_to_exclude(
     if not blacklisted:
         return []
 
+    favorites = favorites or set()
     excluded_lower = {t.lower() for t in excluded_tags}
 
     # --- 1. Group by purity, count tags in disliked vs pool -----------------
     purity_groups: dict[str, dict] = {}
     tag_dislike_images: dict[str, set[str]] = {}
+    # Global kept/fav counts (tag exclusion affects all purities)
+    global_kept: dict[str, int] = {}
+    global_fav: dict[str, int] = {}
 
     for filename, meta in metadata.items():
         purity = meta.get("purity", "sfw")
@@ -50,6 +66,7 @@ def suggest_tags_to_exclude(
             }
         g = purity_groups[purity]
         tags = meta.get("tags", [])
+        is_fav = filename in favorites
         if filename in blacklisted:
             g["dislike_total"] += 1
             for tag in tags:
@@ -59,6 +76,9 @@ def suggest_tags_to_exclude(
             g["pool_total"] += 1
             for tag in tags:
                 g["pool_tags"][tag] = g["pool_tags"].get(tag, 0) + 1
+                global_kept[tag] = global_kept.get(tag, 0) + 1
+                if is_fav:
+                    global_fav[tag] = global_fav.get(tag, 0) + 1
 
     # --- 2. Union of disliked images covered by any exclusion rule -----------
     excluded_union: set[str] = set()
@@ -81,25 +101,32 @@ def suggest_tags_to_exclude(
                     excluded_union.add(filename)
                     break
 
-    # --- 3. Score candidates across purity groups ---------------------------
+    # --- 3. Score candidates with cost-benefit across purity groups ----------
     tag_scores: dict[str, TagSuggestion] = {}
     for g in purity_groups.values():
         if g["dislike_total"] < 3 or g["pool_total"] < 30:
             continue
-        for tag, count in g["dislike_tags"].items():
-            if count < 3 or tag.lower() in excluded_lower:
+        for tag, ban_count in g["dislike_tags"].items():
+            if ban_count < 3 or tag.lower() in excluded_lower:
                 continue
             pool_count = g["pool_tags"].get(tag, 0)
-            if pool_count / g["pool_total"] > 0.25:
+            # Total frequency filter: skip tags too common overall in this purity
+            total_with_tag = ban_count + pool_count
+            total_images = g["dislike_total"] + g["pool_total"]
+            if total_with_tag / total_images > 0.25:
                 continue
-            dislike_rate = count / g["dislike_total"]
-            pool_rate = pool_count / max(g["pool_total"], 1)
-            ratio = dislike_rate / max(pool_rate, 0.001)
-            if ratio > 2.0:
-                if tag not in tag_scores:
-                    tag_scores[tag] = {"tag": tag, "count": 0, "ratio": 0.0}
-                tag_scores[tag]["count"] += count
-                tag_scores[tag]["ratio"] = max(tag_scores[tag]["ratio"], round(ratio, 1))
+            # Cost uses global kept/fav (exclusion affects all purities)
+            kept_count = global_kept.get(tag, 0)
+            fav_count = global_fav.get(tag, 0)
+            # Cost-benefit: net_benefit must be positive
+            net_benefit = ban_count - KEPT_WEIGHT * kept_count - FAV_WEIGHT * fav_count
+            if net_benefit <= 0:
+                continue
+            if tag not in tag_scores:
+                tag_scores[tag] = {"tag": tag, "count": 0, "ratio": 0.0}
+            tag_scores[tag]["count"] += ban_count
+            # Store net_benefit in ratio field for sorting tiebreak
+            tag_scores[tag]["ratio"] = max(tag_scores[tag]["ratio"], round(net_benefit, 1))
 
     # --- 4. Filter by union coverage ----------------------------------------
     results: list[TagSuggestion] = []
@@ -121,6 +148,7 @@ def suggest_combo_refinements(
     context_tags: list[str],
     excluded_tags: list[str],
     excluded_combos: list[list[str]],
+    favorites: set[str] | None = None,
     *,
     max_results: int = 8,
 ) -> list[TagSuggestion]:
@@ -137,6 +165,7 @@ def suggest_combo_refinements(
     if not blacklisted or not context_tags:
         return []
 
+    favorites = favorites or set()
     context_lower = {t.lower() for t in context_tags}
     excluded_lower = {t.lower() for t in excluded_tags}
     existing_combos = {frozenset(c) for c in excluded_combos}
@@ -217,3 +246,151 @@ def suggest_combo_refinements(
 
     results.sort(key=lambda r: (-r["count"], -r["ratio"]))
     return results[:max_results]
+
+
+def suggest_combo_patterns(
+    metadata: dict[str, ImageMetadata],
+    blacklisted: set[str],
+    excluded_tags: list[str],
+    excluded_combos: list[list[str]] | None = None,
+    favorites: set[str] | None = None,
+    *,
+    max_results: int = 8,
+) -> list[ComboSuggestion]:
+    """Discover tag combinations to exclude via contrast pattern mining.
+
+    Finds tag pairs (and triples) that appear frequently in banned images but
+    rarely in kept/favorited images.  Each result is a combo with high precision
+    (most images matching the combo are banned) and meaningful impact (enough
+    banned images to matter).
+    """
+    if not blacklisted:
+        return []
+
+    favorites = favorites or set()
+    excluded_lower = {t.lower() for t in excluded_tags}
+    existing_combos_fs = {frozenset(t.lower() for t in c) for c in (excluded_combos or [])}
+    combo_sets_lower = [{t.lower() for t in c} for c in (excluded_combos or [])]
+
+    # --- 1. Build per-purity tag→images maps for banned / kept ---------------
+    # Also build excluded_union for overlap filtering
+    banned_tag_images: dict[str, set[str]] = {}  # tag → set of banned filenames
+    kept_tag_images: dict[str, set[str]] = {}  # tag → set of kept filenames
+    fav_tag_images: dict[str, set[str]] = {}  # tag → set of fav filenames
+    excluded_union: set[str] = set()
+
+    for filename, meta in metadata.items():
+        tags = meta.get("tags", [])
+        if filename in blacklisted:
+            tags_lower = {t.lower() for t in tags}
+            # Check if already covered by existing exclusions
+            if tags_lower & excluded_lower:
+                excluded_union.add(filename)
+            else:
+                for cs in combo_sets_lower:
+                    if cs.issubset(tags_lower):
+                        excluded_union.add(filename)
+                        break
+            for tag in tags:
+                banned_tag_images.setdefault(tag, set()).add(filename)
+        else:
+            is_fav = filename in favorites
+            for tag in tags:
+                kept_tag_images.setdefault(tag, set()).add(filename)
+                if is_fav:
+                    fav_tag_images.setdefault(tag, set()).add(filename)
+
+    # --- 2. Find candidate tags (appear in >=3 banned images) ----------------
+    candidate_tags = [
+        tag
+        for tag, imgs in banned_tag_images.items()
+        if len(imgs) >= 3 and tag.lower() not in excluded_lower
+    ]
+
+    # --- 3. Enumerate pairs and score by precision ---------------------------
+    MIN_SUPPORT = 3
+    MIN_PRECISION = 0.85
+    pair_results: list[ComboSuggestion] = []
+
+    for i, tag_a in enumerate(candidate_tags):
+        imgs_a = banned_tag_images[tag_a]
+        for tag_b in candidate_tags[i + 1 :]:
+            imgs_b = banned_tag_images[tag_b]
+            ban_both = imgs_a & imgs_b
+            if len(ban_both) < MIN_SUPPORT:
+                continue
+            # Check if existing combo already covers this
+            combo_lower = frozenset([tag_a.lower(), tag_b.lower()])
+            if any(ec.issubset(combo_lower) for ec in existing_combos_fs):
+                continue
+            # Count kept/fav images with both tags
+            kept_a = kept_tag_images.get(tag_a, set())
+            kept_b = kept_tag_images.get(tag_b, set())
+            kept_both = kept_a & kept_b
+            fav_a = fav_tag_images.get(tag_a, set())
+            fav_b = fav_tag_images.get(tag_b, set())
+            fav_both = fav_a & fav_b
+            precision = len(ban_both) / (
+                len(ban_both) + len(kept_both) + FAV_WEIGHT * len(fav_both)
+            )
+            if precision < MIN_PRECISION:
+                continue
+            # Overlap check: skip if most banned images are already covered
+            if excluded_union and len(ban_both & excluded_union) / len(ban_both) > 0.5:
+                continue
+            pair_results.append(
+                {
+                    "tags": sorted([tag_a, tag_b]),
+                    "count": len(ban_both),
+                    "precision": round(precision, 2),
+                }
+            )
+
+    # --- 4. Greedy triple expansion ------------------------------------------
+    triple_results: list[ComboSuggestion] = []
+    for pair in pair_results:
+        tag_a, tag_b = pair["tags"]
+        pair_banned = banned_tag_images[tag_a] & banned_tag_images[tag_b]
+        pair_kept = kept_tag_images.get(tag_a, set()) & kept_tag_images.get(tag_b, set())
+        for tag_c in candidate_tags:
+            if tag_c in (tag_a, tag_b):
+                continue
+            tri_banned = pair_banned & banned_tag_images[tag_c]
+            if len(tri_banned) < MIN_SUPPORT:
+                continue
+            combo_lower = frozenset([tag_a.lower(), tag_b.lower(), tag_c.lower()])
+            if any(ec.issubset(combo_lower) for ec in existing_combos_fs):
+                continue
+            tri_kept = pair_kept & kept_tag_images.get(tag_c, set())
+            tri_fav = (
+                fav_tag_images.get(tag_a, set())
+                & fav_tag_images.get(tag_b, set())
+                & fav_tag_images.get(tag_c, set())
+            )
+            tri_precision = len(tri_banned) / (
+                len(tri_banned) + len(tri_kept) + FAV_WEIGHT * len(tri_fav)
+            )
+            # Only keep triple if it improves precision over the pair
+            if tri_precision <= pair["precision"]:
+                continue
+            if excluded_union and len(tri_banned & excluded_union) / len(tri_banned) > 0.5:
+                continue
+            triple_results.append(
+                {
+                    "tags": sorted([tag_a, tag_b, tag_c]),
+                    "count": len(tri_banned),
+                    "precision": round(tri_precision, 2),
+                }
+            )
+
+    # --- 5. Merge, deduplicate, minimize -------------------------------------
+    all_combos = pair_results + triple_results
+    # Remove triples where the pair already qualifies (prefer simpler rules)
+    pair_sets = {frozenset(c["tags"]) for c in pair_results}
+    all_combos = [
+        c
+        for c in all_combos
+        if len(c["tags"]) == 2 or not any(ps.issubset(set(c["tags"])) for ps in pair_sets)
+    ]
+    all_combos.sort(key=lambda c: (-c["count"], -c["precision"]))
+    return all_combos[:max_results]

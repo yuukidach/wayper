@@ -426,7 +426,7 @@ aside {
 }
 
 .monitor-item {
-  background-color: var(--surface0);
+  background-color: transparent;
   padding: 10px 12px;
   border-radius: var(--radius);
   border: 1px solid transparent;
@@ -436,11 +436,11 @@ aside {
 }
 
 .monitor-item:hover {
-  border-color: var(--surface2);
+  background-color: var(--surface0);
 }
 
 .monitor-item.active {
-  background-color: rgba(137, 180, 250, 0.08);
+  background-color: var(--surface0);
   border-color: rgba(137, 180, 250, 0.3);
 }
 
@@ -1112,6 +1112,16 @@ main {
   opacity: 0;
   transform: scale(0.9);
   transition: opacity 0.2s var(--ease), transform 0.2s var(--ease);
+}
+
+.suggestion-chip.combo-chip {
+  border-color: rgba(137, 180, 250, 0.15);
+  background: rgba(137, 180, 250, 0.06);
+}
+
+.suggestion-chip.combo-chip:hover {
+  border-color: rgba(137, 180, 250, 0.3);
+  background: rgba(137, 180, 250, 0.1);
 }
 
 .combo-refinements {
