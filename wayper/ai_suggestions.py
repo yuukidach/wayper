@@ -247,15 +247,28 @@ def _build_prompt(
 
     # Statistically discovered patterns (high-precision combos from contrast mining)
     if discovered_patterns:
+        kept_tags = freq_groups["pool"]["tags"]
+        fav_tags = freq_groups["favorite"]["tags"]
         parts.append(
             "\n## Discovered Patterns (auto-mined high-precision combos)\n"
             "These tag combinations are statistically associated with banning. "
             "Use them as starting points — look for underlying themes, group related "
             "combos, and suggest higher-level exclusion rules.\n"
+            "IMPORTANT: Check each tag's Kept/Fav count below. If ANY tag in a combo "
+            "has high Kept count, the combo is risky — prefer more specific tags.\n"
         )
         for p in discovered_patterns:
-            tags_str = " + ".join(p["tags"])
-            parts.append(f"  {tags_str} (ban={p['count']}, precision={p['precision']})\n")
+            tag_details = []
+            for t in p["tags"]:
+                k = kept_tags.get(t, 0)
+                f = fav_tags.get(t, 0)
+                detail = t
+                if k or f:
+                    detail += f"(kept={k}" + (f",fav={f}" if f else "") + ")"
+                tag_details.append(detail)
+            parts.append(
+                f"  {' + '.join(tag_details)} → ban={p['count']}, precision={p['precision']}\n"
+            )
 
     # Tag frequencies per group
     for label, key in [("Banned", "dislike"), ("Favorites", "favorite"), ("Kept", "pool")]:
