@@ -638,7 +638,16 @@ def tag_suggestions(context: str = ""):
     """
     config = get_config()
     metadata = _get_metadata()
-    blacklisted = {fn for _, fn in list_blacklist(config)}
+
+    # Filter to current purity mode — stale data from inactive modes hurts suggestions
+    from wayper.state import read_mode
+
+    active_purities = read_mode(config)
+    metadata = {
+        fn: meta for fn, meta in metadata.items() if meta.get("purity", "sfw") in active_purities
+    }
+
+    blacklisted = {fn for _, fn in list_blacklist(config) if fn in metadata}
 
     # Build favorites set from filesystem
     fav_base = config.download_dir / "favorites"
