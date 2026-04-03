@@ -20,6 +20,7 @@ from .pool import (
     load_metadata,
 )
 from .state import ALL_PURITIES
+from .suggestions import suggest_combo_patterns
 from .util import atomic_write
 
 log = logging.getLogger("wayper.ai")
@@ -380,8 +381,6 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
         )
 
     # Run contrast pattern mining to feed AI with discovered combos
-    from wayper.suggestions import suggest_combo_patterns
-
     combo_patterns = suggest_combo_patterns(
         metadata,
         blacklisted,

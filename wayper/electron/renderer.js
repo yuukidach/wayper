@@ -1914,7 +1914,7 @@ function renderBlocklistView() {
         for (const c of (appState.comboSuggestions || [])) {
             const chip = document.createElement('span');
             chip.className = 'suggestion-chip combo-chip';
-            chip.title = `Review combo "${c.tags.join(' + ')}" in blocklist`;
+            chip.title = `Review combo "${c.tags.join(' + ')}" — ${Math.round(c.precision * 100)}% precision`;
             chip.onclick = async () => {
                 appState.reviewingTag = {tag: c.tags.join(' + '), count: c.count};
                 appState.comboContext = [...c.tags];

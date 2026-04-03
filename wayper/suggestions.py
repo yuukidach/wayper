@@ -16,7 +16,7 @@ FAV_WEIGHT = 3
 class TagSuggestion(TypedDict):
     tag: str
     count: int
-    ratio: float
+    net_benefit: float
 
 
 class ComboSuggestion(TypedDict):
@@ -101,8 +101,8 @@ def suggest_tags_to_exclude(
                     excluded_union.add(filename)
                     break
 
-    # --- 3. Score candidates with cost-benefit across purity groups ----------
-    tag_scores: dict[str, TagSuggestion] = {}
+    # --- 3. Accumulate global ban counts, filter by purity frequency ----------
+    global_ban: dict[str, int] = {}
     for g in purity_groups.values():
         if g["dislike_total"] < 3 or g["pool_total"] < 30:
             continue
@@ -110,25 +110,25 @@ def suggest_tags_to_exclude(
             if ban_count < 3 or tag.lower() in excluded_lower:
                 continue
             pool_count = g["pool_tags"].get(tag, 0)
-            # Total frequency filter: skip tags too common overall in this purity
             total_with_tag = ban_count + pool_count
             total_images = g["dislike_total"] + g["pool_total"]
             if total_with_tag / total_images > 0.25:
                 continue
-            # Cost uses global kept/fav (exclusion affects all purities)
-            kept_count = global_kept.get(tag, 0)
-            fav_count = global_fav.get(tag, 0)
-            # Cost-benefit: net_benefit must be positive
-            net_benefit = ban_count - KEPT_WEIGHT * kept_count - FAV_WEIGHT * fav_count
-            if net_benefit <= 0:
-                continue
-            if tag not in tag_scores:
-                tag_scores[tag] = {"tag": tag, "count": 0, "ratio": 0.0}
-            tag_scores[tag]["count"] += ban_count
-            # Store net_benefit in ratio field for sorting tiebreak
-            tag_scores[tag]["ratio"] = max(tag_scores[tag]["ratio"], round(net_benefit, 1))
+            global_ban[tag] = global_ban.get(tag, 0) + ban_count
 
-    # --- 4. Filter by union coverage ----------------------------------------
+    # --- 4. Cost-benefit filter using global counts --------------------------
+    tag_scores: dict[str, TagSuggestion] = {}
+    for tag, ban_count in global_ban.items():
+        if ban_count < 3:
+            continue
+        kept_count = global_kept.get(tag, 0)
+        fav_count = global_fav.get(tag, 0)
+        net_benefit = ban_count - KEPT_WEIGHT * kept_count - FAV_WEIGHT * fav_count
+        if net_benefit <= 0:
+            continue
+        tag_scores[tag] = {"tag": tag, "count": ban_count, "net_benefit": round(net_benefit, 1)}
+
+    # --- 5. Filter by union coverage ----------------------------------------
     results: list[TagSuggestion] = []
     for s in tag_scores.values():
         if s["count"] < 3:
@@ -138,7 +138,7 @@ def suggest_tags_to_exclude(
             continue
         results.append(s)
 
-    results.sort(key=lambda r: (-r["count"], -r["ratio"]))
+    results.sort(key=lambda r: (-r["count"], -r["net_benefit"]))
     return results[:max_results]
 
 
@@ -168,7 +168,7 @@ def suggest_combo_refinements(
     favorites = favorites or set()
     context_lower = {t.lower() for t in context_tags}
     excluded_lower = {t.lower() for t in excluded_tags}
-    existing_combos = {frozenset(c) for c in excluded_combos}
+    existing_combos = {frozenset(t.lower() for t in c) for c in excluded_combos}
     combo_sets_lower = [{t.lower() for t in c} for c in excluded_combos]
 
     # --- 1. Build excluded_union: disliked images already covered by any rule ---
@@ -230,7 +230,7 @@ def suggest_combo_refinements(
         if count < 2 or tag.lower() in excluded_lower:
             continue
         # Subset dedup: skip if any existing combo is a subset of the candidate
-        candidate_combo = frozenset(context_tags + [tag])
+        candidate_combo = frozenset(t.lower() for t in context_tags + [tag])
         if any(ec.issubset(candidate_combo) for ec in existing_combos):
             continue
         # Overlap check: skip if most disliked images are already covered
@@ -301,11 +301,14 @@ def suggest_combo_patterns(
                     fav_tag_images.setdefault(tag, set()).add(filename)
 
     # --- 2. Find candidate tags (appear in >=3 banned images) ----------------
-    candidate_tags = [
-        tag
-        for tag, imgs in banned_tag_images.items()
-        if len(imgs) >= 3 and tag.lower() not in excluded_lower
-    ]
+    candidate_tags = sorted(
+        (
+            tag
+            for tag, imgs in banned_tag_images.items()
+            if len(imgs) >= 3 and tag.lower() not in excluded_lower
+        ),
+        key=lambda t: -len(banned_tag_images[t]),
+    )[:150]  # Cap to limit O(n²) pair enumeration
 
     # --- 3. Enumerate pairs and score by precision ---------------------------
     MIN_SUPPORT = 3
