@@ -1164,6 +1164,24 @@ function applySearchFilter(preserveFocus = false) {
     setTimeout(updateGridMetrics, 100);
 }
 
+async function enterTagReview(tags) {
+    const tagList = Array.isArray(tags) ? tags : [tags];
+    appState.reviewingTag = { tag: tagList.join(' + '), count: 0 };
+    appState.comboContext = tagList;
+    await Promise.all([searchByTags(tagList), fetchComboRefinements(tagList)]);
+    appState.reviewingTag.count = appState.images.length;
+    renderBlocklistView();
+}
+
+function selectSearchTag(tag) {
+    if (appState.mode === 'trash') {
+        enterTagReview(tag);
+    } else {
+        els.searchInput.value = tag;
+        performSearch(tag);
+    }
+}
+
 function renderSearchSuggestions(suggestions) {
     searchHighlightIndex = -1;
     if (!suggestions.length) {
@@ -1179,9 +1197,8 @@ function renderSearchSuggestions(suggestions) {
     els.searchDropdown.querySelectorAll('.search-dropdown-item').forEach(item => {
         item.onmousedown = (e) => {
             e.preventDefault(); // Prevent blur
-            els.searchInput.value = item.textContent;
             els.searchDropdown.classList.add('hidden');
-            performSearch(item.textContent);
+            selectSearchTag(item.textContent);
         };
     });
 }
@@ -1218,15 +1235,14 @@ function handleSearchKeydown(e) {
 
     if (e.key === 'Enter') {
         e.preventDefault();
+        let tag = null;
         if (searchHighlightIndex >= 0 && items[searchHighlightIndex]) {
-            els.searchInput.value = items[searchHighlightIndex].textContent;
-            els.searchDropdown.classList.add('hidden');
-            performSearch(items[searchHighlightIndex].textContent);
+            tag = items[searchHighlightIndex].textContent;
         } else {
-            els.searchDropdown.classList.add('hidden');
-            const query = els.searchInput.value.trim();
-            if (query) performSearch(query);
+            tag = els.searchInput.value.trim() || null;
         }
+        els.searchDropdown.classList.add('hidden');
+        if (tag) selectSearchTag(tag);
         return;
     }
 }
@@ -1893,13 +1909,7 @@ function renderBlocklistView() {
             const chip = document.createElement('span');
             chip.className = 'suggestion-chip';
             chip.title = `Review "${s.tag}" in blocklist`;
-            chip.onclick = async () => {
-                appState.reviewingTag = s;
-                appState.comboContext = [s.tag];
-                await searchByTags([s.tag]);
-                await fetchComboRefinements([s.tag]);
-                renderBlocklistView();
-            };
+            chip.onclick = () => enterTagReview(s.tag);
             const tagLabel = document.createElement('span');
             tagLabel.className = 'suggestion-chip-name';
             tagLabel.textContent = s.tag;
@@ -1915,13 +1925,7 @@ function renderBlocklistView() {
             const chip = document.createElement('span');
             chip.className = 'suggestion-chip combo-chip';
             chip.title = `Review combo "${c.tags.join(' + ')}" — ${Math.round(c.precision * 100)}% precision`;
-            chip.onclick = async () => {
-                appState.reviewingTag = {tag: c.tags.join(' + '), count: c.count};
-                appState.comboContext = [...c.tags];
-                await searchByTags(c.tags);
-                await fetchComboRefinements(c.tags);
-                renderBlocklistView();
-            };
+            chip.onclick = () => enterTagReview([...c.tags]);
             const tagLabel = document.createElement('span');
             tagLabel.className = 'suggestion-chip-name';
             tagLabel.textContent = c.tags.join(' + ');

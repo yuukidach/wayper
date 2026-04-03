@@ -166,6 +166,7 @@ def _build_prompt(
     active_purities: set[str] | None = None,
     history: list[dict] | None = None,
     discovered_patterns: list[dict] | None = None,
+    recent_bans: list[dict] | None = None,
 ) -> str:
     """Build a compact prompt with MCP tool query instructions."""
     purity_str = ", ".join(sorted(active_purities)) if active_purities else "all"
@@ -238,6 +239,20 @@ def _build_prompt(
             parts.append(
                 f"  {' + '.join(p['tags'])} → ban={p['count']}, precision={p['precision']}\n"
             )
+
+    # Recent bans — images that escaped current exclusion rules
+    if recent_bans:
+        parts.append(
+            "\n## Recent Bans (escaped current filters)\n"
+            "These images slipped through the existing exclusion rules but the user "
+            "still disliked them. Find common patterns — they reveal gaps in the "
+            "current filter set. Use tag_stats_lookup to check whether recurring tags "
+            "here can be safely excluded.\n"
+        )
+        for b in recent_bans:
+            age = b.get("age", "")
+            tags = ", ".join(b.get("tags", []))
+            parts.append(f"  [{age}] {b['filename']}: {tags}\n")
 
     # Analysis history for iterative refinement
     if history:
@@ -406,6 +421,24 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
 
     history = _load_ai_history(config.ai_history_file)
 
+    # Collect recent bans with tags — these escaped current filters
+    now = int(datetime.now(UTC).timestamp())
+    recent_bans: list[dict] = []
+    for ts, fn in blacklist_entries[:20]:
+        if fn not in metadata:
+            continue
+        tags = metadata[fn].get("tags", [])
+        if not tags:
+            continue
+        age_s = now - ts
+        if age_s < 3600:
+            age = f"{age_s // 60}m ago"
+        elif age_s < 86400:
+            age = f"{age_s // 3600}h ago"
+        else:
+            age = f"{age_s // 86400}d ago"
+        recent_bans.append({"filename": fn, "tags": tags, "age": age})
+
     banned_count = len(blacklisted)
     kept_count = sum(1 for fn in metadata if fn not in blacklisted)
     fav_count = len(fav_files_set)
@@ -419,6 +452,7 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
         active_purities=active_purities,
         history=history,
         discovered_patterns=combo_patterns,
+        recent_bans=recent_bans,
     )
 
     prompt_kb = len(prompt.encode()) // 1024
