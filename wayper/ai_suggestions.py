@@ -7,19 +7,17 @@ import json
 import logging
 import re
 import shutil
-from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import WayperConfig
 from .pool import (
-    ImageMetadata,
     favorites_dir,
     list_blacklist,
     list_images,
     load_metadata,
 )
-from .state import ALL_PURITIES
+from .state import read_mode
 from .suggestions import suggest_combo_patterns
 from .util import atomic_write
 
@@ -41,38 +39,6 @@ class AISuggestionError(Exception):
     def __init__(self, message: str, *, code: str = "error") -> None:
         super().__init__(message)
         self.code = code
-
-
-def _collect_tag_frequencies(
-    metadata: dict[str, ImageMetadata],
-    blacklisted: set[str],
-    fav_files: set[str],
-) -> dict[str, dict]:
-    """Aggregate tag frequencies per group in a single pass.
-
-    Returns dict with keys: dislike, favorite, pool.
-    Each value has: count (int), tags (dict[str, int]).
-    """
-    result = {k: {"count": 0, "tags": Counter()} for k in ("dislike", "favorite", "pool")}
-
-    for filename, meta in metadata.items():
-        tags = meta.get("tags", [])
-        if not tags:
-            continue
-        key = (
-            "dislike"
-            if filename in blacklisted
-            else "favorite"
-            if filename in fav_files
-            else "pool"
-        )
-        result[key]["count"] += 1
-        result[key]["tags"].update(tags)
-
-    for group in result.values():
-        group["tags"] = dict(group["tags"].most_common(150))
-
-    return result
 
 
 def _load_ai_history(path: Path) -> list[dict]:
@@ -192,43 +158,54 @@ def update_ai_history_feedback(path: Path, tags: list[str], action: str) -> None
 
 
 def _build_prompt(
-    freq_groups: dict[str, dict],
+    banned_count: int,
+    kept_count: int,
+    fav_count: int,
     exclude_tags: list[str],
     exclude_combos: list[list[str]],
+    active_purities: set[str] | None = None,
     history: list[dict] | None = None,
     discovered_patterns: list[dict] | None = None,
-    full_kept_counts: dict[str, int] | None = None,
-    full_fav_counts: dict[str, int] | None = None,
 ) -> str:
-    """Build a compact prompt using aggregated tag frequencies."""
+    """Build a compact prompt with MCP tool query instructions."""
+    purity_str = ", ".join(sorted(active_purities)) if active_purities else "all"
     parts = [
-        "Analyze wallpaper tag frequencies to suggest exclusion rules.\n\n"
-        "Three groups below:\n"
-        "- Disliked: images the user explicitly rejected\n"
-        "- Favorites: images the user explicitly favorited\n"
-        "- Kept: images the user chose to keep (positive signal, NOT neutral)\n\n"
+        "Analyze wallpaper tag data to suggest exclusion rules.\n\n"
+        "You have access to MCP tools to query tag statistics on demand.\n"
+        f"Active purity mode: {purity_str}\n"
+        f"Dataset ({purity_str} only): {banned_count} banned, {kept_count} kept, "
+        f"{fav_count} favorites.\n\n"
+        "## Available Tools\n\n"
+        f"1. tag_stats_top(top=30, group='banned', purity='{purity_str}') "
+        "— top tags by group count\n"
+        "   (group: 'banned', 'kept', or 'favorites')\n"
+        f"2. tag_stats_lookup(tags='tag1,tag2', purity='{purity_str}') "
+        "— exact ban/kept/fav counts per tag\n"
+        f"3. tag_stats_combo(combo='tag1,tag2', purity='{purity_str}') "
+        "— count images matching ALL tags\n\n"
+        "IMPORTANT: Always pass the purity parameter to filter by the active mode.\n\n"
+        "## Workflow\n\n"
+        "1. Start with tag_stats_top to see what's common in banned images\n"
+        "2. BEFORE suggesting any tag exclusion, ALWAYS verify its kept/fav count\n"
+        "   with tag_stats_lookup. A tag with significant kept count must NOT be\n"
+        "   suggested as a single exclude.\n"
+        "3. For combos, use tag_stats_combo to check precision.\n"
+        "4. Keep tool calls to 5-10 total — don't query redundantly.\n\n"
         "CRITICAL RULE: If a tag has significant presence in Kept or Favorites, "
         "the user LIKES that content. NEVER suggest excluding it as a single tag. "
-        "Only suggest it in a combo if the combo isolates a specific unwanted subset "
-        "(e.g. 'nude' alone is liked, but 'nude + specific_studio' might be unwanted).\n\n"
+        "Only suggest it in a combo if the combo isolates a specific unwanted subset.\n\n"
         "PRIORITY ORDER for suggestions (most to least valuable):\n"
         "1. SPECIFIC IDENTIFIERS: studio names, photographer names, source sites, "
-        "model names — these are the most precise exclusion targets with minimal "
-        "collateral damage (e.g. 'MetArt', 'Femjoy', 'Suicide Girls')\n"
-        "2. NATIONALITY/ETHNICITY tags that distinguish content styles "
-        "(e.g. 'American women', 'Ukrainian' if the user only bans that origin)\n"
-        "3. STYLE-SPECIFIC descriptors unique to unwanted content genres "
-        "(e.g. 'studio', 'seductive pose', body-type tags like 'fit body')\n"
+        "model names — most precise exclusion targets with minimal collateral damage\n"
+        "2. NATIONALITY/ETHNICITY tags that distinguish content styles\n"
+        "3. STYLE-SPECIFIC descriptors unique to unwanted content genres\n"
         "4. NARROW COMBOS using the specific tags above — only if a single tag "
-        "would be too broad (e.g. 'blonde' alone is fine, but 'blonde + studio_name' "
-        "targets a specific genre)\n\n"
+        "would be too broad\n\n"
         "AVOID suggesting combos of broad/generic tags (e.g. 'nude + women', "
-        "'boobs + model') — these have high statistical precision but catch "
-        "content the user wants to keep. The user's ban pattern is about GENRE "
-        "and SOURCE, not about basic content attributes.\n\n"
+        "'boobs + model') — these catch content the user wants to keep.\n\n"
         "OTHER focus areas:\n"
         "- SEMANTIC clusters: group related specific tags that point to the same "
-        "ban pattern (e.g. multiple Western photography studios → one theme)\n"
+        "ban pattern\n"
         "- SIMPLIFY existing combos: if one tag in a combo has 0 Kept AND "
         "0 Favorites, it may be upgradeable to a single-tag exclude\n"
         "- OVER-BROAD exclusions: if an excluded tag has significant Kept/Favorites "
@@ -249,39 +226,18 @@ def _build_prompt(
 
     # Statistically discovered patterns (high-precision combos from contrast mining)
     if discovered_patterns:
-        kept_tags = full_kept_counts or {}
-        fav_tags = full_fav_counts or {}
         parts.append(
             "\n## Discovered Patterns (auto-mined high-precision combos)\n"
             "These tag combinations are statistically associated with banning. "
             "Use them as starting points — look for underlying themes, group related "
             "combos, and suggest higher-level exclusion rules.\n"
-            "IMPORTANT: Check each tag's Kept/Fav count below. If ANY tag in a combo "
-            "has high Kept count, the combo is risky — prefer more specific tags.\n"
+            "IMPORTANT: Use tag_stats_lookup to verify each tag's Kept/Fav count "
+            "before suggesting any of these.\n"
         )
         for p in discovered_patterns:
-            tag_details = []
-            for t in p["tags"]:
-                k = kept_tags.get(t, 0)
-                f = fav_tags.get(t, 0)
-                detail = t
-                if k or f:
-                    detail += f"(kept={k}" + (f",fav={f}" if f else "") + ")"
-                tag_details.append(detail)
             parts.append(
-                f"  {' + '.join(tag_details)} → ban={p['count']}, precision={p['precision']}\n"
+                f"  {' + '.join(p['tags'])} → ban={p['count']}, precision={p['precision']}\n"
             )
-
-    # Tag frequencies per group
-    for label, key in [("Banned", "dislike"), ("Favorites", "favorite"), ("Kept", "pool")]:
-        group = freq_groups[key]
-        count = group["count"]
-        tags = group["tags"]
-        parts.append(f"\n## {label} ({count} images)\n")
-        if tags:
-            parts.append(", ".join(f"{t}({n})" for t, n in tags.items()) + "\n")
-        else:
-            parts.append("(no tagged images)\n")
 
     # Analysis history for iterative refinement
     if history:
@@ -305,8 +261,28 @@ def _find_claude_bin() -> str | None:
     return None
 
 
-async def _invoke_claude(prompt: str, timeout: float = 600.0) -> dict:
-    """Call claude CLI in print mode and return parsed JSON response."""
+def _find_mcp_bin() -> str | None:
+    """Find wayper-mcp binary."""
+    found = shutil.which("wayper-mcp")
+    if found:
+        return found
+    # Check sibling of wayper binary (same venv/bin dir)
+    wayper_bin = shutil.which("wayper")
+    if wayper_bin:
+        candidate = Path(wayper_bin).parent / "wayper-mcp"
+        if candidate.is_file():
+            return str(candidate)
+    # Common install locations
+    candidate = Path.home() / ".local" / "bin" / "wayper-mcp"
+    if candidate.is_file():
+        return str(candidate)
+    return None
+
+
+async def _invoke_claude(
+    prompt: str, *, use_tools: bool = False, timeout: float = 600.0
+) -> tuple[dict, bool]:
+    """Call claude CLI in print mode and return (parsed JSON, tools_used)."""
     claude_bin = _find_claude_bin()
     if not claude_bin:
         raise AISuggestionError(
@@ -315,9 +291,25 @@ async def _invoke_claude(prompt: str, timeout: float = 600.0) -> dict:
             code="cli_not_found",
         )
 
+    cmd = [claude_bin, "-p"]
+    if use_tools:
+        mcp_bin = _find_mcp_bin()
+        if mcp_bin:
+            # Inline MCP config — works for any user without pre-existing .mcp.json
+            mcp_json = json.dumps({"mcpServers": {"wayper": {"command": mcp_bin, "args": []}}})
+            cmd += [
+                "--mcp-config",
+                mcp_json,
+                "--allowedTools",
+                "mcp__wayper__tag_stats_top mcp__wayper__tag_stats_lookup"
+                " mcp__wayper__tag_stats_combo",
+            ]
+        else:
+            log.warning("wayper-mcp not found, running AI without tools")
+            use_tools = False
+
     proc = await asyncio.create_subprocess_exec(
-        claude_bin,
-        "-p",
+        *cmd,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -344,7 +336,7 @@ async def _invoke_claude(prompt: str, timeout: float = 600.0) -> dict:
         text = m.group(1).strip()
 
     try:
-        return json.loads(text)
+        return json.loads(text), use_tools
     except json.JSONDecodeError as e:
         log.warning("Claude response was not valid JSON: %s", text[:200])
         raise AISuggestionError(f"Claude returned invalid JSON: {e}")
@@ -378,18 +370,25 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
     if not blacklist_entries:
         raise AISuggestionError("No banned images. Ban some wallpapers first.")
 
-    blacklisted = {fn for _, fn in blacklist_entries}
+    # Filter to current purity mode — stale data from inactive modes hurts suggestions
+    active_purities = read_mode(config)
+    metadata = {
+        fn: meta for fn, meta in metadata.items() if meta.get("purity", "sfw") in active_purities
+    }
+
+    blacklisted = {fn for _, fn in blacklist_entries if fn in metadata}
     fav_files_set: set[str] = set()
-    for purity in ALL_PURITIES:
+    for purity in active_purities:
         for orient in ("landscape", "portrait"):
             for img in list_images(favorites_dir(config, purity, orient)):
                 fav_files_set.add(img.name)
 
     _ai_status["phase"] = "preparing"
     _ai_status["detail"] = "Collecting tags"
-    freq_groups = _collect_tag_frequencies(metadata, blacklisted, fav_files_set)
 
-    if not freq_groups["dislike"]["tags"]:
+    # Check if any banned images have tags
+    has_banned_tags = any(metadata.get(fn, {}).get("tags") for fn in blacklisted if fn in metadata)
+    if not has_banned_tags:
         raise AISuggestionError(
             "No tag metadata found for banned images. "
             "This may happen if images were downloaded before metadata tracking was enabled."
@@ -405,36 +404,35 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
         max_results=15,
     )
 
-    # Compute full (untruncated) kept/fav counts for pattern tags
-    full_kept: dict[str, int] = {}
-    full_fav: dict[str, int] = {}
-    for filename, meta in metadata.items():
-        if filename in blacklisted:
-            continue
-        is_fav = filename in fav_files_set
-        for tag in meta.get("tags", []):
-            full_kept[tag] = full_kept.get(tag, 0) + 1
-            if is_fav:
-                full_fav[tag] = full_fav.get(tag, 0) + 1
-
     history = _load_ai_history(config.ai_history_file)
 
+    banned_count = len(blacklisted)
+    kept_count = sum(1 for fn in metadata if fn not in blacklisted)
+    fav_count = len(fav_files_set)
+
     prompt = _build_prompt(
-        freq_groups,
+        banned_count,
+        kept_count,
+        fav_count,
         config.wallhaven.exclude_tags,
         config.wallhaven.exclude_combos,
+        active_purities=active_purities,
         history=history,
         discovered_patterns=combo_patterns,
-        full_kept_counts=full_kept,
-        full_fav_counts=full_fav,
     )
 
     prompt_kb = len(prompt.encode()) // 1024
-    log.info("AI suggestion request: %d KB prompt, %d history rounds", prompt_kb, len(history))
+    log.info(
+        "AI suggestion request: %d KB prompt, %d history rounds",
+        prompt_kb,
+        len(history),
+    )
     _ai_status["phase"] = "analyzing"
     _ai_status["detail"] = f"Sent {prompt_kb}KB to Claude"
     try:
-        result = await _invoke_claude(prompt)
+        result, tools_used = await _invoke_claude(prompt, use_tools=True)
+        if tools_used:
+            _ai_status["detail"] = "Claude querying tag data..."
     finally:
         _ai_status["phase"] = None
         _ai_status["detail"] = None

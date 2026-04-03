@@ -151,7 +151,7 @@ Add to your Claude Code config (`~/.claude/.mcp.json`):
 }
 ```
 
-Available tools: `status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `unfav` · `ban` · `unban` · `set_mode` · `delete_wallpaper`
+Available tools: `status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `unfav` · `ban` · `unban` · `set_mode` · `delete_wallpaper` · `wallpaper_info` · `tag_stats_top` · `tag_stats_lookup` · `tag_stats_combo`
 
 ## Config
 

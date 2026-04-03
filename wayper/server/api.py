@@ -671,6 +671,147 @@ def tag_suggestions(context: str = ""):
     return {"suggestions": results, "combo_suggestions": combos}
 
 
+@app.get("/api/tag-stats")
+def tag_stats(
+    tags: str = "",
+    top: int = 30,
+    group: str = "banned",
+    combo: str = "",
+    purity: str = "",
+):
+    """Query tag statistics for AI analysis.
+
+    Modes:
+      ?tags=tag1,tag2  — exact ban/kept/fav counts for specific tags
+      ?top=N&group=banned|kept|favorites — top N tags by group count
+      ?combo=tag1,tag2  — counts for images matching ALL tags simultaneously
+    """
+    config = get_config()
+    metadata = _get_metadata()
+    blacklisted = {fn for _, fn in list_blacklist(config)}
+
+    fav_base = config.download_dir / "favorites"
+    favs: set[str] = set()
+    if fav_base.is_dir():
+        for f in fav_base.rglob("*"):
+            if f.is_file() and not f.name.startswith("."):
+                favs.add(f.name)
+
+    # Parse purity filter
+    purity_set: set[str] | None = None
+    if purity:
+        purity_set = {p.strip().lower() for p in purity.split(",") if p.strip()}
+
+    # Build per-tag counters in a single pass
+    tag_banned: dict[str, int] = {}
+    tag_kept: dict[str, int] = {}
+    tag_fav: dict[str, int] = {}
+    total_banned = 0
+    total_kept = 0
+    total_fav = 0
+
+    for filename, meta in metadata.items():
+        if purity_set and meta.get("purity", "sfw") not in purity_set:
+            continue
+        file_tags = meta.get("tags", [])
+        if filename in blacklisted:
+            total_banned += 1
+            for t in file_tags:
+                tag_banned[t] = tag_banned.get(t, 0) + 1
+        else:
+            total_kept += 1
+            is_fav = filename in favs
+            if is_fav:
+                total_fav += 1
+            for t in file_tags:
+                tag_kept[t] = tag_kept.get(t, 0) + 1
+                if is_fav:
+                    tag_fav[t] = tag_fav.get(t, 0) + 1
+
+    summary = {
+        "total_banned": total_banned,
+        "total_kept": total_kept,
+        "total_favorites": total_fav,
+    }
+
+    # Mode: specific tag lookup
+    if tags:
+        query_tags = [t.strip() for t in tags.split(",") if t.strip()]
+        # Case-insensitive lookup map
+        lower_map: dict[str, str] = {}
+        for t in set(tag_banned) | set(tag_kept):
+            lower_map.setdefault(t.lower(), t)
+        results = []
+        for qt in query_tags:
+            canonical = lower_map.get(qt.lower(), qt)
+            results.append(
+                {
+                    "tag": canonical,
+                    "banned": tag_banned.get(canonical, 0),
+                    "kept": tag_kept.get(canonical, 0),
+                    "favorites": tag_fav.get(canonical, 0),
+                }
+            )
+        return {"tags": results, "summary": summary}
+
+    # Mode: combo lookup
+    if combo:
+        combo_tags = [t.strip() for t in combo.split(",") if t.strip()]
+        lower_map_c: dict[str, str] = {}
+        for t in set(tag_banned) | set(tag_kept):
+            lower_map_c.setdefault(t.lower(), t)
+        canonical_combo = [lower_map_c.get(t.lower(), t) for t in combo_tags]
+        combo_lower = {t.lower() for t in canonical_combo}
+
+        combo_banned = 0
+        combo_kept = 0
+        combo_fav = 0
+        for filename, meta in metadata.items():
+            file_tags_lower = {t.lower() for t in meta.get("tags", [])}
+            if combo_lower.issubset(file_tags_lower):
+                if filename in blacklisted:
+                    combo_banned += 1
+                else:
+                    combo_kept += 1
+                    if filename in favs:
+                        combo_fav += 1
+        precision = (
+            combo_banned / (combo_banned + combo_kept + 3 * combo_fav)
+            if (combo_banned + combo_kept + combo_fav) > 0
+            else 0
+        )
+        return {
+            "combo": canonical_combo,
+            "banned": combo_banned,
+            "kept": combo_kept,
+            "favorites": combo_fav,
+            "precision": round(precision, 3),
+            "summary": summary,
+        }
+
+    # Mode: top N tags by group
+    if group == "banned":
+        source = tag_banned
+    elif group == "favorites":
+        source = tag_fav
+    else:
+        source = tag_kept
+
+    sorted_tags = sorted(source.items(), key=lambda x: -x[1])[:top]
+    results_top = []
+    for t, count in sorted_tags:
+        results_top.append(
+            {
+                "tag": t,
+                "banned": tag_banned.get(t, 0),
+                "kept": tag_kept.get(t, 0),
+                "favorites": tag_fav.get(t, 0),
+                group + "_count": count,
+            }
+        )
+    return {"top": results_top, "group": group, "summary": summary}
+
+
 @app.get("/api/ai-suggestions/status")
 async def ai_suggestions_status():
     """Return current AI analysis status for polling."""
