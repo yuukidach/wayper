@@ -7,6 +7,8 @@ import json
 import logging
 import re
 import shutil
+import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -281,6 +283,10 @@ def _find_mcp_bin() -> str | None:
     found = shutil.which("wayper-mcp")
     if found:
         return found
+    # Check sibling of current Python interpreter (same venv/bin dir)
+    venv_candidate = Path(sys.executable).parent / "wayper-mcp"
+    if venv_candidate.is_file():
+        return str(venv_candidate)
     # Check sibling of wayper binary (same venv/bin dir)
     wayper_bin = shutil.which("wayper")
     if wayper_bin:
@@ -323,6 +329,8 @@ async def _invoke_claude(
             log.warning("wayper-mcp not found, running AI without tools")
             use_tools = False
 
+    t0 = time.monotonic()
+    log.info("Spawning claude CLI: %s", " ".join(cmd[:4]) + ("..." if len(cmd) > 4 else ""))
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=asyncio.subprocess.PIPE,
@@ -336,14 +344,26 @@ async def _invoke_claude(
             timeout=timeout,
         )
     except TimeoutError:
+        elapsed = time.monotonic() - t0
         proc.kill()
         await proc.wait()
-        raise AISuggestionError(f"Claude CLI timed out after {timeout}s", code="timeout")
+        raise AISuggestionError(f"Claude CLI timed out after {elapsed:.1f}s", code="timeout")
+
+    elapsed = time.monotonic() - t0
+    stderr_text = stderr.decode().strip()
+    if stderr_text:
+        log.info("Claude stderr (%d lines): %s", stderr_text.count("\n") + 1, stderr_text[:500])
 
     if proc.returncode != 0:
-        err = stderr.decode().strip()
-        raise AISuggestionError(f"Claude CLI failed (exit {proc.returncode}): {err}")
+        log.warning(
+            "Claude CLI failed after %.1fs (exit %d): %s",
+            elapsed,
+            proc.returncode,
+            stderr_text[:300],
+        )
+        raise AISuggestionError(f"Claude CLI failed (exit {proc.returncode}): {stderr_text}")
 
+    log.info("Claude CLI completed in %.1fs, output %d bytes", elapsed, len(stdout))
     text = stdout.decode().strip()
     # Extract JSON from markdown code blocks if present
     m = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
@@ -377,6 +397,7 @@ async def generate_ai_suggestions(config: WayperConfig) -> dict:
 
 async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
     """Internal implementation of AI suggestion generation."""
+    t_start = time.monotonic()
     metadata = load_metadata(config)
     if not metadata:
         raise AISuggestionError("No metadata available. Download some wallpapers first.")
@@ -456,10 +477,14 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
     )
 
     prompt_kb = len(prompt.encode()) // 1024
+    t_prep = time.monotonic() - t_start
     log.info(
-        "AI suggestion request: %d KB prompt, %d history rounds",
+        "AI prep done in %.1fs: %d KB prompt, %d history rounds, %d recent bans, %d patterns",
+        t_prep,
         prompt_kb,
         len(history),
+        len(recent_bans),
+        len(combo_patterns),
     )
     _ai_status["phase"] = "analyzing"
     _ai_status["detail"] = f"Sent {prompt_kb}KB to Claude"
@@ -476,6 +501,8 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
         "add_suggestions": result.get("add_suggestions", []),
         "remove_suggestions": result.get("remove_suggestions", []),
     }
+    t_total = time.monotonic() - t_start
+    log.info("AI analysis complete in %.1fs total (prep %.1fs)", t_total, t_prep)
     _save_ai_history(
         config.ai_history_file,
         parsed,
