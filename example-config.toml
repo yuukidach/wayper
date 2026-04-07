@@ -1,5 +1,5 @@
 api_key = ""  # https://wallhaven.cc/settings/account
-# wallhaven_username = ""  # for syncing favorites to wallhaven.cc
+# wallhaven_username = ""  # for syncing favorites and tag blacklist to wallhaven.cc
 # wallhaven_password = ""
 # proxy = "http://127.0.0.1:7897"
 download_dir = "~/Pictures/wallpaper"
@@ -28,7 +28,7 @@ sorting = "toplist"
 ai_art_filter = 0      # 0=off, 1=on
 max_page = 15
 batch_size = 5
-# exclude_tags = ["MetArt", "watermarked"]
+# exclude_tags = ["MetArt", "watermarked"]  # synced to Wallhaven cloud blacklist if credentials are set
 # exclude_combos = [["blonde", "nude", "standing"], ["pornstar", "nude"]]
 
 [transition]

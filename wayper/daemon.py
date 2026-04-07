@@ -175,6 +175,7 @@ async def run_daemon(config: WayperConfig) -> None:
     log.info("Daemon started (PID %d)", os.getpid())
 
     client = WallhavenClient(config)
+    await asyncio.to_thread(client.refresh_cloud_tags)
     greeter_count = 0
     fav_sync_count = FAV_SYNC_INTERVAL  # trigger sync on first cycle
 
@@ -187,6 +188,7 @@ async def run_daemon(config: WayperConfig) -> None:
         _reload_config = False
         config = load_config()
         old, client = client, WallhavenClient(config)
+        await asyncio.to_thread(client.refresh_cloud_tags)
         await old.close()
         fav_sync_count = FAV_SYNC_INTERVAL  # trigger sync on next cycle
         log.info("Configuration reloaded")

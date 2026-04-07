@@ -20,13 +20,14 @@ Most wallpaper tools stop at "set image on desktop." wayper is a full **Wallhave
 
 **What makes it different:**
 
-- **Learns from you** — ban a wallpaper and wayper analyzes the pattern. AI-powered tag analysis suggests what to exclude next, with iterative feedback tracking across sessions.
+- **Learns from you** — ban a wallpaper and wayper analyzes the pattern. AI-powered tag analysis suggests what to exclude next, with co-occurrence mining and iterative feedback tracking across sessions.
 - **AI-native (MCP)** — built-in [MCP](https://modelcontextprotocol.io/) server. Tell Claude *"switch to something with mountains"* or *"favorite this one"* — it just works. First wallpaper manager with native AI assistant integration.
 - **Keyboard-driven GUI** — every single action has a shortcut. Grid navigation, lightbox, favorites, settings — fully operable without a mouse. Built for power users.
 
 **And the fundamentals:**
 
-- **Wallhaven integration** — auto-downloads based on your search preferences. No manual sourcing.
+- **Wallhaven integration** — auto-downloads based on your search preferences. Syncs favorites and tag blacklist to your Wallhaven account.
+- **Smart tag filtering** — excluded tags sync to Wallhaven's cloud blacklist for server-side filtering; overflow tags are sent via URL query; the rest are filtered after metadata fetch. Zero wasted downloads.
 - **Auto orientation** — portrait monitors get portrait wallpapers. No sorting needed.
 - **Three-tier purity** — SFW, Sketchy, NSFW — independently toggleable, persistent across sessions.
 - **Cross-platform** — macOS and Linux (Hyprland/Sway). CLI + GUI + MCP.
@@ -58,8 +59,8 @@ uv venv && uv pip install -e .
 
 - **Browse & preview** — grid view with thumbnail caching, lightbox preview, set wallpaper with Enter
 - **Tag search** — search by Wallhaven tags, category, or filename with autocomplete
-- **Smart suggestions** — analyzes ban patterns to recommend tags to exclude; drill into combo exclusions (e.g., "tattoo + nude") for precise filtering
-- **AI analysis** — Claude-powered deep analysis of ban patterns with iterative feedback. Click suggested tags to preview matching images
+- **Smart suggestions** — analyzes ban patterns to recommend tags to exclude; co-occurrence mining finds common descriptors across excluded individuals; drill into combo exclusions (e.g., "tattoo + nude") for precise filtering
+- **AI analysis** — Claude-powered deep analysis of ban patterns with iterative feedback. Identifies uploader patterns and suggests Wallhaven user blacklist candidates. Click suggested tags to preview matching images
 - **Settings** — configure Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI. Changes apply to the running daemon instantly
 - **Keyboard-driven** — every action has a shortcut: grid navigation, tab switching, lightbox, favorites, ban, undo
 

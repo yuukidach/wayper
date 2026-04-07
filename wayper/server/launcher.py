@@ -9,7 +9,8 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from wayper.server.api import port_file, run as run_api
+from wayper.server.api import port_file
+from wayper.server.api import run as run_api
 
 
 def _wait_for_api(timeout: float = 10) -> int:

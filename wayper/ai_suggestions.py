@@ -169,6 +169,8 @@ def _build_prompt(
     history: list[dict] | None = None,
     discovered_patterns: list[dict] | None = None,
     recent_bans: list[dict] | None = None,
+    cooccurrence: list[dict] | None = None,
+    top_uploaders: list[dict] | None = None,
 ) -> str:
     """Build a compact prompt with MCP tool query instructions."""
     purity_str = ", ".join(sorted(active_purities)) if active_purities else "all"
@@ -207,6 +209,12 @@ def _build_prompt(
         "AVOID suggesting combos of broad/generic tags (e.g. 'nude + women', "
         "'boobs + model') — these catch content the user wants to keep.\n\n"
         "OTHER focus areas:\n"
+        "- GENERALIZE individuals: look at co-occurring tags below — if a descriptor "
+        "tag appears alongside many excluded individuals, check if it (alone or in a "
+        "combo) can replace multiple individual exclusions. This is the HIGHEST VALUE "
+        "analysis because it reduces exclude_tags list growth.\n"
+        "- UPLOADER patterns: if certain uploaders dominate banned images, suggest "
+        "them as candidates for Wallhaven's account-level user blacklist.\n"
         "- SEMANTIC clusters: group related specific tags that point to the same "
         "ban pattern\n"
         "- SIMPLIFY existing combos: if one tag in a combo has 0 Kept AND "
@@ -241,6 +249,34 @@ def _build_prompt(
             parts.append(
                 f"  {' + '.join(p['tags'])} → ban={p['count']}, precision={p['precision']}\n"
             )
+
+    # Co-occurrence analysis — tags shared across excluded individuals
+    if cooccurrence:
+        parts.append(
+            "\n## Co-occurring Tags Across Excluded Individuals\n"
+            "These tags frequently appear alongside multiple different excluded tags "
+            "in banned images. A tag co-occurring with many excluded individuals may "
+            "represent a higher-level pattern — if it has low Kept/Fav count, it could "
+            "replace many individual exclusions with one rule.\n"
+            "Use tag_stats_lookup to verify before suggesting.\n"
+        )
+        for c in cooccurrence:
+            excluded_list = ", ".join(c["excluded"][:5])
+            if c["count"] > 5:
+                excluded_list += f" (+{c['count'] - 5} more)"
+            parts.append(f"  {c['tag']} — {c['count']} excluded tags: {excluded_list}\n")
+
+    # Top uploaders in banned images
+    if top_uploaders:
+        parts.append(
+            "\n## Top Uploaders in Banned Images\n"
+            "These uploaders appear frequently in banned images. The user can block "
+            "uploaders via Wallhaven's account settings (user blacklist). Suggest "
+            "uploaders worth blocking if their ban count is high relative to their "
+            "kept count (use tag_stats_lookup with the uploader name if available).\n"
+        )
+        for u in top_uploaders:
+            parts.append(f"  {u['uploader']} — {u['ban_count']} banned\n")
 
     # Recent bans — images that escaped current exclusion rules
     if recent_bans:
@@ -442,14 +478,57 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
 
     history = _load_ai_history(config.ai_history_file)
 
-    # Collect recent bans with tags — these escaped current filters
+    # --- Co-occurrence analysis: find common tags across excluded individuals ---
+    excluded_lower = {t.lower() for t in config.wallhaven.exclude_tags}
+    combo_sets_lower = [{t.lower() for t in c} for c in config.wallhaven.exclude_combos]
+    cooccur_map: dict[str, set[str]] = {}  # tag → set of excluded tags it co-occurs with
+    uploader_ban_count: dict[str, int] = {}  # uploader → banned image count
+
+    for fn in blacklisted:
+        meta = metadata.get(fn)
+        if not meta:
+            continue
+        tags = meta.get("tags", [])
+        tags_lc = {t.lower() for t in tags}
+        matched_lc = tags_lc & excluded_lower
+        if matched_lc:
+            for tl in tags_lc - excluded_lower:
+                cooccur_map.setdefault(tl, set()).update(matched_lc)
+        uploader = meta.get("uploader")
+        if uploader:
+            uploader_ban_count[uploader] = uploader_ban_count.get(uploader, 0) + 1
+
+    cooccurrence = [
+        {"tag": tag, "excluded": sorted(exc), "count": len(exc)}
+        for tag, exc in cooccur_map.items()
+        if len(exc) >= 3
+    ]
+    cooccurrence.sort(key=lambda x: -x["count"])
+    cooccurrence = cooccurrence[:15]
+
+    # Top uploaders in banned images (≥3 bans)
+    top_uploaders = [
+        {"uploader": u, "ban_count": c}
+        for u, c in sorted(uploader_ban_count.items(), key=lambda x: -x[1])
+        if c >= 3
+    ][:10]
+
+    # Collect recent bans — only those that escaped current filters
     now = int(datetime.now(UTC).timestamp())
     recent_bans: list[dict] = []
-    for ts, fn in blacklist_entries[:20]:
+    for ts, fn in blacklist_entries:
+        if len(recent_bans) >= 20:
+            break
         if fn not in metadata:
             continue
         tags = metadata[fn].get("tags", [])
         if not tags:
+            continue
+        tags_lower = {t.lower() for t in tags}
+        # Skip if covered by existing exclusion rules
+        if tags_lower & excluded_lower:
+            continue
+        if any(cs.issubset(tags_lower) for cs in combo_sets_lower):
             continue
         age_s = now - ts
         if age_s < 3600:
@@ -474,6 +553,8 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
         history=history,
         discovered_patterns=combo_patterns,
         recent_bans=recent_bans,
+        cooccurrence=cooccurrence,
+        top_uploaders=top_uploaders,
     )
 
     prompt_kb = len(prompt.encode()) // 1024

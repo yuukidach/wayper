@@ -36,6 +36,7 @@ class WallhavenClient:
     def __init__(self, config: WayperConfig):
         self.config = config
         self._local_exclude_tags: list[str] = []
+        self._cloud_tags: set[str] = set()
         self.client = httpx.AsyncClient(
             proxy=config.proxy,
             timeout=httpx.Timeout(30, connect=10),
@@ -44,9 +45,21 @@ class WallhavenClient:
     async def close(self) -> None:
         await self.client.aclose()
 
+    def refresh_cloud_tags(self) -> None:
+        """Fetch cloud tag_blacklist and cache it."""
+        from .wallhaven_web import fetch_cloud_tags
+
+        self._cloud_tags = {t.lower() for t in fetch_cloud_tags(self.config)}
+        if self._cloud_tags:
+            log.info("Loaded %d cloud tags from Wallhaven account", len(self._cloud_tags))
+
     def _split_exclude_tags(self) -> tuple[list[str], list[str]]:
-        """Split exclude_tags into (api_tags, local_tags) based on URL length budget."""
-        tags = self.config.wallhaven.exclude_tags
+        """Split exclude_tags into (api_tags, local_tags) based on URL length budget.
+
+        Tags already on Wallhaven's cloud tag_blacklist are skipped entirely
+        (they're filtered server-side).
+        """
+        tags = [t for t in self.config.wallhaven.exclude_tags if t.lower() not in self._cloud_tags]
         if not tags:
             return [], []
         max_len = 1500

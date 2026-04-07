@@ -48,8 +48,10 @@ class WallhavenWeb:
             resp = self._client.post(
                 f"{self.BASE}/auth/login",
                 data={"_token": csrf, "username": self._username, "password": self._password},
+                follow_redirects=False,
             )
-            self._logged_in = "auth/logout" in resp.text
+            # 302 redirect (to profile page) means login succeeded
+            self._logged_in = resp.status_code == 302
             if not self._logged_in:
                 log.warning("wallhaven web: login failed for %s", self._username)
             return self._logged_in
@@ -169,6 +171,72 @@ class WallhavenWeb:
             log.warning("wallhaven web: fav error for %s", wh_id, exc_info=True)
             return False
 
+    def _parse_form_fields(self, html: str) -> dict[str, str]:
+        """Parse all form field values from the browsing settings page."""
+        fields: dict[str, str] = {}
+        csrf = self._csrf(html)
+        if csrf:
+            fields["_token"] = csrf
+
+        # Checked checkboxes/radios
+        for m in re.finditer(r'<input[^>]*type="(?:checkbox|radio)"[^>]*checked[^>]*>', html):
+            tag = m.group(0)
+            name = re.search(r'name="([^"]*)"', tag)
+            value = re.search(r'value="([^"]*)"', tag)
+            if name and value:
+                fields[name.group(1)] = value.group(1)
+
+        # Selected options in selects
+        for m in re.finditer(r'<select[^>]*name="([^"]*)"[^>]*>(.*?)</select>', html, re.DOTALL):
+            name, opts = m.groups()
+            sel = re.search(r'<option[^>]*selected[^>]*value="([^"]*)"', opts)
+            if sel:
+                fields[name] = sel.group(1)
+
+        # Textareas
+        for m in re.finditer(
+            r'<textarea[^>]*name="([^"]*)"[^>]*>(.*?)</textarea>', html, re.DOTALL
+        ):
+            fields[m.group(1)] = m.group(2).strip()
+
+        return fields
+
+    def sync_tag_blacklist(self, tags: list[str]) -> bool:
+        """Sync tag blacklist to Wallhaven account settings.
+
+        Logs in if needed, reads current settings form, and POSTs the updated
+        blacklist while preserving all other settings.
+        """
+        if not self._ensure_login():
+            return False
+        try:
+            resp = self._client.get(f"{self.BASE}/settings/browsing")
+            if resp.status_code != 200:
+                log.warning("wallhaven web: settings page returned %d", resp.status_code)
+                return False
+
+            fields = self._parse_form_fields(resp.text)
+            if "_token" not in fields:
+                log.warning("wallhaven web: no CSRF token on settings page")
+                return False
+
+            fields["blacklist"] = "\n".join(tags)
+
+            resp = self._client.post(
+                f"{self.BASE}/settings/browsing",
+                data=fields,
+                headers={"Referer": f"{self.BASE}/settings/browsing"},
+            )
+            ok = resp.status_code in (200, 302)
+            if ok:
+                log.info("wallhaven web: synced %d tags to cloud blacklist", len(tags))
+            else:
+                log.warning("wallhaven web: tag sync POST returned %d", resp.status_code)
+            return ok
+        except Exception:
+            log.warning("wallhaven web: tag sync error", exc_info=True)
+            return False
+
     def close(self) -> None:
         self._client.close()
 
@@ -216,6 +284,39 @@ def wallhaven_web_unfav(config: WayperConfig, filename: str) -> None:
 
 
 PUSH_BATCH_SIZE = 5  # max wallpapers to push per sync cycle
+
+
+def fetch_cloud_tags(config: WayperConfig) -> list[str]:
+    """Fetch tag_blacklist from Wallhaven API settings (needs API key, no login)."""
+    if not config.api_key:
+        return []
+    try:
+        with httpx.Client(proxy=config.proxy, timeout=httpx.Timeout(15, connect=10)) as client:
+            resp = client.get(
+                "https://wallhaven.cc/api/v1/settings",
+                params={"apikey": config.api_key},
+            )
+            resp.raise_for_status()
+            tags = resp.json().get("data", {}).get("tag_blacklist", [])
+            return [t for t in tags if t]  # filter empty strings
+    except Exception:
+        log.warning("wallhaven web: failed to fetch cloud tags", exc_info=True)
+        return []
+
+
+def sync_cloud_tag_blacklist(config: WayperConfig, tags: list[str]) -> None:
+    """Sync exclude_tags to Wallhaven cloud tag_blacklist (fire-and-forget thread).
+
+    No-op if wallhaven_username/password are not configured.
+    """
+    if not config.wallhaven_username or not config.wallhaven_password:
+        return
+
+    def _do():
+        with _web_lock:
+            _ensure_web_session(config).sync_tag_blacklist(tags)
+
+    threading.Thread(target=_do, daemon=True).start()
 
 
 def push_local_favorites(config: WayperConfig, remote_files: set[str]) -> int:

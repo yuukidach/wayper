@@ -231,6 +231,7 @@ def update_config_route(updates: dict = Body(...)):
 
     if "wallhaven" in updates:
         wh = updates["wallhaven"]
+        old_exclude_tags = config.wallhaven.exclude_tags.copy() if "exclude_tags" in wh else None
         if "categories" in wh:
             config.wallhaven.categories = wh["categories"]
         if "top_range" in wh:
@@ -249,6 +250,14 @@ def update_config_route(updates: dict = Body(...)):
     global _cached_config, _cached_mtime
     _cached_config = config
     _cached_mtime = 0  # force reload on next get_config if file changes again
+
+    # Sync exclude_tags to Wallhaven cloud tag_blacklist (fire-and-forget)
+    if "wallhaven" in updates and "exclude_tags" in updates["wallhaven"]:
+        if old_exclude_tags != config.wallhaven.exclude_tags:
+            from ..wallhaven_web import sync_cloud_tag_blacklist
+
+            sync_cloud_tag_blacklist(config, config.wallhaven.exclude_tags)
+
     return {"status": "ok"}
 
 
