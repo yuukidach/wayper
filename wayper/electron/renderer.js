@@ -1759,6 +1759,9 @@ function renderBlocklistView() {
                     }
                     await navigateCombo(newCtx);
                 };
+            } else {
+                tagEl.title = 'Exit review';
+                tagEl.onclick = () => exitComboLevel();
             }
             textSpan.appendChild(tagEl);
         });
