@@ -35,6 +35,7 @@ _PURITY_CODES = {"sfw": "100", "sketchy": "010", "nsfw": "001"}
 class WallhavenClient:
     def __init__(self, config: WayperConfig):
         self.config = config
+        self._local_exclude_tags: list[str] = []
         self.client = httpx.AsyncClient(
             proxy=config.proxy,
             timeout=httpx.Timeout(30, connect=10),
@@ -43,12 +44,43 @@ class WallhavenClient:
     async def close(self) -> None:
         await self.client.aclose()
 
-    def _exclude_query(self) -> str:
-        """Build exclusion query fragment from exclude_tags config."""
+    def _split_exclude_tags(self) -> tuple[list[str], list[str]]:
+        """Split exclude_tags into (api_tags, local_tags) based on URL length budget."""
         tags = self.config.wallhaven.exclude_tags
         if not tags:
+            return [], []
+        max_len = 1500
+        api_tags: list[str] = []
+        current_len = 0
+        for i, tag in enumerate(tags):
+            fragment = f'-"{tag}"' if " " in tag else f"-{tag}"
+            added = len(fragment) + (1 if api_tags else 0)
+            if current_len + added > max_len:
+                local = tags[i:]
+                log.warning(
+                    "exclude_tags query too long (%d chars); %d/%d tags will be filtered locally",
+                    current_len,
+                    len(local),
+                    len(tags),
+                )
+                return api_tags, local
+            api_tags.append(tag)
+            current_len += added
+        return api_tags, []
+
+    def _exclude_query(self) -> str:
+        """Build exclusion query fragment from exclude_tags config."""
+        api_tags, self._local_exclude_tags = self._split_exclude_tags()
+        if not api_tags:
             return ""
-        return " ".join(f'-"{t}"' if " " in t else f"-{t}" for t in tags)
+        return " ".join(f'-"{t}"' if " " in t else f"-{t}" for t in api_tags)
+
+    def _matches_local_exclude(self, tag_names: list[str]) -> bool:
+        """Return True if any tag matches overflow exclude_tags filtered locally."""
+        if not self._local_exclude_tags:
+            return False
+        lower = {t.lower() for t in tag_names}
+        return any(t.lower() in lower for t in self._local_exclude_tags)
 
     def _matches_exclude_combo(self, tag_names: list[str]) -> bool:
         """Return True if tag_names matches any exclude combo rule."""
@@ -180,7 +212,7 @@ class WallhavenClient:
                 break
 
         sample = random.sample(items, min(config.wallhaven.batch_size, len(items)))
-        downloaded: list[tuple[str, dict, Path]] = []  # (filename, item, dest)
+        candidates: list[tuple[str, str, dict, Path]] = []  # (filename, url, item, dest)
         for item in sample:
             url = item.get("path", "")
             if not url:
@@ -195,28 +227,31 @@ class WallhavenClient:
             if is_blacklisted(config, filename):
                 continue
 
+            candidates.append((filename, url, item, dest))
+
+        if not candidates:
+            return
+
+        # Fetch full details (includes tags) before downloading images
+        details = await asyncio.gather(
+            *(self.wallpaper_info(item.get("id", "")) for _, _, item, _ in candidates)
+        )
+
+        for (filename, url, item, dest), detail in zip(candidates, details):
+            if detail:
+                item = {**item, **detail}
+
+            tag_names = extract_tag_names(item.get("tags", []))
+            if self._matches_exclude_combo(tag_names) or self._matches_local_exclude(tag_names):
+                continue
+
             if not await self.download_image(url, dest):
                 continue
 
-            downloaded.append((filename, item, dest))
+            save_metadata(config, filename, item)
 
-        # Fetch full details (includes tags) in parallel for all downloaded images
-        if downloaded:
-            details = await asyncio.gather(
-                *(self.wallpaper_info(item.get("id", "")) for _, item, _ in downloaded)
-            )
-            for (filename, item, dest), detail in zip(downloaded, details):
-                if detail:
-                    item = {**item, **detail}
-
-                if self._matches_exclude_combo(extract_tag_names(item.get("tags", []))):
-                    dest.unlink(missing_ok=True)
-                    continue
-
-                save_metadata(config, filename, item)
-
-                if mon and not resize_crop(dest, mon.width, mon.height):
-                    dest.unlink(missing_ok=True)
+            if mon and not resize_crop(dest, mon.width, mon.height):
+                dest.unlink(missing_ok=True)
 
     async def sync_remote_favorites(self) -> tuple[int, set[str]]:
         """Incrementally sync wallpapers from user's Wallhaven collections.
