@@ -220,7 +220,9 @@ class WallhavenWeb:
                 log.warning("wallhaven web: no CSRF token on settings page")
                 return False
 
-            fields["blacklist"] = "\n".join(tags)
+            existing = {t.strip() for t in fields.get("blacklist", "").split("\n") if t.strip()}
+            merged = sorted(existing | set(tags))
+            fields["blacklist"] = "\n".join(merged)
 
             resp = self._client.post(
                 f"{self.BASE}/settings/browsing",
@@ -302,6 +304,23 @@ def fetch_cloud_tags(config: WayperConfig) -> list[str]:
     except Exception:
         log.warning("wallhaven web: failed to fetch cloud tags", exc_info=True)
         return []
+
+
+def merge_cloud_tags_into_config(config: WayperConfig) -> bool:
+    """Merge cloud tag_blacklist into local exclude_tags. Returns True if config was modified."""
+    from .config import save_config
+
+    cloud = fetch_cloud_tags(config)
+    if not cloud:
+        return False
+    local_lower = {t.lower() for t in config.wallhaven.exclude_tags}
+    new_tags = [t for t in cloud if t.lower() not in local_lower]
+    if not new_tags:
+        return False
+    config.wallhaven.exclude_tags.extend(new_tags)
+    save_config(config)
+    log.info("Merged %d cloud tags into local exclude_tags", len(new_tags))
+    return True
 
 
 def sync_cloud_tag_blacklist(config: WayperConfig, tags: list[str]) -> None:
