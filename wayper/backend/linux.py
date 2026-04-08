@@ -18,6 +18,8 @@ log = logging.getLogger("wayper")
 class LinuxBackend(WallpaperBackend):
     """Wayland backend using awww and hyprctl."""
 
+    _notify_id: str | None = None
+
     def detect_monitors(self) -> list[MonitorConfig]:
         try:
             result = subprocess.run(
@@ -159,8 +161,12 @@ class LinuxBackend(WallpaperBackend):
         return False
 
     def notify(self, title: str, message: str, timeout_ms: int = 2000) -> None:
-        subprocess.Popen(
-            ["notify-send", "-t", str(timeout_ms), title, message],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        cmd = ["notify-send", "-t", str(timeout_ms), "-p", title, message]
+        if self._notify_id is not None:
+            cmd[4:4] = ["-r", self._notify_id]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if result.stdout.strip():
+                self._notify_id = result.stdout.strip()
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
