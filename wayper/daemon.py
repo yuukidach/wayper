@@ -75,6 +75,11 @@ def is_daemon_running(config: WayperConfig) -> tuple[bool, int | None]:
         return False, None
     try:
         pid = int(config.pid_file.read_text().strip())
+        # Reap zombie if daemon was our child (started by API server)
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            pass  # not our child — started by CLI or another process
         os.kill(pid, 0)
         return True, pid
     except (ValueError, ProcessLookupError, OSError):

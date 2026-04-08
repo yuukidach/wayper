@@ -584,8 +584,12 @@ def daemon_action(action: str):
         running, _ = is_daemon_running(config)
         if running:
             return {"status": "already_running"}
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "daemon"]
+        else:
+            cmd = [sys.executable, "-m", "wayper.cli", "daemon"]
         subprocess.Popen(
-            [sys.executable, "-m", "wayper.cli", "daemon"],
+            cmd,
             start_new_session=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -596,7 +600,10 @@ def daemon_action(action: str):
     running, pid = is_daemon_running(config)
     if not running or not pid:
         return {"status": "not_running"}
-    os.kill(pid, signal.SIGTERM)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass  # already dead
     return {"status": "ok"}
 
 

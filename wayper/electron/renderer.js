@@ -912,13 +912,23 @@ async function ensureDaemon() {
 async function toggleDaemon() {
     const action = appState.status.running ? 'stop' : 'start';
     els.btnDaemon.innerText = action === 'start' ? 'Starting...' : 'Stopping...';
+    els.btnDaemon.disabled = true;
 
     try {
         await fetch(`${API_URL}/api/daemon/${action}`, { method: 'POST' });
-        setTimeout(fetchStatus, 1000);
     } catch (e) {
         console.error("Daemon toggle failed", e);
     }
+
+    // Poll until state changes or timeout (5s)
+    const wantRunning = action === 'start';
+    for (let i = 0; i < 5; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        await fetchStatus();
+        if (appState.status.running === wantRunning) break;
+    }
+    els.btnDaemon.disabled = false;
+    updateStatusUI();
 }
 
 async function setWallpaper(path) {
@@ -1416,10 +1426,10 @@ async function fetchStatus() {
             || data.blocklist_count !== prev.blocklist_count;
 
         appState.status = data;
+        updateStatusUI();
         if (changed) {
             console.log('[status] counts changed pool:', prev?.pool_count, '→', data.pool_count,
                 'fav:', prev?.favorites_count, '→', data.favorites_count);
-            updateStatusUI();
             // Refresh grid when current mode's count changes externally
             if (prev && !appState.refreshing) {
                 const countKey = appState.mode === 'favorites' ? 'favorites_count'
