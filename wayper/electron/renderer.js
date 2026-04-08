@@ -211,6 +211,10 @@ function setupEventListeners() {
     document.getElementById('input-exclude-tag').addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); addExcludeTag(); }
     });
+    document.getElementById('btn-add-uploader').onclick = addExcludeUploader;
+    document.getElementById('input-exclude-uploader').addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); addExcludeUploader(); }
+    });
 
     // Search
     els.searchInput.addEventListener('input', onSearchInput);
@@ -518,6 +522,7 @@ function populateSettingsForm() {
     // Exclude tags & combos
     renderExcludeTags(w.exclude_tags || []);
     renderExcludeCombos(w.exclude_combos || []);
+    renderExcludeUploaders(w.exclude_uploaders || []);
 
     // Network
     document.getElementById('input-proxy').value = c.proxy || '';
@@ -550,13 +555,13 @@ function populateSettingsForm() {
     }
 }
 
-function renderExcludeTags(tags) {
-    const container = document.getElementById('exclude-tags-container');
+function renderChipList(containerId, items) {
+    const container = document.getElementById(containerId);
     container.innerHTML = '';
-    tags.forEach(tag => {
+    items.forEach(item => {
         const chip = document.createElement('span');
         chip.className = 'tag-chip';
-        chip.textContent = tag;
+        chip.textContent = item;
         const btn = document.createElement('button');
         btn.className = 'tag-chip-remove';
         btn.textContent = '\u00d7';
@@ -566,21 +571,24 @@ function renderExcludeTags(tags) {
     });
 }
 
-function addExcludeTag() {
-    const input = document.getElementById('input-exclude-tag');
-    const tag = input.value.trim();
-    if (!tag) return;
-    const container = document.getElementById('exclude-tags-container');
-    const existing = [...container.querySelectorAll('.tag-chip')].map(c => c.textContent.slice(0, -1));
-    if (existing.includes(tag)) { input.value = ''; return; }
-    renderExcludeTags([...existing, tag]);
+function getChipList(containerId) {
+    const container = document.getElementById(containerId);
+    return [...container.querySelectorAll('.tag-chip')].map(c => c.textContent.slice(0, -1));
+}
+
+function addChipItem(inputId, containerId, renderFn) {
+    const input = document.getElementById(inputId);
+    const name = input.value.trim();
+    if (!name) return;
+    const existing = getChipList(containerId);
+    if (existing.some(e => e.toLowerCase() === name.toLowerCase())) { input.value = ''; return; }
+    renderFn([...existing, name]);
     input.value = '';
 }
 
-function getExcludeTags() {
-    const container = document.getElementById('exclude-tags-container');
-    return [...container.querySelectorAll('.tag-chip')].map(c => c.textContent.slice(0, -1));
-}
+function renderExcludeTags(tags) { renderChipList('exclude-tags-container', tags); }
+function addExcludeTag() { addChipItem('input-exclude-tag', 'exclude-tags-container', renderExcludeTags); }
+function getExcludeTags() { return getChipList('exclude-tags-container'); }
 
 function renderExcludeCombos(combos) {
     const container = document.getElementById('exclude-combos-container');
@@ -608,6 +616,10 @@ function getExcludeCombos() {
         return text.split(' + ').map(t => t.trim());
     });
 }
+
+function renderExcludeUploaders(uploaders) { renderChipList('exclude-uploaders-container', uploaders); }
+function addExcludeUploader() { addChipItem('input-exclude-uploader', 'exclude-uploaders-container', renderExcludeUploaders); }
+function getExcludeUploaders() { return getChipList('exclude-uploaders-container'); }
 
 async function fetchTagSuggestions() {
     try {
@@ -793,7 +805,8 @@ async function saveSettings() {
         sorting: document.getElementById('input-sorting').value,
         ai_art_filter: parseInt(document.getElementById('input-ai-art').value),
         exclude_tags: getExcludeTags(),
-        exclude_combos: getExcludeCombos()
+        exclude_combos: getExcludeCombos(),
+        exclude_uploaders: getExcludeUploaders()
     };
 
     // Calculate interval in seconds for backend if needed

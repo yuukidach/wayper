@@ -30,6 +30,7 @@ class WallhavenConfig:
     batch_size: int = 5
     exclude_tags: list[str] = field(default_factory=list)
     exclude_combos: list[list[str]] = field(default_factory=list)
+    exclude_uploaders: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -151,6 +152,9 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
             inner = ", ".join(f'"{_esc(t)}"' for t in combo)
             combo_strs.append(f"[{inner}]")
         lines.append(f"exclude_combos = [{', '.join(combo_strs)}]")
+    if wh.exclude_uploaders:
+        uploaders_str = ", ".join(f'"{_esc(u)}"' for u in wh.exclude_uploaders)
+        lines.append(f"exclude_uploaders = [{uploaders_str}]")
 
     tr = config.transition
     lines.append("")
@@ -197,6 +201,7 @@ def load_config(path: Path | None = None) -> WayperConfig:
         batch_size=wallhaven_raw.get("batch_size", 5),
         exclude_tags=wallhaven_raw.get("exclude_tags", []),
         exclude_combos=wallhaven_raw.get("exclude_combos", []),
+        exclude_uploaders=wallhaven_raw.get("exclude_uploaders", []),
     )
 
     transition_raw = raw.get("transition", {})

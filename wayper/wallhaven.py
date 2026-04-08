@@ -250,9 +250,17 @@ class WallhavenClient:
             *(self.wallpaper_info(item.get("id", "")) for _, _, item, _ in candidates)
         )
 
+        excluded_uploaders_lower = {u.lower() for u in self.config.wallhaven.exclude_uploaders}
         for (filename, url, item, dest), detail in zip(candidates, details):
             if detail:
                 item = {**item, **detail}
+
+            # Skip excluded uploaders (local-only — Wallhaven API has no uploader filter)
+            uploader = item.get("uploader", "")
+            if isinstance(uploader, dict):
+                uploader = uploader.get("username", "")
+            if uploader and uploader.lower() in excluded_uploaders_lower:
+                continue
 
             tag_names = extract_tag_names(item.get("tags", []))
             if self._matches_exclude_combo(tag_names) or self._matches_local_exclude(tag_names):

@@ -239,6 +239,46 @@ class WallhavenWeb:
             log.warning("wallhaven web: tag sync error", exc_info=True)
             return False
 
+    def sync_user_blacklist(self, usernames: list[str]) -> bool:
+        """Sync user blacklist to Wallhaven account settings.
+
+        Reads current settings form, merges usernames into blacklist_users
+        textarea, and POSTs back while preserving all other settings.
+        """
+        if not self._ensure_login():
+            return False
+        try:
+            resp = self._client.get(f"{self.BASE}/settings/browsing")
+            if resp.status_code != 200:
+                log.warning("wallhaven web: settings page returned %d", resp.status_code)
+                return False
+
+            fields = self._parse_form_fields(resp.text)
+            if "_token" not in fields:
+                log.warning("wallhaven web: no CSRF token on settings page")
+                return False
+
+            existing = {
+                u.strip() for u in fields.get("blacklist_users", "").split("\n") if u.strip()
+            }
+            merged = sorted(existing | set(usernames))
+            fields["blacklist_users"] = "\n".join(merged)
+
+            resp = self._client.post(
+                f"{self.BASE}/settings/browsing",
+                data=fields,
+                headers={"Referer": f"{self.BASE}/settings/browsing"},
+            )
+            ok = resp.status_code in (200, 302)
+            if ok:
+                log.info("wallhaven web: synced %d users to cloud user blacklist", len(usernames))
+            else:
+                log.warning("wallhaven web: user blacklist sync POST returned %d", resp.status_code)
+            return ok
+        except Exception:
+            log.warning("wallhaven web: user blacklist sync error", exc_info=True)
+            return False
+
     def close(self) -> None:
         self._client.close()
 
@@ -288,10 +328,10 @@ def wallhaven_web_unfav(config: WayperConfig, filename: str) -> None:
 PUSH_BATCH_SIZE = 5  # max wallpapers to push per sync cycle
 
 
-def fetch_cloud_tags(config: WayperConfig) -> list[str]:
-    """Fetch tag_blacklist from Wallhaven API settings (needs API key, no login)."""
+def _fetch_cloud_settings(config: WayperConfig) -> dict:
+    """Fetch Wallhaven API settings (needs API key, no login). Returns data dict."""
     if not config.api_key:
-        return []
+        return {}
     try:
         with httpx.Client(proxy=config.proxy, timeout=httpx.Timeout(15, connect=10)) as client:
             resp = client.get(
@@ -299,11 +339,22 @@ def fetch_cloud_tags(config: WayperConfig) -> list[str]:
                 params={"apikey": config.api_key},
             )
             resp.raise_for_status()
-            tags = resp.json().get("data", {}).get("tag_blacklist", [])
-            return [t for t in tags if t]  # filter empty strings
+            return resp.json().get("data", {})
     except Exception:
-        log.warning("wallhaven web: failed to fetch cloud tags", exc_info=True)
-        return []
+        log.warning("wallhaven web: failed to fetch cloud settings", exc_info=True)
+        return {}
+
+
+def fetch_cloud_tags(config: WayperConfig) -> list[str]:
+    """Fetch tag_blacklist from Wallhaven API settings (needs API key, no login)."""
+    tags = _fetch_cloud_settings(config).get("tag_blacklist", [])
+    return [t for t in tags if t]
+
+
+def fetch_cloud_users(config: WayperConfig) -> list[str]:
+    """Fetch user_blacklist from Wallhaven API settings (needs API key, no login)."""
+    users = _fetch_cloud_settings(config).get("user_blacklist", [])
+    return [u for u in users if u]
 
 
 def merge_cloud_tags_into_config(config: WayperConfig) -> bool:
@@ -323,6 +374,61 @@ def merge_cloud_tags_into_config(config: WayperConfig) -> bool:
     return True
 
 
+def merge_cloud_users_into_config(config: WayperConfig) -> bool:
+    """Merge cloud user_blacklist into local exclude_uploaders.
+
+    Returns True if config was modified.
+    """
+    from .config import save_config
+
+    cloud = fetch_cloud_users(config)
+    if not cloud:
+        return False
+    local_lower = {u.lower() for u in config.wallhaven.exclude_uploaders}
+    new_users = [u for u in cloud if u.lower() not in local_lower]
+    if not new_users:
+        return False
+    config.wallhaven.exclude_uploaders.extend(new_users)
+    save_config(config)
+    log.info("Merged %d cloud users into local exclude_uploaders", len(new_users))
+    return True
+
+
+def merge_cloud_blacklists_into_config(config: WayperConfig) -> bool:
+    """Merge both cloud tag_blacklist and user_blacklist into local config (single API call).
+
+    Returns True if config was modified.
+    """
+    from .config import save_config
+
+    data = _fetch_cloud_settings(config)
+    if not data:
+        return False
+
+    modified = False
+    cloud_tags = [t for t in data.get("tag_blacklist", []) if t]
+    if cloud_tags:
+        local_lower = {t.lower() for t in config.wallhaven.exclude_tags}
+        new_tags = [t for t in cloud_tags if t.lower() not in local_lower]
+        if new_tags:
+            config.wallhaven.exclude_tags.extend(new_tags)
+            log.info("Merged %d cloud tags into local exclude_tags", len(new_tags))
+            modified = True
+
+    cloud_users = [u for u in data.get("user_blacklist", []) if u]
+    if cloud_users:
+        local_lower = {u.lower() for u in config.wallhaven.exclude_uploaders}
+        new_users = [u for u in cloud_users if u.lower() not in local_lower]
+        if new_users:
+            config.wallhaven.exclude_uploaders.extend(new_users)
+            log.info("Merged %d cloud users into local exclude_uploaders", len(new_users))
+            modified = True
+
+    if modified:
+        save_config(config)
+    return modified
+
+
 def sync_cloud_tag_blacklist(config: WayperConfig, tags: list[str]) -> None:
     """Sync exclude_tags to Wallhaven cloud tag_blacklist (fire-and-forget thread).
 
@@ -334,6 +440,21 @@ def sync_cloud_tag_blacklist(config: WayperConfig, tags: list[str]) -> None:
     def _do():
         with _web_lock:
             _ensure_web_session(config).sync_tag_blacklist(tags)
+
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def sync_cloud_user_blacklist(config: WayperConfig, usernames: list[str]) -> None:
+    """Sync exclude_uploaders to Wallhaven cloud user blacklist (fire-and-forget thread).
+
+    No-op if wallhaven_username/password are not configured.
+    """
+    if not config.wallhaven_username or not config.wallhaven_password:
+        return
+
+    def _do():
+        with _web_lock:
+            _ensure_web_session(config).sync_user_blacklist(usernames)
 
     threading.Thread(target=_do, daemon=True).start()
 

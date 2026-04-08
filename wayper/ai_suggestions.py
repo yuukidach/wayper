@@ -270,10 +270,10 @@ def _build_prompt(
     if top_uploaders:
         parts.append(
             "\n## Top Uploaders in Banned Images\n"
-            "These uploaders appear frequently in banned images. The user can block "
-            "uploaders via Wallhaven's account settings (user blacklist). Suggest "
-            "uploaders worth blocking if their ban count is high relative to their "
-            "kept count (use tag_stats_lookup with the uploader name if available).\n"
+            "These uploaders appear frequently in banned images. Suggest adding them "
+            "to exclude_uploaders (filtered locally during download and synced to "
+            "Wallhaven's user blacklist). Only suggest uploaders whose ban count is "
+            "high relative to their kept count.\n"
         )
         for u in top_uploaders:
             parts.append(f"  {u['uploader']} — {u['ban_count']} banned\n")

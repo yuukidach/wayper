@@ -25,6 +25,14 @@ class ComboSuggestion(TypedDict):
     precision: float
 
 
+class UploaderSuggestion(TypedDict):
+    uploader: str
+    ban_count: int
+    kept_count: int
+    fav_count: int
+    net_benefit: float
+
+
 def suggest_tags_to_exclude(
     metadata: dict[str, ImageMetadata],
     blacklisted: set[str],
@@ -397,3 +405,60 @@ def suggest_combo_patterns(
     ]
     all_combos.sort(key=lambda c: (-c["count"], -c["precision"]))
     return all_combos[:max_results]
+
+
+def suggest_uploaders_to_exclude(
+    metadata: dict[str, ImageMetadata],
+    blacklisted: set[str],
+    excluded_uploaders: list[str],
+    favorites: set[str] | None = None,
+    *,
+    max_results: int = 10,
+) -> list[UploaderSuggestion]:
+    """Suggest uploaders to exclude using cost-benefit scoring.
+
+    Same logic as tag suggestions: net_benefit = ban - KEPT_WEIGHT * kept - FAV_WEIGHT * fav.
+    Only uploaders with positive net benefit and >=3 bans are returned.
+    """
+    if not blacklisted:
+        return []
+
+    favorites = favorites or set()
+    excluded_lower = {u.lower() for u in excluded_uploaders}
+
+    uploader_ban: dict[str, int] = {}
+    uploader_kept: dict[str, int] = {}
+    uploader_fav: dict[str, int] = {}
+
+    for filename, meta in metadata.items():
+        uploader = meta.get("uploader", "")
+        if not uploader or uploader.lower() in excluded_lower:
+            continue
+        if filename in blacklisted:
+            uploader_ban[uploader] = uploader_ban.get(uploader, 0) + 1
+        else:
+            uploader_kept[uploader] = uploader_kept.get(uploader, 0) + 1
+            if filename in favorites:
+                uploader_fav[uploader] = uploader_fav.get(uploader, 0) + 1
+
+    results: list[UploaderSuggestion] = []
+    for uploader, ban_count in uploader_ban.items():
+        if ban_count < 3:
+            continue
+        kept_count = uploader_kept.get(uploader, 0)
+        fav_count = uploader_fav.get(uploader, 0)
+        net_benefit = ban_count - KEPT_WEIGHT * kept_count - FAV_WEIGHT * fav_count
+        if net_benefit <= 0:
+            continue
+        results.append(
+            {
+                "uploader": uploader,
+                "ban_count": ban_count,
+                "kept_count": kept_count,
+                "fav_count": fav_count,
+                "net_benefit": round(net_benefit, 1),
+            }
+        )
+
+    results.sort(key=lambda r: (-r["ban_count"], -r["net_benefit"]))
+    return results[:max_results]

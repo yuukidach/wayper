@@ -104,6 +104,17 @@ def _get_metadata() -> dict:
     return _cached_metadata
 
 
+def _build_favs_set(config) -> set[str]:
+    """Collect favorite filenames from all purity/orientation subdirs."""
+    fav_base = config.download_dir / "favorites"
+    favs: set[str] = set()
+    if fav_base.is_dir():
+        for f in fav_base.rglob("*"):
+            if f.is_file() and not f.name.startswith("."):
+                favs.add(f.name)
+    return favs
+
+
 # Pydantic models
 class StatusResponse(BaseModel):
     running: bool
@@ -198,6 +209,7 @@ def get_config_route():
             "ai_art_filter": config.wallhaven.ai_art_filter,
             "exclude_tags": config.wallhaven.exclude_tags,
             "exclude_combos": config.wallhaven.exclude_combos,
+            "exclude_uploaders": config.wallhaven.exclude_uploaders,
         },
     }
 
@@ -232,6 +244,9 @@ def update_config_route(updates: dict = Body(...)):
     if "wallhaven" in updates:
         wh = updates["wallhaven"]
         old_exclude_tags = config.wallhaven.exclude_tags.copy() if "exclude_tags" in wh else None
+        old_exclude_uploaders = (
+            config.wallhaven.exclude_uploaders.copy() if "exclude_uploaders" in wh else None
+        )
         if "categories" in wh:
             config.wallhaven.categories = wh["categories"]
         if "top_range" in wh:
@@ -244,6 +259,8 @@ def update_config_route(updates: dict = Body(...)):
             config.wallhaven.exclude_tags = wh["exclude_tags"]
         if "exclude_combos" in wh:
             config.wallhaven.exclude_combos = wh["exclude_combos"]
+        if "exclude_uploaders" in wh:
+            config.wallhaven.exclude_uploaders = wh["exclude_uploaders"]
 
     save_config(config)
     signal_daemon(config, signal.SIGHUP)
@@ -257,6 +274,13 @@ def update_config_route(updates: dict = Body(...)):
             from ..wallhaven_web import sync_cloud_tag_blacklist
 
             sync_cloud_tag_blacklist(config, config.wallhaven.exclude_tags)
+
+    # Sync exclude_uploaders to Wallhaven cloud user blacklist (fire-and-forget)
+    if "wallhaven" in updates and "exclude_uploaders" in updates["wallhaven"]:
+        if old_exclude_uploaders != config.wallhaven.exclude_uploaders:
+            from ..wallhaven_web import sync_cloud_user_blacklist
+
+            sync_cloud_user_blacklist(config, config.wallhaven.exclude_uploaders)
 
     return {"status": "ok"}
 
@@ -664,15 +688,7 @@ def tag_suggestions(context: str = ""):
     }
 
     blacklisted = {fn for _, fn in list_blacklist(config) if fn in metadata}
-
-    # Build favorites set from filesystem
-    fav_base = config.download_dir / "favorites"
-    favs: set[str] = set()
-    if fav_base.is_dir():
-        for f in fav_base.rglob("*"):
-            if f.is_file() and not f.name.startswith("."):
-                favs.add(f.name)
-
+    favs = _build_favs_set(config)
     if context:
         from wayper.suggestions import suggest_combo_refinements
 
@@ -696,6 +712,30 @@ def tag_suggestions(context: str = ""):
     return {"suggestions": results, "combo_suggestions": combos}
 
 
+@app.get("/api/uploader-suggestions")
+def uploader_suggestions():
+    """Suggest uploaders to exclude based on dislike history."""
+    config = get_config()
+    metadata = _get_metadata()
+
+    from wayper.state import read_mode
+
+    active_purities = read_mode(config)
+    metadata = {
+        fn: meta for fn, meta in metadata.items() if meta.get("purity", "sfw") in active_purities
+    }
+
+    blacklisted = {fn for _, fn in list_blacklist(config) if fn in metadata}
+    favs = _build_favs_set(config)
+
+    from wayper.suggestions import suggest_uploaders_to_exclude
+
+    results = suggest_uploaders_to_exclude(
+        metadata, blacklisted, config.wallhaven.exclude_uploaders, favs
+    )
+    return {"suggestions": results}
+
+
 @app.get("/api/tag-stats")
 def tag_stats(
     tags: str = "",
@@ -714,13 +754,7 @@ def tag_stats(
     config = get_config()
     metadata = _get_metadata()
     blacklisted = {fn for _, fn in list_blacklist(config)}
-
-    fav_base = config.download_dir / "favorites"
-    favs: set[str] = set()
-    if fav_base.is_dir():
-        for f in fav_base.rglob("*"):
-            if f.is_file() and not f.name.startswith("."):
-                favs.add(f.name)
+    favs = _build_favs_set(config)
 
     # Parse purity filter
     purity_set: set[str] | None = None

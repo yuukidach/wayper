@@ -30,6 +30,7 @@ max_page = 15
 batch_size = 5
 # exclude_tags = ["MetArt", "watermarked"]  # synced to Wallhaven cloud blacklist if credentials are set
 # exclude_combos = [["blonde", "nude", "standing"], ["pornstar", "nude"]]
+# exclude_uploaders = ["username1", "username2"]  # synced to Wallhaven user blacklist if credentials are set
 
 [transition]
 type = "grow"
