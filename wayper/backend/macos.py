@@ -9,7 +9,11 @@ from ..config import MonitorConfig, TransitionConfig
 from .base import WallpaperBackend
 
 try:
-    from AppKit import NSScreen, NSWorkspace
+    from AppKit import NSApplication, NSScreen, NSWorkspace
+
+    # Hide Python from Dock — background service, not a GUI app
+    # 2 = NSApplicationActivationPolicyProhibited
+    NSApplication.sharedApplication().setActivationPolicy_(2)
 
     _HAS_APPKIT = True
 except ImportError:
