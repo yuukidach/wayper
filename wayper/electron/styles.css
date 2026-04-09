@@ -1854,6 +1854,28 @@ footer {
   color: var(--text);
 }
 
+.search-type-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-right: 8px;
+  vertical-align: baseline;
+}
+
+.search-type-badge.tag {
+  background: var(--surface2);
+  color: var(--overlay0);
+}
+
+.search-type-badge.uploader {
+  background: color-mix(in srgb, var(--mauve) 15%, transparent);
+  color: var(--mauve);
+}
+
 /* ---------- Utilities ---------- */
 
 .hidden {

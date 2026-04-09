@@ -1068,7 +1068,7 @@ async function performSearch(query) {
         const data = await res.json();
         console.log('[search]', query, '→', data.matches?.length, 'matches, allImages:', appState.allImages.length);
         appState.searchMatches = new Set(data.matches || []);
-        renderSearchSuggestions(data.suggestions || []);
+        renderSearchSuggestions(data.suggestions || [], data.uploader_suggestions || []);
         applySearchFilter();
         updateSearchCount();
     } catch (e) {
@@ -1205,23 +1205,30 @@ function selectSearchTag(tag) {
     }
 }
 
-function renderSearchSuggestions(suggestions) {
+function renderSearchSuggestions(suggestions, uploaderSuggestions = []) {
     searchHighlightIndex = -1;
-    if (!suggestions.length) {
+    if (!suggestions.length && !uploaderSuggestions.length) {
         els.searchDropdown.classList.add('hidden');
         return;
     }
 
-    els.searchDropdown.innerHTML = suggestions.map((tag, i) =>
-        `<div class="search-dropdown-item" data-index="${i}">${esc(tag)}</div>`
+    let idx = 0;
+    let html = '';
+    html += uploaderSuggestions.map(u =>
+        `<div class="search-dropdown-item" data-index="${idx++}" data-type="uploader"><span class="search-type-badge uploader">uploader</span>${esc(u)}</div>`
     ).join('');
+    html += suggestions.map(tag =>
+        `<div class="search-dropdown-item" data-index="${idx++}"><span class="search-type-badge tag">tag</span>${esc(tag)}</div>`
+    ).join('');
+    els.searchDropdown.innerHTML = html;
     els.searchDropdown.classList.remove('hidden');
 
     els.searchDropdown.querySelectorAll('.search-dropdown-item').forEach(item => {
         item.onmousedown = (e) => {
             e.preventDefault(); // Prevent blur
             els.searchDropdown.classList.add('hidden');
-            selectSearchTag(item.textContent);
+            const text = item.textContent.replace(/^(uploader|tag)/, '');
+            selectSearchTag(text);
         };
     });
 }

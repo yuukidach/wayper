@@ -655,19 +655,35 @@ def search_images(q: str = "", tags: str = ""):
         return {"matches": matches, "suggestions": []}
 
     query = q.lower()
+    uploader_counts: dict[str, int] = {}
     for filename, meta in metadata.items():
         img_tags = [t.lower() for t in meta.get("tags", [])]
         category = meta.get("category", "").lower()
+        uploader = meta.get("uploader", "").lower()
         fname = filename.lower()
 
-        if any(query in tag for tag in img_tags) or query in category or query in fname:
+        hit = (
+            any(query in tag for tag in img_tags)
+            or query in category
+            or query in uploader
+            or query in fname
+        )
+        if hit:
             matches.append(filename)
             for tag in meta.get("tags", []):
                 if tag.lower().startswith(query):
                     tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            raw_uploader = meta.get("uploader", "")
+            if raw_uploader and query in uploader:
+                uploader_counts[raw_uploader] = uploader_counts.get(raw_uploader, 0) + 1
 
     suggestions = sorted(tag_counts.keys(), key=lambda t: -tag_counts[t])[:8]
-    return {"matches": matches, "suggestions": suggestions}
+    upl_suggestions = sorted(uploader_counts.keys(), key=lambda u: -uploader_counts[u])[:4]
+    return {
+        "matches": matches,
+        "suggestions": suggestions,
+        "uploader_suggestions": upl_suggestions,
+    }
 
 
 @app.get("/api/tag-suggestions")
