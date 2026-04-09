@@ -3,7 +3,7 @@ api_key = ""  # https://wallhaven.cc/settings/account
 # wallhaven_password = ""
 # proxy = "http://127.0.0.1:7897"
 download_dir = "~/Pictures/wallpaper"
-interval = 300         # seconds between rotations
+interval = 300         # seconds between rotations (0 = no auto-rotation)
 quota_mb = 4000        # max disk usage
 blacklist_ttl_days = 30
 pause_on_lock = true       # pause rotation when session is locked

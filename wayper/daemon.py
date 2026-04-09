@@ -262,36 +262,46 @@ async def run_daemon(config: WayperConfig) -> None:
                 greeter_count = 0
 
             # Interruptible sleep — _wake.set() fires instantly on signal
-            remaining = config.interval
-            while remaining > 0:
-                if _change_now or _reload_mode:
-                    break
-                await reload_config_if_needed()
-
-                # Pause if locked
-                if config.pause_on_lock and is_locked():
-                    log.info("Session locked, pausing timer")
-                    while config.pause_on_lock and is_locked():
-                        if _change_now or _reload_mode:
-                            break
-                        if _reload_config:
-                            await reload_config_if_needed()
-                        _wake.clear()
-                        try:
-                            await asyncio.wait_for(_wake.wait(), timeout=5)
-                        except TimeoutError:
-                            pass
-                    log.info("Session unlocked, resuming timer")
-
+            if config.interval <= 0:
+                # No auto-rotation: wait indefinitely for a signal
+                log.info("Auto-rotation disabled (interval=0), waiting for signal")
+                while not _change_now and not _reload_mode and not _reload_config:
+                    _wake.clear()
+                    try:
+                        await asyncio.wait_for(_wake.wait(), timeout=5)
+                    except TimeoutError:
+                        pass
+            else:
+                remaining = config.interval
+                while remaining > 0:
                     if _change_now or _reload_mode:
                         break
+                    await reload_config_if_needed()
 
-                _wake.clear()
-                try:
-                    await asyncio.wait_for(_wake.wait(), timeout=1)
-                except TimeoutError:
-                    pass
-                remaining -= 1
+                    # Pause if locked
+                    if config.pause_on_lock and is_locked():
+                        log.info("Session locked, pausing timer")
+                        while config.pause_on_lock and is_locked():
+                            if _change_now or _reload_mode:
+                                break
+                            if _reload_config:
+                                await reload_config_if_needed()
+                            _wake.clear()
+                            try:
+                                await asyncio.wait_for(_wake.wait(), timeout=5)
+                            except TimeoutError:
+                                pass
+                        log.info("Session unlocked, resuming timer")
+
+                        if _change_now or _reload_mode:
+                            break
+
+                    _wake.clear()
+                    try:
+                        await asyncio.wait_for(_wake.wait(), timeout=1)
+                    except TimeoutError:
+                        pass
+                    remaining -= 1
     except (KeyboardInterrupt, SystemExit):
         log.info("Daemon shutting down")
     finally:

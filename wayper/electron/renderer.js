@@ -510,7 +510,7 @@ function populateSettingsForm() {
     const w = c.wallhaven;
 
     // General
-    document.getElementById('input-interval').value = Math.round(c.interval_min || 5);
+    document.getElementById('input-interval').value = c.interval_min ?? 5;
     document.getElementById('input-quota').value = c.quota_mb;
 
     // Wallhaven
@@ -775,7 +775,7 @@ async function applyAISuggestion(suggestion, action) {
 
 async function saveSettings() {
     const updates = {
-        interval_min: parseInt(document.getElementById('input-interval').value) || 5,
+        interval_min: parseInt(document.getElementById('input-interval').value) || 0,
         quota_mb: parseInt(document.getElementById('input-quota').value) || 4000,
         proxy: document.getElementById('input-proxy').value,
         pause_on_lock: document.getElementById('input-pause-on-lock').checked,
