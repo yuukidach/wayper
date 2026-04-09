@@ -265,7 +265,8 @@ async def run_daemon(config: WayperConfig) -> None:
             if config.interval <= 0:
                 # No auto-rotation: wait indefinitely for a signal
                 log.info("Auto-rotation disabled (interval=0), waiting for signal")
-                while not _change_now and not _reload_mode and not _reload_config:
+                while not _change_now and not _reload_mode:
+                    await reload_config_if_needed()
                     _wake.clear()
                     try:
                         await asyncio.wait_for(_wake.wait(), timeout=5)
