@@ -186,13 +186,17 @@ class WallhavenWeb:
             if name:
                 fields[name.group(1)] = value.group(1) if value else ""
 
-        # Checked checkboxes/radios
-        for m in re.finditer(r'<input[^>]*type="(?:checkbox|radio)"[^>]*checked[^>]*>', html):
+        # Checked checkboxes/radios (attribute order varies)
+        for m in re.finditer(r"<input[^>]*>", html):
             tag = m.group(0)
+            if not re.search(r'type="(?:checkbox|radio)"', tag):
+                continue
+            if "checked" not in tag:
+                continue
             name = re.search(r'name="([^"]*)"', tag)
             value = re.search(r'value="([^"]*)"', tag)
-            if name and value:
-                fields[name.group(1)] = value.group(1)
+            if name:
+                fields[name.group(1)] = value.group(1) if value else "on"
 
         # Selected options in selects
         for m in re.finditer(r'<select[^>]*name="([^"]*)"[^>]*>(.*?)</select>', html, re.DOTALL):
