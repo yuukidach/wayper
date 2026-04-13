@@ -165,6 +165,7 @@ def _build_prompt(
     fav_count: int,
     exclude_tags: list[str],
     exclude_combos: list[list[str]],
+    exclude_uploaders: list[str] | None = None,
     active_purities: set[str] | None = None,
     history: list[dict] | None = None,
     discovered_patterns: list[dict] | None = None,
@@ -214,18 +215,25 @@ def _build_prompt(
         "combo) can replace multiple individual exclusions. This is the HIGHEST VALUE "
         "analysis because it reduces exclude_tags list growth.\n"
         "- UPLOADER patterns: if certain uploaders dominate banned images, suggest "
-        "them as candidates for Wallhaven's account-level user blacklist.\n"
+        "them as candidates for exclude_uploaders (type=uploader).\n"
         "- SEMANTIC clusters: group related specific tags that point to the same "
         "ban pattern\n"
         "- SIMPLIFY existing combos: if one tag in a combo has 0 Kept AND "
         "0 Favorites, it may be upgradeable to a single-tag exclude\n"
         "- OVER-BROAD exclusions: if an excluded tag has significant Kept/Favorites "
-        "presence, suggest removing it or replacing with narrower rules\n\n"
+        "presence, suggest removing it or replacing with narrower rules\n"
+        "- REDUNDANT RULES: if an excluded tag/combo is fully covered by an "
+        "excluded uploader (i.e. all banned images with that tag come from an "
+        "excluded uploader), suggest removing the redundant tag/combo. Similarly, "
+        "if a new uploader exclusion would make existing tag exclusions unnecessary, "
+        "mention this in the remove_suggestions.\n\n"
+        "IMPORTANT: For uploader suggestions, use type=uploader and put EACH uploader "
+        "as a SEPARATE suggestion. Do NOT combine multiple uploaders into one suggestion.\n\n"
         "Respond with ONLY JSON (no markdown):\n"
         '{"analysis":"pattern summary",'
-        '"add_suggestions":[{"type":"tag or combo","tags":["tag1","tag2"],'
+        '"add_suggestions":[{"type":"tag, combo, or uploader","tags":["tag1","tag2"],'
         '"reason":"why","confidence":"high/medium/low"}],'
-        '"remove_suggestions":[{"type":"tag or combo","tags":["tag1","tag2"],'
+        '"remove_suggestions":[{"type":"tag, combo, or uploader","tags":["tag1","tag2"],'
         '"reason":"why this rule is wrong or too broad, and what to do instead"}]}\n',
     ]
 
@@ -234,6 +242,8 @@ def _build_prompt(
         parts.append(f"\nExcluded tags: {', '.join(exclude_tags)}\n")
     if exclude_combos:
         parts.append(f"Excluded combos: {'; '.join(' + '.join(c) for c in exclude_combos)}\n")
+    if exclude_uploaders:
+        parts.append(f"Excluded uploaders: {', '.join(exclude_uploaders)}\n")
 
     # Statistically discovered patterns (high-precision combos from contrast mining)
     if discovered_patterns:
@@ -271,12 +281,19 @@ def _build_prompt(
         parts.append(
             "\n## Top Uploaders in Banned Images\n"
             "These uploaders appear frequently in banned images. Suggest adding them "
-            "to exclude_uploaders (filtered locally during download and synced to "
-            "Wallhaven's user blacklist). Only suggest uploaders whose ban count is "
-            "high relative to their kept count.\n"
+            "to exclude_uploaders (type=uploader) — filtered locally during download "
+            "and synced to Wallhaven's user blacklist. Each uploader MUST be a separate "
+            "suggestion. Uploaders with high ban rate and low kept/fav are strong candidates.\n"
         )
         for u in top_uploaders:
-            parts.append(f"  {u['uploader']} — {u['ban_count']} banned\n")
+            ban = u["ban_count"]
+            kept = u["kept_count"]
+            fav = u["fav_count"]
+            total = ban + kept + fav
+            rate = ban * 100 // total if total else 0
+            parts.append(
+                f"  {u['uploader']} — {ban} banned, {kept} kept, {fav} fav ({rate}% ban rate)\n"
+            )
 
     # Recent bans — images that escaped current exclusion rules
     if recent_bans:
@@ -482,21 +499,29 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
     excluded_lower = {t.lower() for t in config.wallhaven.exclude_tags}
     combo_sets_lower = [{t.lower() for t in c} for c in config.wallhaven.exclude_combos]
     cooccur_map: dict[str, set[str]] = {}  # tag → set of excluded tags it co-occurs with
-    uploader_ban_count: dict[str, int] = {}  # uploader → banned image count
+    uploader_ban_count: dict[str, int] = {}
+    uploader_kept_count: dict[str, int] = {}
+    uploader_fav_count: dict[str, int] = {}
 
-    for fn in blacklisted:
-        meta = metadata.get(fn)
+    for fn, meta in metadata.items():
         if not meta:
             continue
-        tags = meta.get("tags", [])
-        tags_lc = {t.lower() for t in tags}
-        matched_lc = tags_lc & excluded_lower
-        if matched_lc:
-            for tl in tags_lc - excluded_lower:
-                cooccur_map.setdefault(tl, set()).update(matched_lc)
         uploader = meta.get("uploader")
-        if uploader:
-            uploader_ban_count[uploader] = uploader_ban_count.get(uploader, 0) + 1
+
+        if fn in blacklisted:
+            tags = meta.get("tags", [])
+            tags_lc = {t.lower() for t in tags}
+            matched_lc = tags_lc & excluded_lower
+            if matched_lc:
+                for tl in tags_lc - excluded_lower:
+                    cooccur_map.setdefault(tl, set()).update(matched_lc)
+            if uploader:
+                uploader_ban_count[uploader] = uploader_ban_count.get(uploader, 0) + 1
+        elif uploader:
+            if fn in fav_files_set:
+                uploader_fav_count[uploader] = uploader_fav_count.get(uploader, 0) + 1
+            else:
+                uploader_kept_count[uploader] = uploader_kept_count.get(uploader, 0) + 1
 
     cooccurrence = [
         {"tag": tag, "excluded": sorted(exc), "count": len(exc)}
@@ -508,7 +533,12 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
 
     # Top uploaders in banned images (≥3 bans)
     top_uploaders = [
-        {"uploader": u, "ban_count": c}
+        {
+            "uploader": u,
+            "ban_count": c,
+            "kept_count": uploader_kept_count.get(u, 0),
+            "fav_count": uploader_fav_count.get(u, 0),
+        }
         for u, c in sorted(uploader_ban_count.items(), key=lambda x: -x[1])
         if c >= 3
     ][:10]
@@ -549,6 +579,7 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
         fav_count,
         config.wallhaven.exclude_tags,
         config.wallhaven.exclude_combos,
+        exclude_uploaders=config.wallhaven.exclude_uploaders,
         active_purities=active_purities,
         history=history,
         discovered_patterns=combo_patterns,

@@ -155,6 +155,7 @@ class WallhavenConfigModel(BaseModel):
     ai_art_filter: int
     exclude_tags: list[str]
     exclude_combos: list[list[str]] = []
+    exclude_uploaders: list[str] = []
 
 
 class ConfigResponse(BaseModel):
@@ -632,13 +633,14 @@ def daemon_action(action: str):
 
 
 @app.get("/api/search")
-def search_images(q: str = "", tags: str = ""):
-    """Search images by tags, category, or filename.
+def search_images(q: str = "", tags: str = "", uploader: str = ""):
+    """Search images by tags, uploader, category, or filename.
 
     Use ?tags=tag1,tag2 for exact multi-tag intersection (all must match).
+    Use ?uploader=name for exact uploader match.
     Use ?q=query for substring search.
     """
-    if not q and not tags:
+    if not q and not tags and not uploader:
         return {"matches": [], "suggestions": []}
 
     metadata = _get_metadata()
@@ -654,18 +656,26 @@ def search_images(q: str = "", tags: str = ""):
                 matches.append(filename)
         return {"matches": matches, "suggestions": []}
 
+    if uploader:
+        # Exact uploader match (case-insensitive)
+        uploader_lower = uploader.lower()
+        for filename, meta in metadata.items():
+            if meta.get("uploader", "").lower() == uploader_lower:
+                matches.append(filename)
+        return {"matches": matches, "suggestions": []}
+
     query = q.lower()
     uploader_counts: dict[str, int] = {}
     for filename, meta in metadata.items():
         img_tags = [t.lower() for t in meta.get("tags", [])]
         category = meta.get("category", "").lower()
-        uploader = meta.get("uploader", "").lower()
+        meta_uploader = meta.get("uploader", "").lower()
         fname = filename.lower()
 
         hit = (
             any(query in tag for tag in img_tags)
             or query in category
-            or query in uploader
+            or query in meta_uploader
             or query in fname
         )
         if hit:
@@ -674,7 +684,7 @@ def search_images(q: str = "", tags: str = ""):
                 if tag.lower().startswith(query):
                     tag_counts[tag] = tag_counts.get(tag, 0) + 1
             raw_uploader = meta.get("uploader", "")
-            if raw_uploader and query in uploader:
+            if raw_uploader and query in meta_uploader:
                 uploader_counts[raw_uploader] = uploader_counts.get(raw_uploader, 0) + 1
 
     suggestions = sorted(tag_counts.keys(), key=lambda t: -tag_counts[t])[:8]

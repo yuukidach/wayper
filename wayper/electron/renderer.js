@@ -6,6 +6,13 @@ function esc(str) {
     return _escDiv.innerHTML;
 }
 
+function createTypeBadge(type) {
+    const badge = document.createElement('span');
+    badge.className = `search-type-badge ${type}`;
+    badge.textContent = type;
+    return badge;
+}
+
 // SVG icon templates
 const ICONS = {
     setWallpaper: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`,
@@ -49,6 +56,7 @@ let appState = {
     tagSuggestions: null, // tag exclusion suggestions
     comboSuggestions: null, // auto-discovered combo exclusion suggestions
     reviewingTag: null, // tag currently being reviewed in blocklist
+    reviewingUploader: null, // uploader currently being reviewed in blocklist
     comboContext: [], // drill-down context for combo exclusion [tag1, tag2, ...]
     comboRefinements: [], // refinement suggestions for current context
     aiSuggestions: null,           // Result from /api/ai-suggestions
@@ -161,12 +169,10 @@ async function init() {
         updateGridMetrics();
     }, 200));
 
-    await fetchConfig(); // to get initial mode & settings
-    await fetchMonitors();
-    await ensureDaemon();
-    await fetchStatus();
-    await fetchDiskUsage();
-    await refreshImages();
+    // Phase 1: config, monitors, and daemon start are independent
+    await Promise.all([fetchConfig(), fetchMonitors(), ensureDaemon()]);
+    // Phase 2: all depend on config/monitors being ready
+    await Promise.all([fetchStatus(), fetchDiskUsage(), refreshImages()]);
 
     // Initial metrics update after images loaded (or attempted)
     setTimeout(updateGridMetrics, 500);
@@ -633,20 +639,32 @@ async function fetchTagSuggestions() {
     }
 }
 
+function applySearchResults(query, matches) {
+    appState.searchQuery = query;
+    appState.searchMatches = new Set(matches || []);
+    els.searchInput.value = query;
+    els.searchClear.classList.remove('hidden');
+    document.querySelector('.search-kbd')?.classList.add('hidden');
+    els.searchDropdown.classList.add('hidden');
+    applySearchFilter();
+    updateSearchCount();
+}
+
 async function searchByTags(tagList) {
     // Use exact tag intersection search instead of text search
     const res = await fetch(`${API_URL}/api/search?tags=${encodeURIComponent(tagList.join(','))}`);
     if (!res.ok) return;
     const data = await res.json();
     console.log('[searchByTags]', tagList, '→', data.matches?.length, 'matches, allImages:', appState.allImages.length);
-    appState.searchQuery = tagList.join(' + ');
-    appState.searchMatches = new Set(data.matches || []);
-    els.searchInput.value = tagList.join(' + ');
-    els.searchClear.classList.remove('hidden');
-    document.querySelector('.search-kbd')?.classList.add('hidden');
-    els.searchDropdown.classList.add('hidden');
-    applySearchFilter();
-    updateSearchCount();
+    applySearchResults(tagList.join(' + '), data.matches);
+}
+
+async function searchByUploader(name) {
+    const res = await fetch(`${API_URL}/api/search?uploader=${encodeURIComponent(name)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    console.log('[searchByUploader]', name, '→', data.matches?.length, 'matches');
+    applySearchResults(name, data.matches);
 }
 
 function exitComboLevel() {
@@ -732,14 +750,25 @@ async function fetchAISuggestions() {
 async function applyAISuggestion(suggestion, action) {
     const config = appState.config;
     const isTag = suggestion.type === 'tag';
+    const isUploader = suggestion.type === 'uploader';
     let update;
     if (action === 'add') {
-        update = isTag
-            ? { exclude_tags: [...(config.wallhaven.exclude_tags || []), ...suggestion.tags] }
-            : { exclude_combos: [...(config.wallhaven.exclude_combos || []), suggestion.tags] };
+        if (isUploader) {
+            update = { exclude_uploaders: [...(config.wallhaven.exclude_uploaders || []), ...suggestion.tags] };
+        } else if (isTag) {
+            update = { exclude_tags: [...(config.wallhaven.exclude_tags || []), ...suggestion.tags] };
+        } else {
+            update = { exclude_combos: [...(config.wallhaven.exclude_combos || []), suggestion.tags] };
+        }
     } else {
         const removeLower = new Set(suggestion.tags.map(t => t.toLowerCase()));
-        if (isTag) {
+        if (isUploader) {
+            update = {
+                exclude_uploaders: (config.wallhaven.exclude_uploaders || []).filter(
+                    t => !removeLower.has(t.toLowerCase())
+                ),
+            };
+        } else if (isTag) {
             update = {
                 exclude_tags: (config.wallhaven.exclude_tags || []).filter(
                     t => !removeLower.has(t.toLowerCase())
@@ -1082,6 +1111,7 @@ function clearSearch() {
     appState.searchQuery = '';
     appState.searchMatches = null;
     appState.reviewingTag = null;
+    appState.reviewingUploader = null;
     appState.comboContext = [];
     appState.comboRefinements = [];
     searchHighlightIndex = -1;
@@ -1097,7 +1127,15 @@ function updateSearchCount() {
         els.searchCount.classList.add('hidden');
         return;
     }
-    els.searchCount.textContent = `${appState.images.length}`;
+    let count = appState.images.length;
+    // In trash mode, include non-recoverable blocked matches too
+    if (appState.mode === 'trash' && appState.blocklistData) {
+        const blockedOnly = appState.blocklistData.entries.filter(
+            e => !e.recoverable && appState.searchMatches.has(e.filename)
+        ).length;
+        count += blockedOnly;
+    }
+    els.searchCount.textContent = `${count}`;
     els.searchCount.classList.remove('hidden');
 }
 
@@ -1109,7 +1147,7 @@ function applySearchFilter(preserveFocus = false) {
         appState.images = [...appState.allImages];
     }
 
-    if (!preserveFocus || appState.mode === 'trash') {
+    if (!preserveFocus) {
         els.mainContent.scrollTop = 0;
         renderImages();
         return;
@@ -1196,8 +1234,20 @@ async function enterTagReview(tags) {
     renderBlocklistView();
 }
 
-function selectSearchTag(tag) {
-    if (appState.mode === 'trash') {
+async function enterUploaderReview(name) {
+    appState.reviewingUploader = name;
+    await searchByUploader(name);
+    renderBlocklistView();
+}
+
+function selectSearchTag(tag, type) {
+    if (type === 'uploader') {
+        if (appState.mode === 'trash') {
+            enterUploaderReview(tag);
+        } else {
+            searchByUploader(tag);
+        }
+    } else if (appState.mode === 'trash') {
         enterTagReview(tag);
     } else {
         els.searchInput.value = tag;
@@ -1215,10 +1265,10 @@ function renderSearchSuggestions(suggestions, uploaderSuggestions = []) {
     let idx = 0;
     let html = '';
     html += uploaderSuggestions.map(u =>
-        `<div class="search-dropdown-item" data-index="${idx++}" data-type="uploader"><span class="search-type-badge uploader">uploader</span>${esc(u)}</div>`
+        `<div class="search-dropdown-item" data-index="${idx++}" data-type="uploader" data-value="${esc(u)}"><span class="search-type-badge uploader">uploader</span>${esc(u)}</div>`
     ).join('');
     html += suggestions.map(tag =>
-        `<div class="search-dropdown-item" data-index="${idx++}"><span class="search-type-badge tag">tag</span>${esc(tag)}</div>`
+        `<div class="search-dropdown-item" data-index="${idx++}" data-value="${esc(tag)}"><span class="search-type-badge tag">tag</span>${esc(tag)}</div>`
     ).join('');
     els.searchDropdown.innerHTML = html;
     els.searchDropdown.classList.remove('hidden');
@@ -1227,8 +1277,8 @@ function renderSearchSuggestions(suggestions, uploaderSuggestions = []) {
         item.onmousedown = (e) => {
             e.preventDefault(); // Prevent blur
             els.searchDropdown.classList.add('hidden');
-            const text = item.textContent.replace(/^(uploader|tag)/, '');
-            selectSearchTag(text);
+            const text = item.dataset.value;
+            selectSearchTag(text, item.dataset.type);
         };
     });
 }
@@ -1266,13 +1316,15 @@ function handleSearchKeydown(e) {
     if (e.key === 'Enter') {
         e.preventDefault();
         let tag = null;
+        let type;
         if (searchHighlightIndex >= 0 && items[searchHighlightIndex]) {
-            tag = items[searchHighlightIndex].textContent;
+            tag = items[searchHighlightIndex].dataset.value;
+            type = items[searchHighlightIndex].dataset.type;
         } else {
             tag = els.searchInput.value.trim() || null;
         }
         els.searchDropdown.classList.add('hidden');
-        if (tag) selectSearchTag(tag);
+        if (tag) selectSearchTag(tag, type);
         return;
     }
 }
@@ -1743,6 +1795,15 @@ function renderBlocklistView() {
     const recoverableCount = appState.images.length;
     const blockedCount = filteredEntries.length;
 
+    // Auto-switch tab when search has results only in the other tab
+    if (appState.searchMatches) {
+        if (appState.blocklistTab === 'recoverable' && recoverableCount === 0 && blockedCount > 0) {
+            appState.blocklistTab = 'blocked';
+        } else if (appState.blocklistTab === 'blocked' && blockedCount === 0 && recoverableCount > 0) {
+            appState.blocklistTab = 'recoverable';
+        }
+    }
+
     // Tabs
     const tabs = document.createElement('div');
     tabs.className = 'blocklist-tabs';
@@ -1892,6 +1953,55 @@ function renderBlocklistView() {
             }
             els.wallpaperGrid.appendChild(refBar);
         }
+    } else if (appState.reviewingUploader) {
+        const uploaderName = appState.reviewingUploader;
+        const bar = document.createElement('div');
+        bar.className = 'tag-review-bar';
+
+        const textSpan = document.createElement('span');
+        textSpan.className = 'review-bar-text';
+        const nameEl = document.createElement('strong');
+        nameEl.className = 'breadcrumb-tag';
+        nameEl.textContent = uploaderName;
+        nameEl.title = 'Exit review';
+        nameEl.onclick = () => { appState.reviewingUploader = null; clearSearch(); renderBlocklistView(); };
+        textSpan.appendChild(nameEl);
+        const countEl = document.createElement('span');
+        countEl.className = 'review-bar-count';
+        countEl.textContent = `${appState.images.length} in pool`;
+        textSpan.appendChild(countEl);
+        textSpan.insertBefore(createTypeBadge('uploader'), nameEl);
+        bar.appendChild(textSpan);
+
+        const actions = document.createElement('div');
+        actions.className = 'review-bar-actions';
+        const excludeBtn = document.createElement('button');
+        excludeBtn.className = 'review-btn-exclude';
+        excludeBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Exclude';
+        excludeBtn.onclick = async () => {
+            const config = appState.config;
+            const uploaders = [...(config.wallhaven.exclude_uploaders || [])];
+            if (!uploaders.some(u => u.toLowerCase() === uploaderName.toLowerCase())) {
+                uploaders.push(uploaderName);
+                await fetch(`${API_URL}/api/config`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ wallhaven: { exclude_uploaders: uploaders } })
+                });
+                await fetchConfig();
+                await fetchTagSuggestions();
+            }
+            appState.reviewingUploader = null;
+            clearSearch();
+        };
+        const backBtn = document.createElement('button');
+        backBtn.className = 'review-btn-back';
+        backBtn.textContent = 'Back';
+        backBtn.onclick = () => { appState.reviewingUploader = null; clearSearch(); renderBlocklistView(); };
+        actions.appendChild(excludeBtn);
+        actions.appendChild(backBtn);
+        bar.appendChild(actions);
+        els.wallpaperGrid.appendChild(bar);
     } else if (!appState.searchQuery && ((appState.tagSuggestions && appState.tagSuggestions.length > 0) || (appState.comboSuggestions && appState.comboSuggestions.length > 0))) {
         // Suggestions mode: wrapping chips with header
         const bar = document.createElement('div');
@@ -1943,6 +2053,7 @@ function renderBlocklistView() {
             chip.className = 'suggestion-chip';
             chip.title = `Review "${s.tag}" in blocklist`;
             chip.onclick = () => enterTagReview(s.tag);
+            chip.appendChild(createTypeBadge('tag'));
             const tagLabel = document.createElement('span');
             tagLabel.className = 'suggestion-chip-name';
             tagLabel.textContent = s.tag;
@@ -1959,6 +2070,7 @@ function renderBlocklistView() {
             chip.className = 'suggestion-chip combo-chip';
             chip.title = `Review combo "${c.tags.join(' + ')}" — ${Math.round(c.precision * 100)}% precision`;
             chip.onclick = () => enterTagReview([...c.tags]);
+            chip.appendChild(createTypeBadge('combo'));
             const tagLabel = document.createElement('span');
             tagLabel.className = 'suggestion-chip-name';
             tagLabel.textContent = c.tags.join(' + ');
@@ -1974,7 +2086,7 @@ function renderBlocklistView() {
 
     // AI analysis results panel
     if (appState.aiSuggestions && !appState.aiSuggestions.error
-        && !appState.reviewingTag && !appState.searchQuery) {
+        && !appState.reviewingTag && !appState.reviewingUploader && !appState.searchQuery) {
         const ai = appState.aiSuggestions;
         const aiPanel = document.createElement('div');
         aiPanel.className = 'ai-results-panel';
@@ -2020,6 +2132,7 @@ function renderBlocklistView() {
                 row.className = 'ai-suggestion-row' + (s._applied ? ' applied' : '');
                 const info = document.createElement('div');
                 info.className = 'ai-suggestion-info';
+                info.appendChild(createTypeBadge(s.type || 'tag'));
                 const tagsSpan = document.createElement('span');
                 tagsSpan.className = 'ai-suggestion-tags clickable';
                 tagsSpan.textContent = s.tags.join(' + ');

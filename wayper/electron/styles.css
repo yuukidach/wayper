@@ -782,7 +782,7 @@ main {
 
 .settings-container {
   padding: 32px;
-  max-width: 760px;
+  max-width: 960px;
   margin: 0 auto;
 }
 
@@ -806,7 +806,17 @@ main {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 20px;
+  margin-bottom: 20px;
+}
+
+.settings-card-wide {
   margin-bottom: 28px;
+}
+
+.exclusion-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 0 24px;
 }
 
 .settings-card {
@@ -1867,8 +1877,8 @@ footer {
 }
 
 .search-type-badge.tag {
-  background: var(--surface2);
-  color: var(--overlay0);
+  background: color-mix(in srgb, var(--blue) 15%, transparent);
+  color: var(--blue);
 }
 
 .search-type-badge.uploader {

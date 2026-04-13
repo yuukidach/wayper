@@ -178,6 +178,14 @@ class WallhavenWeb:
         if csrf:
             fields["_token"] = csrf
 
+        # Hidden and text inputs
+        for m in re.finditer(r'<input[^>]*type="(hidden|text|number)"[^>]*>', html):
+            tag = m.group(0)
+            name = re.search(r'name="([^"]*)"', tag)
+            value = re.search(r'value="([^"]*)"', tag)
+            if name:
+                fields[name.group(1)] = value.group(1) if value else ""
+
         # Checked checkboxes/radios
         for m in re.finditer(r'<input[^>]*type="(?:checkbox|radio)"[^>]*checked[^>]*>', html):
             tag = m.group(0)
