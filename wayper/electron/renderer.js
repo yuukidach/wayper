@@ -1193,6 +1193,7 @@ function applySearchFilter(preserveFocus = false) {
     if (sentinel.parentNode) sentinel.remove();
 
     let ref = els.wallpaperGrid.firstElementChild;
+    while (ref && !ref.classList?.contains('wallpaper-card')) ref = ref.nextElementSibling;
     for (let i = 0; i < renderUpTo; i++) {
         const img = appState.images[i];
         if (existingCards.has(img.path)) {

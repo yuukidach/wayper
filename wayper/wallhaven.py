@@ -16,6 +16,10 @@ from .pool import extract_tag_names, favorites_dir, is_blacklisted, pool_dir, sa
 log = logging.getLogger("wayper.wallhaven")
 
 SEARCH_URL = "https://wallhaven.cc/api/v1/search"
+USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 
 
 def wallhaven_id(name: str) -> str:
@@ -40,6 +44,7 @@ class WallhavenClient:
         self.client = httpx.AsyncClient(
             proxy=config.proxy,
             timeout=httpx.Timeout(30, connect=10),
+            headers={"User-Agent": USER_AGENT},
         )
 
     async def close(self) -> None:

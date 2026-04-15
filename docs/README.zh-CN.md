@@ -47,6 +47,7 @@ paru -S wayper     # 或: yay -S wayper
 git clone https://github.com/yuukidach/wayper.git
 cd wayper
 uv venv && uv pip install -e .
+uv pip install -e ".[browser]"  # 可选：浏览器 cookie 提取，用于 Wallhaven 同步
 ```
 
 ## GUI
