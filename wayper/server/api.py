@@ -215,6 +215,19 @@ def get_config_route():
     }
 
 
+def _dedup_by(items: list, key) -> list:
+    """Dedup a list, preserving first occurrence per `key(item)`."""
+    seen = set()
+    out = []
+    for item in items:
+        k = key(item)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(item)
+    return out
+
+
 @app.patch("/api/config")
 def update_config_route(updates: dict = Body(...)):
     config = get_config()
@@ -257,11 +270,13 @@ def update_config_route(updates: dict = Body(...)):
         if "ai_art_filter" in wh:
             config.wallhaven.ai_art_filter = wh["ai_art_filter"]
         if "exclude_tags" in wh:
-            config.wallhaven.exclude_tags = wh["exclude_tags"]
+            config.wallhaven.exclude_tags = _dedup_by(wh["exclude_tags"], str.lower)
         if "exclude_combos" in wh:
-            config.wallhaven.exclude_combos = wh["exclude_combos"]
+            config.wallhaven.exclude_combos = _dedup_by(
+                wh["exclude_combos"], lambda c: frozenset(t.lower() for t in c)
+            )
         if "exclude_uploaders" in wh:
-            config.wallhaven.exclude_uploaders = wh["exclude_uploaders"]
+            config.wallhaven.exclude_uploaders = _dedup_by(wh["exclude_uploaders"], str.lower)
 
     save_config(config)
     signal_daemon(config, signal.SIGHUP)

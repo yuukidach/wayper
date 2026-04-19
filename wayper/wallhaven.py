@@ -101,10 +101,11 @@ class WallhavenClient:
         return any(t.lower() in lower for t in self._local_exclude_tags)
 
     def _matches_exclude_combo(self, tag_names: list[str]) -> bool:
-        """Return True if tag_names matches any exclude combo rule."""
-        tag_set = set(tag_names)
+        """Return True if tag_names matches any exclude combo rule (case-insensitive)."""
+        tag_set = {t.lower() for t in tag_names}
         return any(
-            all(t in tag_set for t in combo) for combo in self.config.wallhaven.exclude_combos
+            all(t.lower() in tag_set for t in combo)
+            for combo in self.config.wallhaven.exclude_combos
         )
 
     async def search(self, orientation: str, purity: str) -> list[dict]:
