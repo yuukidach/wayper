@@ -2140,7 +2140,11 @@ function renderBlocklistView() {
                 tagsSpan.title = 'Click to preview matching images';
                 tagsSpan.onclick = (e) => {
                     e.stopPropagation();
-                    searchByTags(s.tags);
+                    if (s.type === 'uploader') {
+                        enterUploaderReview(s.tags[0]);
+                    } else {
+                        enterTagReview(s.tags);
+                    }
                 };
                 info.appendChild(tagsSpan);
                 if (s.confidence) {
