@@ -1558,7 +1558,7 @@ footer {
   opacity: 1;
 }
 
-.lightbox.visible .lightbox-image {
+.lightbox.visible .lightbox-stage {
   transform: scale(1);
   opacity: 1;
 }
@@ -1575,18 +1575,34 @@ footer {
   backdrop-filter: blur(12px);
 }
 
-.lightbox-image {
+.lightbox-stage {
   position: relative;
   max-width: calc(100vw - 120px);
   max-height: calc(100vh - 100px);
-  object-fit: contain;
-  border-radius: var(--radius-lg);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.06);
   z-index: 1;
   transform: scale(0.92);
   opacity: 0;
   transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
               opacity 0.25s var(--ease);
+}
+
+.lightbox-image {
+  display: block;
+  max-width: calc(100vw - 120px);
+  max-height: calc(100vh - 100px);
+  object-fit: contain;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  cursor: grab;
+  user-select: none;
+  -webkit-user-drag: none;
+  transition: transform 0.12s ease-out;
+  transform-origin: 50% 50%;
+}
+
+.lightbox-image.dragging {
+  cursor: grabbing;
+  transition: none;
 }
 
 .lightbox-close {
