@@ -1596,13 +1596,11 @@ footer {
   cursor: grab;
   user-select: none;
   -webkit-user-drag: none;
-  transition: transform 0.12s ease-out;
   transform-origin: 50% 50%;
 }
 
 .lightbox-image.dragging {
   cursor: grabbing;
-  transition: none;
 }
 
 .lightbox-close {

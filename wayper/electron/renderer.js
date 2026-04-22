@@ -2383,10 +2383,10 @@ function createCard(img) {
 
 let lightboxEl = null;
 let lightboxImg = null;
+let _imgEl = null;
+let _stageEl = null;
 let zoom = { scale: 1, x: 0, y: 0 };
 let dragState = null;
-let _windowMoveHandler = null;
-let _windowUpHandler = null;
 
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 8;
@@ -2400,15 +2400,13 @@ function clamp(v, lo, hi) {
 }
 
 function applyZoom() {
-    const img = lightboxEl?.querySelector('.lightbox-image');
-    if (!img) return;
-    img.style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`;
+    if (!_imgEl) return;
+    _imgEl.style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`;
 }
 
 function clampPan() {
-    const stage = lightboxEl?.querySelector('.lightbox-stage');
-    if (!stage) return;
-    const rect = stage.getBoundingClientRect();
+    if (!_stageEl) return;
+    const rect = _stageEl.getBoundingClientRect();
     const overflowX = Math.max(0, (rect.width * zoom.scale - rect.width) / 2);
     const overflowY = Math.max(0, (rect.height * zoom.scale - rect.height) / 2);
     zoom.x = clamp(zoom.x, -overflowX, overflowX);
@@ -2420,28 +2418,33 @@ function resetZoom() {
     applyZoom();
 }
 
-function handleWheel(e) {
-    if (!lightboxEl) return;
-    e.preventDefault();
-    const stage = lightboxEl.querySelector('.lightbox-stage');
-    const rect = stage.getBoundingClientRect();
+// Anchor the zoom so the image-pixel under (clientX, clientY) stays fixed across the scale change.
+// Pass null for clientX/clientY to anchor at stage center (cursor offset = 0 → translate just scales by r).
+function zoomAt(targetScale, clientX, clientY) {
+    if (!_stageEl) return;
+    const oldScale = zoom.scale;
+    const newScale = clamp(targetScale, ZOOM_MIN, ZOOM_MAX);
+    if (newScale === oldScale) return;
+    const rect = _stageEl.getBoundingClientRect();
     const cX = rect.left + rect.width / 2;
     const cY = rect.top + rect.height / 2;
-
-    const oldScale = zoom.scale;
-    const newScale = clamp(oldScale * Math.exp(-e.deltaY * ZOOM_RATE), ZOOM_MIN, ZOOM_MAX);
-    if (newScale === oldScale) return;
-
+    const ax = clientX ?? cX;
+    const ay = clientY ?? cY;
     const r = newScale / oldScale;
-    zoom.x = (e.clientX - cX) * (1 - r) + r * zoom.x;
-    zoom.y = (e.clientY - cY) * (1 - r) + r * zoom.y;
+    zoom.x = (ax - cX) * (1 - r) + r * zoom.x;
+    zoom.y = (ay - cY) * (1 - r) + r * zoom.y;
     zoom.scale = newScale;
     clampPan();
     applyZoom();
 }
 
+function handleWheel(e) {
+    e.preventDefault();
+    zoomAt(zoom.scale * Math.exp(-e.deltaY * ZOOM_RATE), e.clientX, e.clientY);
+}
+
 function handleMouseDown(e) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || !_imgEl) return;
     e.preventDefault();
     dragState = {
         startX: e.clientX,
@@ -2450,7 +2453,10 @@ function handleMouseDown(e) {
         startTy: zoom.y,
         moved: false,
     };
-    lightboxEl.querySelector('.lightbox-image').classList.add('dragging');
+    _imgEl.classList.add('dragging');
+    // Attach window listeners only for the duration of the drag
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp, { once: true });
 }
 
 function handleMouseMove(e) {
@@ -2468,34 +2474,24 @@ function handleMouseMove(e) {
 }
 
 function handleMouseUp() {
+    window.removeEventListener('mousemove', handleMouseMove);
     if (!dragState) return;
-    lightboxEl?.querySelector('.lightbox-image')?.classList.remove('dragging');
+    _imgEl?.classList.remove('dragging');
     dragState = null;
 }
 
 function zoomAtCenter(factor) {
-    if (!lightboxEl) return;
-    const oldScale = zoom.scale;
-    const newScale = clamp(oldScale * factor, ZOOM_MIN, ZOOM_MAX);
-    if (newScale === oldScale) return;
-    const r = newScale / oldScale;
-    // Anchor at stage center → cursor offset is zero, so translate just scales by r
-    zoom.x = r * zoom.x;
-    zoom.y = r * zoom.y;
-    zoom.scale = newScale;
-    clampPan();
-    applyZoom();
+    zoomAt(zoom.scale * factor, null, null);
 }
 
 function arrowPanOrNavigate(direction) {
     // direction: -1 = ArrowLeft, +1 = ArrowRight
-    if (!lightboxEl) return;
+    if (!_stageEl) return;
     if (zoom.scale <= 1) {
         navigateLightbox(direction);
         return;
     }
-    const stage = lightboxEl.querySelector('.lightbox-stage');
-    const rect = stage.getBoundingClientRect();
+    const rect = _stageEl.getBoundingClientRect();
     const overflowX = Math.max(0, (rect.width * zoom.scale - rect.width) / 2);
     // ArrowRight (+1): pan image left (decrease zoom.x toward -overflowX). At -overflowX → next.
     // ArrowLeft (-1):  pan image right (increase zoom.x toward +overflowX). At +overflowX → prev.
@@ -2516,34 +2512,17 @@ function arrowPanOrNavigate(direction) {
 }
 
 function handleDoubleClick(e) {
-    if (!lightboxEl) return;
+    if (!_stageEl || !_imgEl) return;
     e.preventDefault();
-    const img = lightboxEl.querySelector('.lightbox-image');
-    const stage = lightboxEl.querySelector('.lightbox-stage');
-
     if (zoom.scale > 1.01) {
-        // Already zoomed in → reset to fit
         resetZoom();
         return;
     }
-
-    // Zoom to 100% original pixels, anchored at click position
-    const stageRect = stage.getBoundingClientRect();
-    const naturalRatio = img.naturalWidth / stageRect.width;
-    if (!isFinite(naturalRatio) || naturalRatio <= 0) return;
-
-    const oldScale = zoom.scale;
-    const newScale = clamp(naturalRatio, ZOOM_MIN, ZOOM_MAX);
-    if (newScale <= oldScale + 0.01) return; // already at or above 100% (small image)
-
-    const cX = stageRect.left + stageRect.width / 2;
-    const cY = stageRect.top + stageRect.height / 2;
-    const r = newScale / oldScale;
-    zoom.x = (e.clientX - cX) * (1 - r) + r * zoom.x;
-    zoom.y = (e.clientY - cY) * (1 - r) + r * zoom.y;
-    zoom.scale = newScale;
-    clampPan();
-    applyZoom();
+    // Zoom to 100% original pixels, anchored at click position.
+    // Skip when image is already at or above natural size (small image).
+    const naturalRatio = _imgEl.naturalWidth / _stageEl.getBoundingClientRect().width;
+    if (!isFinite(naturalRatio) || naturalRatio <= zoom.scale + 0.01) return;
+    zoomAt(naturalRatio, e.clientX, e.clientY);
 }
 
 function showLightbox(img) {
@@ -2552,7 +2531,7 @@ function showLightbox(img) {
 
     // If lightbox already exists, just swap the image (avoids DOM thrashing)
     if (lightboxEl) {
-        lightboxEl.querySelector('.lightbox-image').src = imageUrl(img.path);
+        _imgEl.src = imageUrl(img.path);
         resetZoom();
         return;
     }
@@ -2591,19 +2570,17 @@ function showLightbox(img) {
     `;
 
     document.body.appendChild(lightboxEl);
+    _stageEl = lightboxEl.querySelector('.lightbox-stage');
+    _imgEl = lightboxEl.querySelector('.lightbox-image');
     resetZoom();
     requestAnimationFrame(() => lightboxEl.classList.add('visible'));
 
     // Wheel zoom on the stage (anchored at cursor)
-    lightboxEl.querySelector('.lightbox-stage').addEventListener('wheel', handleWheel, { passive: false });
-
-    // Drag to pan: mousedown on image, mousemove/up on window so dragging continues outside the image
-    lightboxEl.querySelector('.lightbox-image').addEventListener('mousedown', handleMouseDown);
-    _windowMoveHandler = handleMouseMove;
-    _windowUpHandler = handleMouseUp;
-    window.addEventListener('mousemove', _windowMoveHandler);
-    window.addEventListener('mouseup', _windowUpHandler);
-    lightboxEl.querySelector('.lightbox-image').addEventListener('dblclick', handleDoubleClick);
+    _stageEl.addEventListener('wheel', handleWheel, { passive: false });
+    // Drag to pan: mousedown on image; window mousemove/up are attached on demand in handleMouseDown
+    // so dragging continues outside the image bounds without firing on every idle mouse move.
+    _imgEl.addEventListener('mousedown', handleMouseDown);
+    _imgEl.addEventListener('dblclick', handleDoubleClick);
 
     // All button actions read from lightboxImg (not closure) to stay current after navigation
     lightboxEl.querySelector('.lightbox-backdrop').onclick = closeLightbox;
@@ -2627,12 +2604,21 @@ function showLightbox(img) {
 
 function closeLightbox() {
     if (!lightboxEl) return;
-    if (_windowMoveHandler) { window.removeEventListener('mousemove', _windowMoveHandler); _windowMoveHandler = null; }
-    if (_windowUpHandler) { window.removeEventListener('mouseup', _windowUpHandler); _windowUpHandler = null; }
-    dragState = null;
+    // Safety net: if a drag is in flight when closing, tear down its window listeners
+    if (dragState) {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+        dragState = null;
+    }
     lightboxEl.classList.remove('visible');
     setTimeout(() => {
-        if (lightboxEl) { lightboxEl.remove(); lightboxEl = null; lightboxImg = null; }
+        if (lightboxEl) {
+            lightboxEl.remove();
+            lightboxEl = null;
+            lightboxImg = null;
+            _imgEl = null;
+            _stageEl = null;
+        }
     }, 200);
 }
 
