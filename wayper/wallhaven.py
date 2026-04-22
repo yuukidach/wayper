@@ -110,7 +110,6 @@ class WallhavenClient:
 
     async def search(self, orientation: str, purity: str) -> list[dict]:
         """Return list of wallpaper data dicts from wallhaven search."""
-        page = random.randint(1, self.config.wallhaven.max_page)
         purity_code = _PURITY_CODES.get(purity, "001")
         params = {
             "categories": self.config.wallhaven.categories,
@@ -120,24 +119,27 @@ class WallhavenClient:
             "order": "desc",
             "ai_art_filter": self.config.wallhaven.ai_art_filter,
             "ratios": orientation,
-            "page": page,
+            "page": 1,
             "apikey": self.config.api_key,
         }
         exclude_q = self._exclude_query()
         if exclude_q:
             params["q"] = exclude_q
         try:
+            # Probe page 1 to learn last_page from meta
             resp = await self.client.get(SEARCH_URL, params=params)
             resp.raise_for_status()
             data = resp.json()
-            results = data.get("data", [])
-            # If random page exceeded actual last page, retry with page 1
-            if not results and page > 1:
-                params["page"] = 1
-                resp = await self.client.get(SEARCH_URL, params=params)
-                resp.raise_for_status()
-                results = resp.json().get("data", [])
-            return results
+            last_page = data.get("meta", {}).get("last_page", 1)
+            if last_page <= 1:
+                return data.get("data", [])
+            page = random.randint(1, last_page)
+            if page == 1:
+                return data.get("data", [])
+            params["page"] = page
+            resp = await self.client.get(SEARCH_URL, params=params)
+            resp.raise_for_status()
+            return resp.json().get("data", [])
         except Exception:
             log.warning(
                 "Wallhaven search failed (orientation=%s, purity=%s)",
@@ -220,65 +222,101 @@ class WallhavenClient:
         fav_dir = favorites_dir(config, mode, orientation)
 
         items = await self.search(orientation, mode)
-        if not items:
-            return
+        skipped = {
+            "dup": 0,
+            "fav": 0,
+            "blacklist": 0,
+            "uploader": 0,
+            "combo": 0,
+            "local_tag": 0,
+            "fail": 0,
+        }
+        sampled = 0
+        downloaded = 0
 
-        # Find monitor config for resize dimensions
-        mon = None
-        for m in config.monitors:
-            if m.orientation == orientation:
-                mon = m
-                break
+        if items:
+            # Find monitor config for resize dimensions
+            mon = None
+            for m in config.monitors:
+                if m.orientation == orientation:
+                    mon = m
+                    break
 
-        sample = random.sample(items, min(config.wallhaven.batch_size, len(items)))
-        candidates: list[tuple[str, str, dict, Path]] = []  # (filename, url, item, dest)
-        for item in sample:
-            url = item.get("path", "")
-            if not url:
-                continue
-            filename = url.rsplit("/", 1)[-1]
-            dest = target_dir / filename
+            sample = random.sample(items, min(config.wallhaven.batch_size, len(items)))
+            sampled = len(sample)
+            candidates: list[tuple[str, str, dict, Path]] = []  # (filename, url, item, dest)
+            for item in sample:
+                url = item.get("path", "")
+                if not url:
+                    continue
+                filename = url.rsplit("/", 1)[-1]
+                dest = target_dir / filename
 
-            if dest.exists():
-                continue
-            if (fav_dir / filename).exists():
-                continue
-            if is_blacklisted(config, filename):
-                continue
+                if dest.exists():
+                    skipped["dup"] += 1
+                    continue
+                if (fav_dir / filename).exists():
+                    skipped["fav"] += 1
+                    continue
+                if is_blacklisted(config, filename):
+                    skipped["blacklist"] += 1
+                    continue
 
-            candidates.append((filename, url, item, dest))
+                candidates.append((filename, url, item, dest))
 
-        if not candidates:
-            return
+            if candidates:
+                # Fetch full details (includes tags) before downloading images
+                details = await asyncio.gather(
+                    *(self.wallpaper_info(item.get("id", "")) for _, _, item, _ in candidates)
+                )
 
-        # Fetch full details (includes tags) before downloading images
-        details = await asyncio.gather(
-            *(self.wallpaper_info(item.get("id", "")) for _, _, item, _ in candidates)
+                excluded_uploaders_lower = {
+                    u.lower() for u in self.config.wallhaven.exclude_uploaders
+                }
+                for (filename, url, item, dest), detail in zip(candidates, details):
+                    if detail:
+                        item = {**item, **detail}
+
+                    # Skip excluded uploaders (local-only — Wallhaven API has no uploader filter)
+                    uploader = item.get("uploader", "")
+                    if isinstance(uploader, dict):
+                        uploader = uploader.get("username", "")
+                    if uploader and uploader.lower() in excluded_uploaders_lower:
+                        skipped["uploader"] += 1
+                        continue
+
+                    tag_names = extract_tag_names(item.get("tags", []))
+                    if self._matches_exclude_combo(tag_names):
+                        skipped["combo"] += 1
+                        continue
+                    if self._matches_local_exclude(tag_names):
+                        skipped["local_tag"] += 1
+                        continue
+
+                    if not await self.download_image(url, dest):
+                        skipped["fail"] += 1
+                        continue
+
+                    save_metadata(config, filename, item)
+                    downloaded += 1
+
+                    if mon and not resize_crop(dest, mon.width, mon.height):
+                        dest.unlink(missing_ok=True)
+
+        log.info(
+            "Download[%(mode)s/%(orient)s] results=%(results)d sampled=%(sampled)d "
+            "skipped(dup=%(dup)d,fav=%(fav)d,blacklist=%(blacklist)d,"
+            "uploader=%(uploader)d,combo=%(combo)d,local_tag=%(local_tag)d,fail=%(fail)d) "
+            "downloaded=%(downloaded)d",
+            {
+                "mode": mode,
+                "orient": orientation,
+                "results": len(items),
+                "sampled": sampled,
+                "downloaded": downloaded,
+                **skipped,
+            },
         )
-
-        excluded_uploaders_lower = {u.lower() for u in self.config.wallhaven.exclude_uploaders}
-        for (filename, url, item, dest), detail in zip(candidates, details):
-            if detail:
-                item = {**item, **detail}
-
-            # Skip excluded uploaders (local-only — Wallhaven API has no uploader filter)
-            uploader = item.get("uploader", "")
-            if isinstance(uploader, dict):
-                uploader = uploader.get("username", "")
-            if uploader and uploader.lower() in excluded_uploaders_lower:
-                continue
-
-            tag_names = extract_tag_names(item.get("tags", []))
-            if self._matches_exclude_combo(tag_names) or self._matches_local_exclude(tag_names):
-                continue
-
-            if not await self.download_image(url, dest):
-                continue
-
-            save_metadata(config, filename, item)
-
-            if mon and not resize_crop(dest, mon.width, mon.height):
-                dest.unlink(missing_ok=True)
 
     async def sync_remote_favorites(self) -> tuple[int, set[str]]:
         """Incrementally sync wallpapers from user's Wallhaven collections.

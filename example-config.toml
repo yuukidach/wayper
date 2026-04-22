@@ -26,7 +26,6 @@ categories = "111"     # 1=general, 1=anime, 1=people
 top_range = "1M"
 sorting = "toplist"
 ai_art_filter = 0      # 0=off, 1=on
-max_page = 15
 batch_size = 5
 # exclude_tags = ["MetArt", "watermarked"]  # synced to Wallhaven cloud blacklist if credentials are set
 # exclude_combos = [["blonde", "nude", "standing"], ["pornstar", "nude"]]

@@ -26,7 +26,6 @@ class WallhavenConfig:
     top_range: str = "1M"
     sorting: str = "toplist"
     ai_art_filter: int = 0
-    max_page: int = 15
     batch_size: int = 5
     exclude_tags: list[str] = field(default_factory=list)
     exclude_combos: list[list[str]] = field(default_factory=list)
@@ -141,7 +140,6 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
     lines.append(f'top_range = "{wh.top_range}"')
     lines.append(f'sorting = "{wh.sorting}"')
     lines.append(f"ai_art_filter = {wh.ai_art_filter}")
-    lines.append(f"max_page = {wh.max_page}")
     lines.append(f"batch_size = {wh.batch_size}")
     if wh.exclude_tags:
         tags_str = ", ".join(f'"{_esc(t)}"' for t in wh.exclude_tags)
@@ -197,7 +195,6 @@ def load_config(path: Path | None = None) -> WayperConfig:
         top_range=wallhaven_raw.get("top_range", "1M"),
         sorting=wallhaven_raw.get("sorting", "toplist"),
         ai_art_filter=wallhaven_raw.get("ai_art_filter", 0),
-        max_page=wallhaven_raw.get("max_page", 15),
         batch_size=wallhaven_raw.get("batch_size", 5),
         exclude_tags=wallhaven_raw.get("exclude_tags", []),
         exclude_combos=wallhaven_raw.get("exclude_combos", []),
