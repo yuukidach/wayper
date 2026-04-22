@@ -83,9 +83,12 @@ uv pip install -e ".[browser]"  # optional: browser cookie extraction for Wallha
 
 | Key | Action | Key | Action |
 |-----|--------|-----|--------|
-| `←` / `→` | Previous / Next image | `Enter` | Set as wallpaper |
+| `←` / `→` | Previous / Next image (pan when zoomed) | `Enter` | Set as wallpaper |
 | `f` | Favorite | `x` / `Del` | Dislike |
 | `o` | Open on Wallhaven | `Space` / `Esc` | Close lightbox |
+| Scroll | Zoom at cursor (0.5×–8×) | Drag | Pan when zoomed in |
+| `0` | Reset to fit | `+` / `-` | Zoom in / out |
+| Double-click | Toggle 100% / fit | | |
 
 ## CLI
 
