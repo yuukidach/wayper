@@ -1,6 +1,6 @@
 [project]
 name = "wayper"
-version = "1.6.0"
+version = "1.6.1"
 description = "Cross-platform wallpaper manager with Wallhaven integration"
 requires-python = ">=3.12"
 dependencies = [

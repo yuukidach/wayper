@@ -88,24 +88,29 @@ class LinuxBackend(WallpaperBackend):
         return result.returncode == 0
 
     def set_wallpaper(self, monitor: str, image: Path, transition: TransitionConfig) -> None:
-        result = subprocess.run(
-            [
-                "awww",
-                "img",
-                str(image),
-                "--outputs",
-                monitor,
-                "--transition-type",
-                transition.type,
-                "--transition-duration",
-                str(transition.duration),
-                "--transition-fps",
-                str(transition.fps),
-            ],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        try:
+            result = subprocess.run(
+                [
+                    "awww",
+                    "img",
+                    str(image),
+                    "--outputs",
+                    monitor,
+                    "--transition-type",
+                    transition.type,
+                    "--transition-duration",
+                    str(transition.duration),
+                    "--transition-fps",
+                    str(transition.fps),
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            log.warning("awww timed out setting wallpaper: %s on %s", image, monitor)
+            return
         if result.returncode != 0:
             log.warning(
                 "awww failed to set wallpaper (exit %d): %s on %s",

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 
 from ..config import MonitorConfig, TransitionConfig
 from .base import WallpaperBackend
+
+log = logging.getLogger("wayper")
 
 try:
     from AppKit import NSApplication, NSScreen, NSWorkspace
@@ -40,12 +43,16 @@ class MacOSBackend(WallpaperBackend):
             'tell application "System Events" to '
             f'tell every desktop to set picture to POSIX file "{safe_path}"'
         )
-        subprocess.run(
-            ["osascript", "-e", script],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        try:
+            subprocess.run(
+                ["osascript", "-e", script],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            log.warning("osascript timed out setting wallpaper: %s on %s", image, monitor)
 
     def detect_monitors(self) -> list[MonitorConfig]:
         """Detect current monitor configuration using AppKit."""

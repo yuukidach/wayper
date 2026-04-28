@@ -25,6 +25,7 @@ from .pool import (
     should_download,
 )
 from .state import read_mode
+from .util import atomic_write
 from .wallhaven import WallhavenClient
 
 log = logging.getLogger("wayper")
@@ -161,6 +162,41 @@ def update_greeter(config: WayperConfig) -> None:
         pass
 
 
+async def _do_downloads(client: WallhavenClient, config: WayperConfig, purities: set[str]) -> None:
+    """Run pending downloads in the background. Logs any errors."""
+    try:
+        download_map = should_download(config, purities)
+        tasks = []
+        orientations = {m.orientation for m in config.monitors}
+        for purity, needs in download_map.items():
+            if needs:
+                for o in orientations:
+                    tasks.append(client.download_for(o, purity))
+        if tasks:
+            await asyncio.gather(*tasks)
+    except Exception as e:
+        log.warning("Background download failed: %s", e)
+
+
+async def _do_fav_sync(client: WallhavenClient, config: WayperConfig) -> None:
+    """Sync remote favorites and push local ones. Logs any errors."""
+    try:
+        _, remote_files = await client.sync_remote_favorites()
+        from .wallhaven_web import push_local_favorites
+
+        await asyncio.to_thread(push_local_favorites, config, remote_files)
+    except Exception as e:
+        log.warning("Background favorites sync failed: %s", e)
+
+
+async def _do_greeter(config: WayperConfig) -> None:
+    """Update greeter wallpaper in a thread. Logs any errors."""
+    try:
+        await asyncio.to_thread(update_greeter, config)
+    except Exception as e:
+        log.warning("Background greeter update failed: %s", e)
+
+
 async def run_daemon(config: WayperConfig) -> None:
     global _change_now, _reload_mode, _reload_config, _wake
 
@@ -202,6 +238,10 @@ async def run_daemon(config: WayperConfig) -> None:
         fav_sync_count = FAV_SYNC_INTERVAL  # trigger sync on next cycle
         log.info("Configuration reloaded")
 
+    download_task: asyncio.Task | None = None
+    sync_task: asyncio.Task | None = None
+    greeter_task: asyncio.Task | None = None
+
     try:
         while True:
             _change_now = False
@@ -227,41 +267,45 @@ async def run_daemon(config: WayperConfig) -> None:
                 if _change_now or _reload_mode:
                     continue
 
+            cycle_start = time.monotonic()
             purities = read_mode(config)
 
-            # Set wallpapers immediately
+            # Set wallpapers immediately — fast, must not block on slow tasks
             set_all_wallpapers(config, purities)
-            (config.download_dir / ".last_rotation").write_text(str(time.time()))
+            atomic_write(config.download_dir / ".last_rotation", str(time.time()))
 
-            # Download if needed
-            download_map = should_download(config, purities)
-            tasks = []
-            orientations = {m.orientation for m in config.monitors}
-            for purity, needs in download_map.items():
-                if needs:
-                    for o in orientations:
-                        tasks.append(client.download_for(o, purity))
-            if tasks:
-                await asyncio.gather(*tasks)
+            # Spawn downloads in background; skip if previous still running
+            if download_task is None or download_task.done():
+                download_task = asyncio.create_task(_do_downloads(client, config, purities))
+            else:
+                log.info("skip downloads: previous task still running")
 
+            # Quick local-only maintenance — safe to run inline
             enforce_quota(config)
             prune_blacklist(config)
 
+            # Spawn favorites sync in background; skip if previous still running.
+            # Reset counter even on skip so we wait a full interval before retrying
+            # instead of re-checking every cycle.
             fav_sync_count += 1
             if fav_sync_count >= FAV_SYNC_INTERVAL:
-                _, remote_files = await client.sync_remote_favorites()
-                from .wallhaven_web import push_local_favorites
-
-                await asyncio.to_thread(push_local_favorites, config, remote_files)
+                if sync_task is None or sync_task.done():
+                    sync_task = asyncio.create_task(_do_fav_sync(client, config))
+                else:
+                    log.info("skip fav sync: previous task still running")
                 fav_sync_count = 0
 
-            # Greeter update
+            # Spawn greeter update in background; skip if previous still running.
+            # Reset counter even on skip (same reason as fav sync above).
             greeter_count += 1
             if greeter_count >= config.greeter.interval:
-                update_greeter(config)
+                if greeter_task is None or greeter_task.done():
+                    greeter_task = asyncio.create_task(_do_greeter(config))
+                else:
+                    log.info("skip greeter update: previous task still running")
                 greeter_count = 0
 
-            # Interruptible sleep — _wake.set() fires instantly on signal
+            # Deadline-based sleep — accounts for time already spent in this cycle
             if config.interval <= 0:
                 # No auto-rotation: wait indefinitely for a signal
                 log.info("Auto-rotation disabled (interval=0), waiting for signal")
@@ -273,15 +317,16 @@ async def run_daemon(config: WayperConfig) -> None:
                     except TimeoutError:
                         pass
             else:
-                remaining = config.interval
-                while remaining > 0:
+                deadline = cycle_start + config.interval
+                while True:
                     if _change_now or _reload_mode:
                         break
                     await reload_config_if_needed()
 
-                    # Pause if locked
+                    # Pause if locked — extend deadline by the locked duration
                     if config.pause_on_lock and is_locked():
                         log.info("Session locked, pausing timer")
+                        lock_start = time.monotonic()
                         while config.pause_on_lock and is_locked():
                             if _change_now or _reload_mode:
                                 break
@@ -292,19 +337,26 @@ async def run_daemon(config: WayperConfig) -> None:
                                 await asyncio.wait_for(_wake.wait(), timeout=5)
                             except TimeoutError:
                                 pass
+                        deadline += time.monotonic() - lock_start
                         log.info("Session unlocked, resuming timer")
 
                         if _change_now or _reload_mode:
                             break
 
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+
                     _wake.clear()
                     try:
-                        await asyncio.wait_for(_wake.wait(), timeout=1)
+                        await asyncio.wait_for(_wake.wait(), timeout=min(1.0, remaining))
                     except TimeoutError:
                         pass
-                    remaining -= 1
     except (KeyboardInterrupt, SystemExit):
         log.info("Daemon shutting down")
     finally:
+        for t in (download_task, sync_task, greeter_task):
+            if t is not None and not t.done():
+                t.cancel()
         await client.close()
         remove_pid_file(config)
