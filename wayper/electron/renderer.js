@@ -2527,8 +2527,16 @@ function handleDoubleClick(e) {
     zoomAt(naturalRatio, e.clientX, e.clientY);
 }
 
+function syncGalleryToLightbox(path) {
+    const card = document.querySelector(`.wallpaper-card[data-path="${CSS.escape(path)}"]`);
+    if (!card) return;
+    card.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+    card.focus({ preventScroll: true });
+}
+
 function showLightbox(img) {
     lightboxImg = img;
+    syncGalleryToLightbox(img.path);
     const isTrash = appState.mode === 'trash';
 
     // If lightbox already exists, just swap the image (avoids DOM thrashing)
