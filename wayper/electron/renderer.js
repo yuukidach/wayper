@@ -1809,8 +1809,10 @@ function renderBlocklistView() {
     const recoverableCount = appState.images.length;
     const blockedCount = filteredEntries.length;
 
-    // Auto-switch tab when search has results only in the other tab
-    if (appState.searchMatches) {
+    // Auto-switch tab when search has results only in the other tab.
+    // Skip during tag/uploader review (user clicked an agent suggestion to explore
+    // a category — switching tabs would be jarring and unrelated to their intent).
+    if (appState.searchMatches && !appState.reviewingTag && !appState.reviewingUploader) {
         if (appState.blocklistTab === 'recoverable' && recoverableCount === 0 && blockedCount > 0) {
             appState.blocklistTab = 'blocked';
         } else if (appState.blocklistTab === 'blocked' && blockedCount === 0 && recoverableCount > 0) {
