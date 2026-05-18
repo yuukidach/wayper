@@ -1,13 +1,14 @@
 {
   "name": "wayper",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "productName": "Wayper",
   "description": "Wayper Electron GUI",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build:backend": "cd ../.. && uv run pyinstaller --clean wayper.spec",
-    "dist": "npm run build:backend && ./node_modules/.bin/electron-builder"
+    "dist": "npm run build:backend && ./node_modules/.bin/electron-builder",
+    "test": "node tests/exclusion-rules.test.js"
   },
   "build": {
     "appId": "com.wayper.app",
@@ -27,6 +28,7 @@
     },
     "files": [
       "**/*",
+      "!tests/**",
       "!dist/*"
     ]
   },

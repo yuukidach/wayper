@@ -1,4 +1,5 @@
 let API_URL = 'http://127.0.0.1:8080';
+window.WayperAPI_URL = API_URL;
 
 const _escDiv = document.createElement('div');
 function esc(str) {
@@ -159,7 +160,10 @@ async function init() {
     // Resolve API port from main process (auto-selected free port)
     if (window.electronAPI?.getApiPort) {
         const port = await window.electronAPI.getApiPort();
-        if (port > 0) API_URL = `http://127.0.0.1:${port}`;
+        if (port > 0) {
+            API_URL = `http://127.0.0.1:${port}`;
+            window.WayperAPI_URL = API_URL;
+        }
     }
     setupEventListeners();
     setupInfiniteScroll();
@@ -642,14 +646,90 @@ function getExcludeUploaders() { return getChipList('exclude-uploaders-container
 
 async function fetchTagSuggestions() {
     try {
-        const res = await fetch(`${API_URL}/api/tag-suggestions`);
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await WayperApi.tagSuggestions();
         appState.tagSuggestions = data.suggestions || [];
         appState.comboSuggestions = data.combo_suggestions || [];
     } catch (e) {
         console.error('Failed to fetch tag suggestions:', e);
     }
+}
+
+function aiSuggestionType(suggestion) {
+    return WayperExclusionRules.suggestionType(suggestion);
+}
+
+function syncAISuggestionAppliedState() {
+    WayperExclusionRules.syncAISuggestionAppliedState(appState.aiSuggestions, appState.config);
+}
+
+function recordAISuggestionFeedback(tags, action) {
+    WayperApi.aiSuggestionFeedback(tags, action)
+        .catch(e => console.error('Failed to record AI feedback:', e));
+}
+
+function markMatchingAISuggestionsApplied(tags, type, action) {
+    const feedbackAction = action === 'add' ? 'applied_add' : 'applied_remove';
+    const matches = WayperExclusionRules.matchingAISuggestions(appState.aiSuggestions, tags, type, action);
+    for (const s of matches) {
+        s._applied = true;
+        if (s._feedbackAction !== feedbackAction) {
+            s._feedbackAction = feedbackAction;
+            recordAISuggestionFeedback(s.tags, feedbackAction);
+        }
+    }
+}
+
+function buildExclusionUpdate(type, tags, action, options = {}) {
+    const wh = appState.config.wallhaven;
+    const tagList = [...tags];
+    const removeLower = WayperExclusionRules.lowerRuleSet(tagList);
+
+    if (action === 'add') {
+        if (type === 'uploader') {
+            return { exclude_uploaders: [...(wh.exclude_uploaders || []), ...tagList] };
+        }
+        if (type === 'combo') {
+            let combos = [...(wh.exclude_combos || [])];
+            if (options.dropComboSupersets) {
+                combos = combos.filter(existing => {
+                    const existingLower = WayperExclusionRules.lowerRuleSet(existing);
+                    return !(existingLower.size > removeLower.size
+                        && [...removeLower].every(t => existingLower.has(t)));
+                });
+            }
+            return { exclude_combos: [...combos, tagList] };
+        }
+        return { exclude_tags: [...(wh.exclude_tags || []), ...tagList] };
+    }
+
+    if (type === 'uploader') {
+        return {
+            exclude_uploaders: (wh.exclude_uploaders || []).filter(
+                t => !removeLower.has(t.toLowerCase())
+            ),
+        };
+    }
+    if (type === 'combo') {
+        return {
+            exclude_combos: (wh.exclude_combos || []).filter(
+                existing => !WayperExclusionRules.sameRuleSet(existing, tagList)
+            ),
+        };
+    }
+    return {
+        exclude_tags: (wh.exclude_tags || []).filter(
+            t => !removeLower.has(t.toLowerCase())
+        ),
+    };
+}
+
+async function applyExclusionUpdate({ type, tags, action = 'add', refreshSuggestions = false, render = true, ...options }) {
+    const update = buildExclusionUpdate(type, tags, action, options);
+    await WayperApi.patchConfig({ wallhaven: update });
+    markMatchingAISuggestionsApplied(tags, type, action);
+    await fetchConfig();
+    if (refreshSuggestions) await fetchTagSuggestions();
+    if (render) renderBlocklistView();
 }
 
 function applySearchResults(query, matches) {
@@ -708,9 +788,7 @@ async function navigateCombo(ctx) {
 
 async function fetchComboRefinements(contextTags) {
     try {
-        const res = await fetch(`${API_URL}/api/tag-suggestions?context=${encodeURIComponent(contextTags.join(','))}`);
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await WayperApi.tagSuggestions(contextTags);
         appState.comboRefinements = data.suggestions || [];
     } catch (e) {
         console.error('Failed to fetch combo refinements:', e);
@@ -728,8 +806,7 @@ async function fetchAISuggestions() {
         if (!txt || !appState.aiStartTime) return;
         const elapsed = Math.floor((Date.now() - appState.aiStartTime) / 1000);
         try {
-            const res = await fetch(`${API_URL}/api/ai-suggestions/status`);
-            const status = await res.json();
+            const status = await WayperApi.aiSuggestionStatus();
             if (status.phase === 'preparing') {
                 txt.textContent = status.detail || 'Preparing\u2026';
             } else if (status.phase === 'analyzing') {
@@ -742,13 +819,7 @@ async function fetchAISuggestions() {
         }
     }, 1000);
     try {
-        const res = await fetch(`${API_URL}/api/ai-suggestions`, { method: 'POST' });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: res.statusText }));
-            appState.aiSuggestions = { error: err.detail || 'AI analysis failed' };
-        } else {
-            appState.aiSuggestions = await res.json();
-        }
+        appState.aiSuggestions = await WayperApi.aiSuggestions();
     } catch (e) {
         appState.aiSuggestions = { error: `Connection error: ${e.message}` };
     } finally {
@@ -756,63 +827,14 @@ async function fetchAISuggestions() {
         appState.aiTimer = null;
         appState.aiLoading = false;
         appState.aiStartTime = null;
+        syncAISuggestionAppliedState();
         renderBlocklistView();
     }
 }
 
 async function applyAISuggestion(suggestion, action) {
-    const config = appState.config;
-    const isTag = suggestion.type === 'tag';
-    const isUploader = suggestion.type === 'uploader';
-    let update;
-    if (action === 'add') {
-        if (isUploader) {
-            update = { exclude_uploaders: [...(config.wallhaven.exclude_uploaders || []), ...suggestion.tags] };
-        } else if (isTag) {
-            update = { exclude_tags: [...(config.wallhaven.exclude_tags || []), ...suggestion.tags] };
-        } else {
-            update = { exclude_combos: [...(config.wallhaven.exclude_combos || []), suggestion.tags] };
-        }
-    } else {
-        const removeLower = new Set(suggestion.tags.map(t => t.toLowerCase()));
-        if (isUploader) {
-            update = {
-                exclude_uploaders: (config.wallhaven.exclude_uploaders || []).filter(
-                    t => !removeLower.has(t.toLowerCase())
-                ),
-            };
-        } else if (isTag) {
-            update = {
-                exclude_tags: (config.wallhaven.exclude_tags || []).filter(
-                    t => !removeLower.has(t.toLowerCase())
-                ),
-            };
-        } else {
-            update = {
-                exclude_combos: (config.wallhaven.exclude_combos || []).filter(existing => {
-                    const existingLower = new Set(existing.map(t => t.toLowerCase()));
-                    return !(existingLower.size === removeLower.size &&
-                        [...removeLower].every(t => existingLower.has(t)));
-                }),
-            };
-        }
-    }
-    await fetch(`${API_URL}/api/config`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wallhaven: update }),
-    });
-    fetch(`${API_URL}/api/ai-suggestions/feedback`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            tags: suggestion.tags,
-            action: action === 'add' ? 'applied_add' : 'applied_remove',
-        }),
-    }).catch(e => console.error('Failed to record AI feedback:', e));
-    await fetchConfig();
-    suggestion._applied = true;
-    renderBlocklistView();
+    const type = aiSuggestionType(suggestion);
+    await applyExclusionUpdate({ type, tags: suggestion.tags, action });
 }
 
 async function saveSettings() {
@@ -856,13 +878,7 @@ async function saveSettings() {
 
     els.btnSaveSettings.innerText = 'Saving...';
     try {
-        const res = await fetch(`${API_URL}/api/config`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updates)
-        });
-
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await WayperApi.patchConfig(updates);
 
         await fetchConfig(); // Reload config
         switchView('grid');
@@ -1440,8 +1456,7 @@ function removeImageFromState(path) {
 
 async function fetchConfig() {
     try {
-        const res = await fetch(`${API_URL}/api/config`);
-        const data = await res.json();
+        const data = await WayperApi.config();
         appState.config = data;
         appState.hasApiKey = !!data.has_api_key;
         appState.safeMode = !!data.safe_mode;
@@ -1458,6 +1473,7 @@ async function fetchConfig() {
             els.btnPurityNsfw.classList.toggle('purity-disabled', !appState.hasApiKey);
         }
 
+        syncAISuggestionAppliedState();
         updateUI();
     } catch (e) { console.error(e); }
 }
@@ -1799,6 +1815,7 @@ function renderImages() {
 }
 
 function renderBlocklistView() {
+    syncAISuggestionAppliedState();
     els.wallpaperGrid.innerHTML = '';
     appState.currentBatchIndex = 0;
 
@@ -1885,25 +1902,13 @@ function renderBlocklistView() {
         if (isCombo) {
             excludeBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Exclude combo';
             excludeBtn.onclick = async () => {
-                const config = appState.config;
-                const newComboLower = new Set(ctx.map(t => t.toLowerCase()));
-                // Remove supersets of the new combo (redundant, more specific)
-                const combos = (config.wallhaven.exclude_combos || []).filter(existing => {
-                    const existingLower = new Set(existing.map(t => t.toLowerCase()));
-                    if (existingLower.size > newComboLower.size &&
-                        [...newComboLower].every(t => existingLower.has(t))) {
-                        return false;
-                    }
-                    return true;
+                await applyExclusionUpdate({
+                    type: 'combo',
+                    tags: ctx,
+                    refreshSuggestions: true,
+                    render: false,
+                    dropComboSupersets: true,
                 });
-                combos.push([...ctx]);
-                await fetch(`${API_URL}/api/config`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ wallhaven: { exclude_combos: combos } })
-                });
-                await fetchConfig();
-                await fetchTagSuggestions();
                 appState.reviewingTag = null;
                 appState.comboContext = [];
                 appState.comboRefinements = [];
@@ -1912,15 +1917,12 @@ function renderBlocklistView() {
         } else {
             excludeBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Exclude';
             excludeBtn.onclick = async () => {
-                const config = appState.config;
-                const tags = [...(config.wallhaven.exclude_tags || []), s.tag];
-                await fetch(`${API_URL}/api/config`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ wallhaven: { exclude_tags: tags } })
+                await applyExclusionUpdate({
+                    type: 'tag',
+                    tags: [s.tag],
+                    refreshSuggestions: true,
+                    render: false,
                 });
-                await fetchConfig();
-                await fetchTagSuggestions();
                 appState.reviewingTag = null;
                 appState.comboContext = [];
                 appState.comboRefinements = [];
@@ -1998,14 +2000,12 @@ function renderBlocklistView() {
             const config = appState.config;
             const uploaders = [...(config.wallhaven.exclude_uploaders || [])];
             if (!uploaders.some(u => u.toLowerCase() === uploaderName.toLowerCase())) {
-                uploaders.push(uploaderName);
-                await fetch(`${API_URL}/api/config`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ wallhaven: { exclude_uploaders: uploaders } })
+                await applyExclusionUpdate({
+                    type: 'uploader',
+                    tags: [uploaderName],
+                    refreshSuggestions: true,
+                    render: false,
                 });
-                await fetchConfig();
-                await fetchTagSuggestions();
             }
             appState.reviewingUploader = null;
             clearSearch();

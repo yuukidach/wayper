@@ -1,6 +1,6 @@
 [project]
 name = "wayper"
-version = "1.6.2"
+version = "1.6.3"
 description = "Cross-platform wallpaper manager with Wallhaven integration"
 requires-python = ">=3.12"
 dependencies = [
@@ -47,4 +47,3 @@ extend-exclude = [".claude"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
-
