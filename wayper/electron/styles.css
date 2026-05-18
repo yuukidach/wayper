@@ -34,6 +34,12 @@
   --mantle: #181825;
   --crust: #11111b;
 
+  /* Scrollbars */
+  --scrollbar-track: rgba(49, 50, 68, 0.55);
+  --scrollbar-thumb: var(--overlay0);
+  --scrollbar-thumb-hover: var(--overlay1);
+  --scrollbar-thumb-active: var(--blue);
+
   /* Radii */
   --radius-sm: 4px;
   --radius: 8px;
@@ -993,8 +999,7 @@ main {
   min-height: 0;
   max-height: 120px;
   overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--surface2) transparent;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
 .tag-chips:empty {
@@ -1318,23 +1323,38 @@ footer {
 
 /* ---------- Scrollbar ---------- */
 
+* {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 12px;
+  height: 12px;
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--scrollbar-track);
+  border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(69, 71, 90, 0.5);
-  border: 2px solid var(--base);
-  border-radius: 4px;
-  min-height: 40px;
+  background-color: var(--scrollbar-thumb);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  min-height: 48px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(69, 71, 90, 0.7);
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-active);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* ---------- Empty State ---------- */
