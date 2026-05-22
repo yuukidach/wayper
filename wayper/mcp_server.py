@@ -388,6 +388,57 @@ def tag_stats_combo(combo: str, purity: str | None = None) -> dict:
     }
 
 
+@mcp.tool()
+def uploader_stats_lookup(uploaders: str, purity: str | None = None) -> dict:
+    """Look up exact ban/kept/fav counts for specific uploaders.
+
+    Args:
+        uploaders: Comma-separated uploader names to look up.
+        purity: Comma-separated purity filter (e.g. "nsfw"). All if omitted.
+    """
+    config = _config()
+    metadata = load_metadata(config)
+    blacklisted = {fn for _, fn in list_blacklist(config)}
+    fav_files = _collect_favorites()
+
+    purity_set: set[str] | None = None
+    if purity:
+        purity_set = {p.strip().lower() for p in purity.split(",") if p.strip()}
+
+    counts: dict[str, dict[str, int | str]] = {}
+    lower_map: dict[str, str] = {}
+    for filename, meta in metadata.items():
+        if purity_set and meta.get("purity", "sfw") not in purity_set:
+            continue
+        uploader = str(meta.get("uploader", "")).strip()
+        if not uploader:
+            continue
+        canonical = lower_map.setdefault(uploader.lower(), uploader)
+        row = counts.setdefault(
+            canonical,
+            {"uploader": canonical, "banned": 0, "kept": 0, "favorites": 0},
+        )
+        if filename in blacklisted:
+            row["banned"] += 1
+        else:
+            row["kept"] += 1
+            if filename in fav_files:
+                row["favorites"] += 1
+
+    query_uploaders = [u.strip() for u in uploaders.split(",") if u.strip()]
+    results = []
+    for uploader in query_uploaders:
+        canonical = lower_map.get(uploader.lower(), uploader)
+        row = counts.get(
+            canonical,
+            {"uploader": canonical, "banned": 0, "kept": 0, "favorites": 0},
+        )
+        total = row["banned"] + row["kept"] + 3 * row["favorites"]
+        results.append({**row, "precision": round(row["banned"] / total, 3) if total else 0})
+
+    return {"uploaders": results}
+
+
 def main():
     mcp.run(transport="stdio")
 
