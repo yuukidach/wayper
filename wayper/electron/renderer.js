@@ -1815,6 +1815,8 @@ function renderImages() {
 }
 
 function renderBlocklistView() {
+    if (appState.mode !== 'trash') return;
+
     syncAISuggestionAppliedState();
     els.wallpaperGrid.innerHTML = '';
     appState.currentBatchIndex = 0;
