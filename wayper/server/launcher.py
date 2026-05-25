@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -11,6 +13,39 @@ from urllib.request import urlopen
 
 from wayper.server.api import port_file
 from wayper.server.api import run as run_api
+
+
+def _electron_workdir(src: Path) -> Path:
+    """Return a writable dir to build/run the Electron front-end in.
+
+    Uses the bundled ``electron/`` dir if it's writable (dev checkout), else
+    mirrors it into ``$XDG_CACHE_HOME`` so ``npm install`` works on read-only
+    system installs.
+    """
+    if os.access(src, os.W_OK):
+        return src
+
+    cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "wayper" / "electron"
+    cache.mkdir(parents=True, exist_ok=True)
+
+    # If the installed lockfile differs from the cached copy (e.g. after an
+    # upgrade), drop the stale node_modules so deps get reinstalled below.
+    src_lock = src / "package-lock.json"
+    cache_lock = cache / "package-lock.json"
+    if src_lock.is_file() and cache_lock.is_file():
+        if src_lock.read_bytes() != cache_lock.read_bytes():
+            shutil.rmtree(cache / "node_modules", ignore_errors=True)
+
+    for item in src.iterdir():
+        if item.name == "node_modules":
+            continue
+        dest = cache / item.name
+        if item.is_dir():
+            shutil.copytree(item, dest, dirs_exist_ok=True)
+        else:
+            shutil.copy2(item, dest)
+
+    return cache
 
 
 def _wait_for_api(timeout: float = 10) -> int:
@@ -43,16 +78,14 @@ def _wait_for_api(timeout: float = 10) -> int:
 
 
 def run_app():
-    import os
-
     # Start API in a separate thread
     api_thread = threading.Thread(target=run_api, daemon=True)
     api_thread.start()
 
     port = _wait_for_api()
 
-    # Electron directory
-    electron_dir = Path(__file__).parent.parent / "electron"
+    # Electron directory (mirrored to a writable cache dir for system installs)
+    electron_dir = _electron_workdir(Path(__file__).parent.parent / "electron")
 
     # Check dependencies first
     if not (electron_dir / "node_modules").exists():
