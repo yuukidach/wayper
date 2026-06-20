@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .util import atomic_write
 
-CONFIG_DIR = Path.home() / ".config" / "wayper"
+if sys.platform == "win32":
+    CONFIG_DIR = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "wayper"
+else:
+    CONFIG_DIR = Path.home() / ".config" / "wayper"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 
 

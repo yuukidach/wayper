@@ -38,8 +38,11 @@ function getBackendPath() {
 }
 
 function getPortFilePath() {
-  const home = process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME
-  return path.join(home, '.config', 'wayper', 'api.port')
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming')
+    return path.join(appData, 'wayper', 'api.port')
+  }
+  return path.join(process.env.HOME, '.config', 'wayper', 'api.port')
 }
 
 function startBackend() {

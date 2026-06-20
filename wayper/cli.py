@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json as json_mod
-import signal
-import subprocess
 import sys
 from pathlib import Path
 
@@ -70,20 +68,9 @@ def start(ctx):
         except OSError as e:
             click.echo(f"Warning: Could not remove stale PID file: {e}", err=True)
 
-    # Spawn the bare 'daemon' command detached
-    # We use Popen with start_new_session=True to detach fully
-    if getattr(sys, "frozen", False):
-        cmd = [sys.executable, "daemon"]
-    else:
-        cmd = [sys.executable, "-m", "wayper.cli", "daemon"]
+    from .daemon import start_daemon_process
 
-    subprocess.Popen(
-        cmd,
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-    )
+    start_daemon_process()
     click.echo("Daemon started in background.")
 
 
@@ -101,10 +88,13 @@ def stop(ctx):
 
     if pid:
         try:
-            import os
+            from .daemon import request_stop
 
-            os.kill(pid, signal.SIGTERM)
-            click.echo(f"Stopped daemon (PID {pid})")
+            if request_stop(config):
+                click.echo(f"Stopped daemon (PID {pid})")
+            else:
+                click.echo("Could not signal daemon", err=True)
+                raise SystemExit(1)
         except ProcessLookupError:
             click.echo("Daemon process not found (stale PID file?)")
             # Cleanup stale pid file?
@@ -338,9 +328,9 @@ def mode(ctx, new_mode):
 
     write_mode(config, result)
 
-    from .daemon import signal_daemon
+    from .daemon import request_mode_reload
 
-    signal_daemon(config, signal.SIGUSR2)
+    request_mode_reload(config)
 
     label = ", ".join(p for p in ALL_PURITIES if p in result)
     if ctx.obj["json"]:

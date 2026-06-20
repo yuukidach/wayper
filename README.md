@@ -30,7 +30,7 @@ Most wallpaper tools stop at "set image on desktop." wayper is a full **Wallhave
 - **Smart tag filtering** — excluded tags sync to Wallhaven's cloud blacklist for server-side filtering; overflow tags are sent via URL query; the rest are filtered after metadata fetch. Zero wasted downloads.
 - **Auto orientation** — portrait monitors get portrait wallpapers. No sorting needed.
 - **Three-tier purity** — SFW, Sketchy, NSFW — independently toggleable, persistent across sessions.
-- **Cross-platform** — macOS and Linux (Hyprland/Sway). CLI + GUI + MCP.
+- **Cross-platform** — Windows, macOS, and Linux (Hyprland/Sway). CLI + GUI + MCP.
 - **`--json` everywhere** — every command supports machine-readable output.
 
 ## Install
@@ -40,6 +40,21 @@ Most wallpaper tools stop at "set image on desktop." wayper is a full **Wallhave
 ```bash
 paru -S wayper     # or: yay -S wayper
 ```
+
+### Windows
+
+Download the latest Windows installer from [GitHub Releases](https://github.com/yuukidach/wayper/releases/latest), or install from source with Python 3.12+.
+
+```powershell
+git clone https://github.com/yuukidach/wayper.git
+cd wayper
+uv venv
+uv pip install -e .
+```
+
+### macOS
+
+Download the latest `.dmg` from [GitHub Releases](https://github.com/yuukidach/wayper/releases/latest), or install from source with Python 3.12+.
 
 ### From source
 
@@ -177,9 +192,18 @@ Available tools: `status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `u
 
 ## Config
 
+Linux/macOS:
+
 ```bash
 mkdir -p ~/.config/wayper
 cp example-config.toml ~/.config/wayper/config.toml
+```
+
+Windows:
+
+```powershell
+New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
+Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
 See [`example-config.toml`](example-config.toml) for all options — API key, proxy, intervals, quota, transitions, etc. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
@@ -192,6 +216,8 @@ See [`example-config.toml`](example-config.toml) for all options — API key, pr
 **Linux:** [awww](https://codeberg.org/LGFae/awww), [Hyprland](https://hyprland.org/)
 
 **macOS:** Python 3.12+, Node.js (for Electron GUI)
+
+**Windows:** Windows 10/11, Python 3.12+, Node.js (for Electron GUI)
 
 ## License
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -100,6 +101,8 @@ def _system_trash_dirs() -> list[Path]:
     """Return system trash file directories to search, in priority order."""
     if sys.platform == "darwin":
         return [Path.home() / ".Trash"]
+    if sys.platform == "win32":
+        return []
     xdg_data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
     return [xdg_data / "Trash" / "files"]
 
@@ -111,7 +114,7 @@ def _trash_search_dirs() -> list[Path]:
 
 def _cleanup_trashinfo(filename: str) -> None:
     """Remove .trashinfo metadata for a restored file (Linux/freedesktop only)."""
-    if sys.platform == "darwin":
+    if sys.platform in ("darwin", "win32"):
         return
     xdg_data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
     trashinfo = xdg_data / "Trash" / "info" / f"{filename}.trashinfo"
@@ -138,6 +141,9 @@ def _write_trash_map(config: WayperConfig, mapping: dict[str, str]) -> None:
 
 def find_in_trash(config: WayperConfig, filename: str) -> Path | None:
     """Find a file in system trash — check stored path first, then scan dirs."""
+    if sys.platform == "win32":
+        return None
+
     # Check stored trash path (works without FDA)
     mapping = _read_trash_map(config)
     stored = mapping.get(filename)
@@ -156,7 +162,7 @@ def find_in_trash(config: WayperConfig, filename: str) -> Path | None:
 
 def find_many_in_trash(config: WayperConfig, filenames: set[str]) -> dict[str, Path]:
     """Find multiple files in system trash while reading trash state once."""
-    if not filenames:
+    if not filenames or sys.platform == "win32":
         return {}
 
     found: dict[str, Path] = {}
@@ -251,6 +257,55 @@ def _trash_file(config: WayperConfig, src: Path) -> None:
         _write_trash_map(config, mapping)
 
 
+def _restore_from_windows_recycle_bin(filename: str, dest_dir: Path) -> Path | None:
+    """Restore a file from the Windows Recycle Bin by filename using Shell.Application."""
+    script = rf"""
+$ErrorActionPreference = 'SilentlyContinue'
+$targetName = '{_ps_escape(filename)}'
+$dest = '{_ps_escape(str(dest_dir))}'
+New-Item -ItemType Directory -Force -Path $dest | Out-Null
+$shell = New-Object -ComObject Shell.Application
+$recycle = $shell.Namespace(10)
+$items = @($recycle.Items() | Where-Object {{ $_.Name -eq $targetName }})
+if ($items.Count -eq 0) {{ exit 1 }}
+$item = $items[0]
+$item.InvokeVerb('undelete')
+$deadline = (Get-Date).AddSeconds(8)
+do {{
+    $found = Get-ChildItem -Path $dest -Filter $targetName -Recurse -File `
+        -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) {{
+        Write-Output $found.FullName
+        exit 0
+    }}
+    Start-Sleep -Milliseconds 200
+}} while ((Get-Date) -lt $deadline)
+exit 2
+"""
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=12,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+    if result.returncode != 0:
+        return None
+    restored = result.stdout.strip().splitlines()[-1:] or []
+    if not restored:
+        return None
+    path = Path(restored[0])
+    return path if path.exists() else None
+
+
+def _ps_escape(value: str) -> str:
+    return value.replace("'", "''")
+
+
 def push_undo(config: WayperConfig, filename: str, original_dir: Path) -> None:
     """Send file to system trash and record in undo log."""
     src = original_dir / filename
@@ -280,6 +335,15 @@ def pop_undo(config: WayperConfig) -> tuple[str, Path] | None:
 
 def restore_from_trash(config: WayperConfig, filename: str, dest_dir: Path) -> Path | None:
     """Restore file from system trash to dest_dir."""
+    if sys.platform == "win32":
+        restored = _restore_from_windows_recycle_bin(filename, dest_dir)
+        if restored is None:
+            return None
+        mapping = _read_trash_map(config)
+        mapping.pop(filename, None)
+        _write_trash_map(config, mapping)
+        return restored
+
     trashed = find_in_trash(config, filename)
     if not trashed:
         return None

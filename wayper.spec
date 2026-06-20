@@ -5,6 +5,7 @@ block_cipher = None
 
 # Collect hidden imports for uvicorn/fastapi
 hidden_imports = collect_submodules('uvicorn') + collect_submodules('fastapi') + ['_socket', 'socket', 'logging.config']
+hidden_imports += ['ctypes', 'uuid', 'wayper.backend.windows']
 
 a = Analysis(
     ['wayper/server/entry.py'],

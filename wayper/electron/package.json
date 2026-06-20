@@ -1,6 +1,6 @@
 {
   "name": "wayper",
-  "version": "1.6.5",
+  "version": "1.6.6",
   "productName": "Wayper",
   "description": "Wayper Electron GUI",
   "main": "main.js",
@@ -22,6 +22,10 @@
     "mac": {
       "target": "dmg",
       "category": "public.app-category.utilities"
+    },
+    "win": {
+      "icon": "../../assets/icon.ico",
+      "target": "nsis"
     },
     "directories": {
       "output": "dist"

@@ -30,7 +30,7 @@
 - **智能标签过滤** — 排除标签自动同步到 Wallhaven 云端黑名单（服务端过滤）；溢出的标签通过 URL 参数发送；剩余的在元数据获取后本地过滤。零浪费下载。
 - **自动匹配方向** — 竖屏显示器自动用竖屏壁纸，无需分类。
 - **三档纯度** — SFW、Sketchy、NSFW 独立开关，跨会话持久化。
-- **跨平台** — macOS 和 Linux（Hyprland/Sway）。CLI + GUI + MCP。
+- **跨平台** — Windows、macOS 和 Linux（Hyprland/Sway）。CLI + GUI + MCP。
 - **`--json` 全覆盖** — 所有命令支持机器可读输出。
 
 ## 安装
@@ -40,6 +40,21 @@
 ```bash
 paru -S wayper     # 或: yay -S wayper
 ```
+
+### Windows
+
+从 [GitHub Releases](https://github.com/yuukidach/wayper/releases/latest) 下载最新版 Windows 安装包，或用 Python 3.12+ 从源码安装。
+
+```powershell
+git clone https://github.com/yuukidach/wayper.git
+cd wayper
+uv venv
+uv pip install -e .
+```
+
+### macOS
+
+从 [GitHub Releases](https://github.com/yuukidach/wayper/releases/latest) 下载最新版 `.dmg`，或用 Python 3.12+ 从源码安装。
 
 ### 从源码安装
 
@@ -177,9 +192,18 @@ command = "/path/to/wayper/.venv/bin/wayper-mcp"
 
 ## 配置
 
+Linux/macOS：
+
 ```bash
 mkdir -p ~/.config/wayper
 cp example-config.toml ~/.config/wayper/config.toml
+```
+
+Windows：
+
+```powershell
+New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
+Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
 详见 [`example-config.toml`](../example-config.toml) — API key、代理、轮换间隔、配额、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
@@ -192,6 +216,8 @@ cp example-config.toml ~/.config/wayper/config.toml
 **Linux：** [awww](https://codeberg.org/LGFae/awww)、[Hyprland](https://hyprland.org/)
 
 **macOS：** Python 3.12+、Node.js（用于 Electron GUI）
+
+**Windows：** Windows 10/11、Python 3.12+、Node.js（用于 Electron GUI）
 
 ## 许可
 

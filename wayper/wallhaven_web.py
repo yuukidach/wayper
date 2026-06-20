@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 import sys
@@ -34,6 +35,17 @@ def _find_chrome() -> str | None:
         candidates = [
             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
             "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+    elif sys.platform == "win32":
+        local_app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        program_files = Path(os.environ.get("PROGRAMFILES", "C:/Program Files"))
+        program_files_x86 = Path(os.environ.get("PROGRAMFILES(X86)", "C:/Program Files (x86)"))
+        candidates = [
+            str(program_files / "Google/Chrome/Application/chrome.exe"),
+            str(program_files_x86 / "Google/Chrome/Application/chrome.exe"),
+            str(local_app_data / "Google/Chrome/Application/chrome.exe"),
+            str(program_files / "Microsoft/Edge/Application/msedge.exe"),
+            str(program_files_x86 / "Microsoft/Edge/Application/msedge.exe"),
         ]
     else:
         candidates = [
@@ -226,6 +238,13 @@ class WallhavenWeb:
             browser_dirs = (
                 Path.home() / "Library/Application Support/Google Chrome",
                 Path.home() / "Library/Application Support/Chromium",
+            )
+        elif sys.platform == "win32":
+            local_app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+            browser_dirs = (
+                local_app_data / "Google/Chrome/User Data",
+                local_app_data / "Chromium/User Data",
+                local_app_data / "Microsoft/Edge/User Data",
             )
         else:
             browser_dirs = (

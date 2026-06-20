@@ -11,17 +11,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .backend import (
-    FileLock,
-    find_monitor,
-    get_context,
-    get_focused_monitor,
-    query_current,
-    set_wallpaper,
-)
+from .backend import find_monitor, get_context, get_focused_monitor, query_current, set_wallpaper
 from .config import NO_TRANSITION, WayperConfig
 from .history import go_prev, pick_next
 from .history import push as push_history
+from .lock import FileLock
 from .pool import (
     add_to_blacklist,
     favorites_dir,

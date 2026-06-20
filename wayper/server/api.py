@@ -4,9 +4,6 @@ import asyncio
 import json as json_mod
 import logging
 import os
-import signal
-import subprocess
-import sys
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException
@@ -24,7 +21,13 @@ from wayper.ai_suggestions import (
 from wayper.backend import query_current, set_wallpaper
 from wayper.config import WayperConfig, load_config, save_config
 from wayper.core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
-from wayper.daemon import is_daemon_running, signal_daemon
+from wayper.daemon import (
+    is_daemon_running,
+    request_config_reload,
+    request_mode_reload,
+    request_stop,
+    start_daemon_process,
+)
 from wayper.pool import (
     favorites_dir,
     list_blacklist,
@@ -305,8 +308,9 @@ class SetModeRequest(BaseModel):
 
 def _resolve_image(config: WayperConfig, image_path: str) -> Path:
     """Resolve and validate an image path stays within download_dir."""
-    img_full = (config.download_dir / image_path).resolve()
-    if not img_full.is_relative_to(config.download_dir):
+    download_dir = config.download_dir.resolve()
+    img_full = (download_dir / image_path).resolve()
+    if not img_full.is_relative_to(download_dir):
         raise HTTPException(403, "Path traversal not allowed")
     if not img_full.exists():
         raise HTTPException(404, "Image not found")
@@ -404,7 +408,7 @@ def update_config_route(updates: dict = Body(...)):
             config.wallhaven.exclude_uploaders = _dedup_by(wh["exclude_uploaders"], str.lower)
 
     save_config(config)
-    signal_daemon(config, signal.SIGHUP)
+    request_config_reload(config)
     global _cached_config, _cached_mtime
     _cached_config = config
     _cached_mtime = 0  # force reload on next get_config if file changes again
@@ -444,7 +448,7 @@ def set_mode_route(req: SetModeRequest):
         purities = {"sfw"}
 
     write_mode(config, purities)
-    signal_daemon(config, signal.SIGUSR2)
+    request_mode_reload(config)
 
     current = query_current()
     for monitor_name, img_path in current.items():
@@ -737,7 +741,7 @@ def favorite_image(req: ActionRequest):
     config = get_config()
     img_full = _resolve_image(config, req.image_path)
 
-    is_fav = img_full.is_relative_to(config.download_dir / "favorites")
+    is_fav = img_full.is_relative_to((config.download_dir / "favorites").resolve())
     if is_fav:
         result = do_unfav(config, image=img_full)
     else:
@@ -777,26 +781,14 @@ def daemon_action(action: str):
         running, _ = is_daemon_running(config)
         if running:
             return {"status": "already_running"}
-        if getattr(sys, "frozen", False):
-            cmd = [sys.executable, "daemon"]
-        else:
-            cmd = [sys.executable, "-m", "wayper.cli", "daemon"]
-        subprocess.Popen(
-            cmd,
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        start_daemon_process()
         return {"status": "ok"}
 
     # stop
     running, pid = is_daemon_running(config)
     if not running or not pid:
         return {"status": "not_running"}
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass  # already dead
+    request_stop(config)
     return {"status": "ok"}
 
 
@@ -1147,8 +1139,9 @@ def serve_thumbnail(path: str):
     from wayper.image import generate_thumbnail
 
     config = get_config()
-    img_full = (config.download_dir / path).resolve()
-    if not img_full.is_relative_to(config.download_dir):
+    download_dir = config.download_dir.resolve()
+    img_full = (download_dir / path).resolve()
+    if not img_full.is_relative_to(download_dir):
         raise HTTPException(403, "Path traversal not allowed")
     if not img_full.exists():
         raise HTTPException(404, "Image not found")

@@ -7,11 +7,12 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 from .backend import ensure_ready, is_locked, set_wallpaper
-from .config import WayperConfig, load_config
+from .config import CONFIG_FILE, WayperConfig, load_config
 from .history import push_many
 from .pool import (
     count_images,
@@ -31,6 +32,10 @@ from .wallhaven import WallhavenClient
 log = logging.getLogger("wayper")
 
 FAV_SYNC_INTERVAL = 12  # sync remote favorites every ~12 rotation cycles
+ROTATE_SIGNAL = getattr(signal, "SIGUSR1", None)
+MODE_RELOAD_SIGNAL = getattr(signal, "SIGUSR2", None)
+CONFIG_RELOAD_SIGNAL = getattr(signal, "SIGHUP", None)
+TERMINATE_SIGNAL = getattr(signal, "SIGTERM", None)
 
 _change_now = False
 _reload_mode = False
@@ -52,6 +57,8 @@ def _on_usr2(*_: object) -> None:
 
 
 _reload_config = False
+_config_mtime: int = 0
+_mode_mtime: int = 0
 
 
 def _on_hup(*_: object) -> None:
@@ -70,19 +77,46 @@ def remove_pid_file(config: WayperConfig) -> None:
     config.pid_file.unlink(missing_ok=True)
 
 
+def _process_exists(pid: int) -> bool:
+    if os.name != "nt":
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            pass  # not our child — started by CLI or another process
+        os.kill(pid, 0)
+        return True
+
+    import ctypes
+    from ctypes import wintypes
+
+    process_query_limited_information = 0x1000
+    still_active = 259
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return False
+    try:
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return False
+        return exit_code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def is_daemon_running(config: WayperConfig) -> tuple[bool, int | None]:
     """Check if daemon is alive. Returns (running, pid)."""
     if not config.pid_file.exists():
         return False, None
     try:
         pid = int(config.pid_file.read_text().strip())
-        # Reap zombie if daemon was our child (started by API server)
-        try:
-            os.waitpid(pid, os.WNOHANG)
-        except ChildProcessError:
-            pass  # not our child — started by CLI or another process
-        os.kill(pid, 0)
-        return True, pid
+        return (_process_exists(pid), pid)
     except (ValueError, ProcessLookupError, OSError):
         return False, None
 
@@ -101,13 +135,90 @@ def compute_daemon_state(config: WayperConfig) -> tuple[bool, set[str], int, int
     return running, purities, pool_count, fav_count, round(disk_mb)
 
 
-def signal_daemon(config: WayperConfig, sig: int) -> bool:
+def signal_daemon(config: WayperConfig, sig: signal.Signals | int | None) -> bool:
     """Send a signal to the running daemon. Returns True if sent."""
+    if sig is None:
+        return False
     running, pid = is_daemon_running(config)
     if running and pid:
-        os.kill(pid, sig)
-        return True
+        try:
+            os.kill(pid, sig)
+            return True
+        except OSError:
+            return False
     return False
+
+
+def request_rotation(config: WayperConfig) -> bool:
+    """Ask the daemon to rotate immediately if the platform supports it."""
+    return signal_daemon(config, ROTATE_SIGNAL)
+
+
+def request_mode_reload(config: WayperConfig) -> bool:
+    """Ask the daemon to reload mode immediately if the platform supports it."""
+    return signal_daemon(config, MODE_RELOAD_SIGNAL)
+
+
+def request_config_reload(config: WayperConfig) -> bool:
+    """Ask the daemon to reload config immediately if the platform supports it."""
+    return signal_daemon(config, CONFIG_RELOAD_SIGNAL)
+
+
+def request_stop(config: WayperConfig) -> bool:
+    """Ask the daemon to stop."""
+    if signal_daemon(config, TERMINATE_SIGNAL):
+        return True
+    if os.name != "nt":
+        return False
+    running, pid = is_daemon_running(config)
+    if not running or not pid:
+        return False
+    try:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _config_file_mtime() -> int:
+    try:
+        return CONFIG_FILE.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def _mode_file_mtime(config: WayperConfig) -> int:
+    try:
+        return config.state_file.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def daemon_command() -> list[str]:
+    """Return the command used to start the daemon in this runtime."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "daemon"]
+    return [sys.executable, "-m", "wayper.cli", "daemon"]
+
+
+def start_daemon_process(*, close_stdin: bool = True) -> subprocess.Popen:
+    """Start the daemon as a detached background process."""
+    popen_kwargs = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if close_stdin:
+        popen_kwargs["stdin"] = subprocess.DEVNULL
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+    return subprocess.Popen(daemon_command(), **popen_kwargs)
 
 
 def read_last_rotation(config: WayperConfig) -> float | None:
@@ -198,7 +309,7 @@ async def _do_greeter(config: WayperConfig) -> None:
 
 
 async def run_daemon(config: WayperConfig) -> None:
-    global _change_now, _reload_mode, _reload_config, _wake
+    global _change_now, _reload_mode, _reload_config, _config_mtime, _mode_mtime, _wake
 
     from .logging import setup_logging
 
@@ -206,12 +317,25 @@ async def run_daemon(config: WayperConfig) -> None:
     ensure_directories(config)
     ensure_ready()
     write_pid_file(config)
+    _config_mtime = _config_file_mtime()
+    _mode_mtime = _mode_file_mtime(config)
 
     _wake = asyncio.Event()
     loop = asyncio.get_running_loop()
-    loop.add_signal_handler(signal.SIGUSR1, _on_usr1)
-    loop.add_signal_handler(signal.SIGUSR2, _on_usr2)
-    loop.add_signal_handler(signal.SIGHUP, _on_hup)
+    for sig, handler in (
+        (ROTATE_SIGNAL, _on_usr1),
+        (MODE_RELOAD_SIGNAL, _on_usr2),
+        (CONFIG_RELOAD_SIGNAL, _on_hup),
+    ):
+        if sig is None:
+            continue
+        try:
+            loop.add_signal_handler(sig, handler)
+        except (NotImplementedError, RuntimeError):
+            try:
+                signal.signal(sig, handler)
+            except (OSError, ValueError):
+                pass
 
     log.info("Daemon started (PID %d)", os.getpid())
 
@@ -225,12 +349,23 @@ async def run_daemon(config: WayperConfig) -> None:
 
     async def reload_config_if_needed() -> None:
         """Reload config and replace client if SIGHUP was received."""
-        global _reload_config
+        global _reload_mode, _reload_config, _config_mtime, _mode_mtime
         nonlocal config, client, fav_sync_count
-        if not _reload_config:
+        current_mtime = _config_file_mtime()
+        file_changed = current_mtime != _config_mtime
+        current_mode_mtime = _mode_file_mtime(config)
+        mode_changed = current_mode_mtime != _mode_mtime
+        if not _reload_config and not file_changed and not mode_changed:
+            return
+        if mode_changed:
+            _reload_mode = True
+            _mode_mtime = current_mode_mtime
+        if not _reload_config and not file_changed:
             return
         _reload_config = False
+        _config_mtime = current_mtime
         config = load_config()
+        _mode_mtime = _mode_file_mtime(config)
         old, client = client, WallhavenClient(config)
         await asyncio.to_thread(client.refresh_cloud_tags)
         await asyncio.to_thread(merge_cloud_blacklists_into_config, config)

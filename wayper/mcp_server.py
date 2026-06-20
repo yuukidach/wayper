@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import signal
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -10,7 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from .backend import get_context, notify, query_current
 from .config import load_config
 from .core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
-from .daemon import is_daemon_running, signal_daemon
+from .daemon import is_daemon_running, request_mode_reload
 from .pool import (
     add_to_blacklist,
     count_images,
@@ -158,7 +157,7 @@ def set_mode(mode: str | None = None) -> dict:
 
     write_mode(config, {mode})
 
-    signal_daemon(config, signal.SIGUSR2)
+    request_mode_reload(config)
 
     notify("Wallpaper", f"Mode: {mode}")
     return {"action": "mode", "mode": mode}

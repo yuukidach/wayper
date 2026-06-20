@@ -2,41 +2,14 @@
 
 from __future__ import annotations
 
-import fcntl
-import os
 import sys
 import time
 from pathlib import Path
 
 from ..config import MonitorConfig, TransitionConfig, WayperConfig
+from ..lock import FileLock
 from .base import WallpaperBackend, find_monitor
 from .base import get_context as _get_context
-
-LOCK_PATH = Path("/tmp/wayper.lock")
-
-
-class FileLock:
-    """Simple flock-based file lock for state-modifying commands."""
-
-    def __init__(self, *, blocking: bool = True) -> None:
-        self._fd: int | None = None
-        self._blocking = blocking
-
-    def __enter__(self) -> FileLock:
-        self._fd = os.open(str(LOCK_PATH), os.O_WRONLY | os.O_CREAT)
-        try:
-            flags = fcntl.LOCK_EX if self._blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
-            fcntl.flock(self._fd, flags)
-        except OSError:
-            print("Failed to acquire lock (OSError). Exiting.")
-            os.close(self._fd)
-            self._fd = None
-            raise SystemExit(0)
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        if self._fd is not None:
-            os.close(self._fd)
 
 
 def _create_backend() -> WallpaperBackend:
@@ -44,13 +17,22 @@ def _create_backend() -> WallpaperBackend:
         from .macos import MacOSBackend
 
         return MacOSBackend()
-    else:
-        from .linux import LinuxBackend
+    if sys.platform == "win32":
+        from .windows import WindowsBackend
 
-        return LinuxBackend()
+        return WindowsBackend()
+
+    from .linux import LinuxBackend
+
+    return LinuxBackend()
 
 
 _backend = _create_backend()
+
+_monitors_cache: list[MonitorConfig] = []
+_monitors_dirty = True
+_monitors_cache_at: float = 0
+_has_display_listener = False
 
 
 def _setup_display_listener() -> None:
@@ -89,12 +71,6 @@ def query_current() -> dict[str, Path | None]:
     return _backend.query_current()
 
 
-_monitors_cache: list[MonitorConfig] = []
-_monitors_dirty = True
-_monitors_cache_at: float = 0
-_has_display_listener = False
-
-
 def _invalidate_monitors() -> None:
     """Mark monitor cache as stale (called by platform-specific display change listeners)."""
     global _monitors_dirty
@@ -104,7 +80,7 @@ def _invalidate_monitors() -> None:
 def detect_monitors() -> list[MonitorConfig]:
     """Detect current monitor configuration, cached until invalidated."""
     global _monitors_cache, _monitors_dirty, _monitors_cache_at
-    # Event-driven invalidation (macOS) or periodic fallback (Linux)
+    # Event-driven invalidation (macOS) or periodic fallback (Linux/Windows)
     if not _monitors_dirty and _monitors_cache:
         if _has_display_listener or time.monotonic() - _monitors_cache_at < 10:
             return _monitors_cache
