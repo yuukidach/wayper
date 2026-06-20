@@ -68,11 +68,19 @@ let appState = {
     // Search
     searchQuery: '',
     searchMatches: null, // Set of filenames, or null = no search
+    searchRequestId: 0,
     allImages: [], // unfiltered image list
 
     // Pagination
-    batchSize: 50,
+    batchSize: 60,
+    pageSize: 120,
     currentBatchIndex: 0,
+    totalImages: 0,
+    nextOffset: null,
+    imagesComplete: false,
+    loadingMoreImages: false,
+    imageRequestId: 0,
+    currentOrient: 'landscape',
 
     // Layout
     gridColumns: 1
@@ -185,7 +193,9 @@ async function init() {
     connectSSE();
 
     // Poll status (counts, daemon state)
-    setInterval(fetchStatus, 3000);
+    setInterval(() => {
+        if (!document.hidden) fetchStatus();
+    }, 10000);
     setInterval(fetchDiskUsage, 30000);
 }
 
@@ -732,14 +742,16 @@ async function applyExclusionUpdate({ type, tags, action = 'add', refreshSuggest
     if (render) renderBlocklistView();
 }
 
-function applySearchResults(query, matches) {
+async function applySearchResults(query, matches) {
+    const requestId = ++appState.searchRequestId;
     appState.searchQuery = query;
     appState.searchMatches = new Set(matches || []);
     els.searchInput.value = query;
     els.searchClear.classList.remove('hidden');
     document.querySelector('.search-kbd')?.classList.add('hidden');
     els.searchDropdown.classList.add('hidden');
-    applySearchFilter();
+    await applySearchFilter(false, requestId);
+    if (requestId !== appState.searchRequestId) return;
     updateSearchCount();
 }
 
@@ -749,7 +761,7 @@ async function searchByTags(tagList) {
     if (!res.ok) return;
     const data = await res.json();
     console.log('[searchByTags]', tagList, '→', data.matches?.length, 'matches, allImages:', appState.allImages.length);
-    applySearchResults(tagList.join(' + '), data.matches);
+    await applySearchResults(tagList.join(' + '), data.matches);
 }
 
 async function searchByUploader(name) {
@@ -757,10 +769,10 @@ async function searchByUploader(name) {
     if (!res.ok) return;
     const data = await res.json();
     console.log('[searchByUploader]', name, '→', data.matches?.length, 'matches');
-    applySearchResults(name, data.matches);
+    await applySearchResults(name, data.matches);
 }
 
-function exitComboLevel() {
+async function exitComboLevel() {
     els.searchInput.blur();
     if (appState.comboContext.length > 1) {
         // Pop one level — if going back to single tag, use text search for consistency
@@ -776,7 +788,7 @@ function exitComboLevel() {
         appState.reviewingTag = null;
         appState.comboContext = [];
         appState.comboRefinements = [];
-        clearSearch();
+        await clearSearch();
     }
 }
 
@@ -1115,6 +1127,7 @@ function onSearchInput() {
 async function performSearch(query) {
     if (searchAbortController) searchAbortController.abort();
     searchAbortController = new AbortController();
+    const requestId = ++appState.searchRequestId;
 
     appState.searchQuery = query;
     try {
@@ -1125,16 +1138,20 @@ async function performSearch(query) {
         }
         const data = await res.json();
         console.log('[search]', query, '→', data.matches?.length, 'matches, allImages:', appState.allImages.length);
+        if (requestId !== appState.searchRequestId) return;
         appState.searchMatches = new Set(data.matches || []);
         renderSearchSuggestions(data.suggestions || [], data.uploader_suggestions || []);
-        applySearchFilter();
+        await applySearchFilter(false, requestId);
+        if (requestId !== appState.searchRequestId) return;
         updateSearchCount();
     } catch (e) {
         if (e.name !== 'AbortError') console.error('Search failed:', e);
     }
 }
 
-function clearSearch() {
+async function clearSearch() {
+    appState.searchRequestId++;
+    if (searchAbortController) searchAbortController.abort();
     clearTimeout(searchDebounceTimer);
     els.searchInput.value = '';
     appState.searchQuery = '';
@@ -1148,7 +1165,7 @@ function clearSearch() {
     els.searchClear.classList.add('hidden');
     els.searchDropdown.classList.add('hidden');
     document.querySelector('.search-kbd')?.classList.remove('hidden');
-    applySearchFilter();
+    await applySearchFilter();
 }
 
 function updateSearchCount() {
@@ -1168,7 +1185,22 @@ function updateSearchCount() {
     els.searchCount.classList.remove('hidden');
 }
 
-function applySearchFilter(preserveFocus = false) {
+async function ensureAllImagesLoaded(searchRequestId) {
+    while (!appState.imagesComplete && appState.mode !== 'trash') {
+        if (searchRequestId !== undefined && searchRequestId !== appState.searchRequestId) return false;
+        const loaded = await loadMoreImages({ render: false });
+        if (searchRequestId !== undefined && searchRequestId !== appState.searchRequestId) return false;
+        if (!loaded) break;
+    }
+    return true;
+}
+
+async function applySearchFilter(preserveFocus = false, searchRequestId) {
+    if (appState.searchMatches && !appState.imagesComplete && appState.mode !== 'trash') {
+        const completed = await ensureAllImagesLoaded(searchRequestId);
+        if (!completed) return;
+    }
+
     if (appState.searchMatches) {
         appState.images = appState.allImages.filter(img => appState.searchMatches.has(img.name));
         console.log('[filter]', appState.allImages.length, '→', appState.images.length, 'images (mode:', appState.mode + ')');
@@ -1244,7 +1276,7 @@ function applySearchFilter(preserveFocus = false) {
 
     appState.currentBatchIndex = renderUpTo;
 
-    if (appState.currentBatchIndex < appState.images.length) {
+    if (appState.currentBatchIndex < appState.images.length || (!appState.searchMatches && !appState.imagesComplete)) {
         els.wallpaperGrid.appendChild(sentinel);
         observer.observe(sentinel);
     } else {
@@ -1369,9 +1401,11 @@ async function fetchBlocklist() {
     try {
         const res = await fetch(`${API_URL}/api/blocklist`);
         appState.blocklistData = await res.json();
+        return appState.blocklistData;
     } catch (e) {
         console.error("Failed to fetch blocklist", e);
-        appState.blocklistData = { entries: [], total: 0, recoverable_count: 0 };
+        appState.blocklistData = { entries: [], total: 0, recoverable_count: 0, images: [] };
+        return appState.blocklistData;
     }
 }
 
@@ -1478,6 +1512,63 @@ async function fetchConfig() {
     } catch (e) { console.error(e); }
 }
 
+function activePurityParam(purities = appState.purity) {
+    return encodeURIComponent(purities.join(','));
+}
+
+function imagePageUrl(offset = 0, { mode = appState.mode, purities = appState.purity, orient = appState.currentOrient } = {}) {
+    return `${API_URL}/api/images/page?mode=${mode}&purity=${activePurityParam(purities)}&orient=${orient}&offset=${offset}&limit=${appState.pageSize}`;
+}
+
+function resetImagePaging() {
+    appState.allImages = [];
+    appState.images = [];
+    appState.totalImages = 0;
+    appState.nextOffset = null;
+    appState.imagesComplete = false;
+    appState.loadingMoreImages = false;
+    appState.currentBatchIndex = 0;
+}
+
+async function loadMoreImages({ render = true } = {}) {
+    if (appState.loadingMoreImages || appState.imagesComplete || appState.mode === 'trash') {
+        return false;
+    }
+
+    appState.loadingMoreImages = true;
+    const requestId = appState.imageRequestId;
+    const offset = appState.nextOffset ?? appState.allImages.length;
+    const mode = appState.mode;
+    const purities = [...appState.purity];
+    const orient = appState.currentOrient;
+
+    try {
+        const res = await fetch(imagePageUrl(offset, { mode, purities, orient }));
+        if (!res.ok || requestId !== appState.imageRequestId) return false;
+        const data = await res.json();
+        const items = data.items || [];
+        appState.totalImages = data.total ?? (offset + items.length);
+        appState.nextOffset = data.next_offset;
+        appState.imagesComplete = data.next_offset === null
+            || data.next_offset === undefined
+            || items.length === 0;
+        appState.allImages.push(...items);
+
+        if (!appState.searchMatches) {
+            appState.images.push(...items);
+            if (render) renderNextBatch();
+        }
+        return items.length > 0;
+    } catch (e) {
+        console.error('Load more images failed:', e);
+        return false;
+    } finally {
+        if (requestId === appState.imageRequestId) {
+            appState.loadingMoreImages = false;
+        }
+    }
+}
+
 function connectSSE() {
     const es = new EventSource(`${API_URL}/api/events`);
     es.onmessage = (e) => {
@@ -1506,7 +1597,7 @@ async function fetchStatus() {
     try {
         const monitor = appState.monitors.find(m => m.name === appState.selectedMonitor);
         const orient = monitor ? monitor.orientation : '';
-        const res = await fetch(`${API_URL}/api/status?orient=${orient}`);
+        const res = await fetch(`${API_URL}/api/status?orient=${orient}&include_recoverable=false`);
         if (!res.ok) return;
         const data = await res.json();
 
@@ -1528,6 +1619,9 @@ async function fetchStatus() {
             || data.blocklist_count !== prev.blocklist_count;
 
         appState.status = data;
+        if (appState.mode === 'trash' && appState.blocklistData) {
+            appState.status.recoverable_count = appState.blocklistData.recoverable_count || 0;
+        }
         updateStatusUI();
         if (changed) {
             console.log('[status] counts changed pool:', prev?.pool_count, '→', data.pool_count,
@@ -1580,43 +1674,63 @@ async function refreshImages(preserveFocus = false) {
     if (!appState.selectedMonitor) return;
 
     appState.refreshing = true;
+    const requestId = ++appState.imageRequestId;
+    const renderedTarget = preserveFocus ? appState.currentBatchIndex : 0;
     const monitor = appState.monitors.find(m => m.name === appState.selectedMonitor);
     const orient = monitor ? monitor.orientation : 'landscape';
+    appState.currentOrient = orient;
     console.log('[refresh] start', appState.mode, orient);
 
     if (appState.mode === 'trash') {
-        const url = `${API_URL}/api/images?mode=trash&purity=sfw&orient=${orient}`;
         try {
-            const [imgRes, statusData] = await Promise.all([
-                fetch(url),
-                fetch(`${API_URL}/api/status?orient=${orient}`).then(r => r.json()),
+            const [statusData, blocklistData] = await Promise.all([
+                fetch(`${API_URL}/api/status?orient=${orient}&include_recoverable=false`).then(r => r.json()),
                 fetchBlocklist(),
-                fetchTagSuggestions(),
             ]);
-            appState.allImages = await imgRes.json();
-            appState.status = statusData;
-            updateStatusUI();
-            applySearchFilter(preserveFocus);
+            if (requestId === appState.imageRequestId) {
+                appState.allImages = blocklistData.images || [];
+                appState.totalImages = appState.allImages.length;
+                appState.imagesComplete = true;
+                appState.nextOffset = null;
+                statusData.recoverable_count = blocklistData.recoverable_count || 0;
+                appState.status = statusData;
+                updateStatusUI();
+                await applySearchFilter(preserveFocus);
+                fetchTagSuggestions();
+            }
         } catch (e) { console.error(e); }
     } else {
         try {
-            const [statusData, ...imageResults] = await Promise.all([
-                fetch(`${API_URL}/api/status?orient=${orient}`)
+            resetImagePaging();
+            const [statusData, pageData] = await Promise.all([
+                fetch(`${API_URL}/api/status?orient=${orient}&include_recoverable=false`)
                     .then(r => r.json()),
-                ...appState.purity.map(p =>
-                    fetch(`${API_URL}/api/images?mode=${appState.mode}&purity=${p}&orient=${orient}`)
-                        .then(r => r.json())
-                ),
+                fetch(imagePageUrl(0)).then(r => r.json()),
             ]);
-            appState.allImages = imageResults.flat();
-            appState.status = statusData;
-            console.log('[refresh] done', appState.mode, orient,
-                'pool:', statusData.pool_count, 'fav:', statusData.favorites_count);
-            updateStatusUI();
-            applySearchFilter(preserveFocus);
+            if (requestId === appState.imageRequestId) {
+                appState.allImages = pageData.items || [];
+                appState.totalImages = pageData.total ?? appState.allImages.length;
+                appState.nextOffset = pageData.next_offset;
+                appState.imagesComplete = pageData.next_offset === null || pageData.next_offset === undefined;
+                appState.status = statusData;
+                while (
+                    preserveFocus
+                    && appState.allImages.length < renderedTarget
+                    && !appState.imagesComplete
+                ) {
+                    const loaded = await loadMoreImages({ render: false });
+                    if (!loaded || requestId !== appState.imageRequestId) break;
+                }
+                console.log('[refresh] done', appState.mode, orient,
+                    'pool:', statusData.pool_count, 'fav:', statusData.favorites_count);
+                updateStatusUI();
+                await applySearchFilter(preserveFocus);
+            }
         } catch (e) { console.error(e); }
     }
-    appState.refreshing = false;
+    if (requestId === appState.imageRequestId) {
+        appState.refreshing = false;
+    }
 }
 
 // --- Rendering ---
@@ -1692,7 +1806,8 @@ function scrollToFirst() {
 
 function scrollToLast() {
     if (appState.images.length === 0) return;
-    // Render all remaining cards
+    // Render all currently loaded cards. More pages stay lazy-loaded to avoid
+    // turning a keyboard shortcut into a full-library DOM build.
     if (appState.currentBatchIndex < appState.images.length) {
         if (sentinel.parentNode) sentinel.remove();
         const fragment = document.createDocumentFragment();
@@ -1702,6 +1817,10 @@ function scrollToLast() {
         }
         els.wallpaperGrid.appendChild(fragment);
     }
+    if (!sentinel.parentNode && !appState.searchMatches && !appState.imagesComplete) {
+        els.wallpaperGrid.appendChild(sentinel);
+        observer.observe(sentinel);
+    }
     const cards = document.getElementsByClassName('wallpaper-card');
     const last = cards[cards.length - 1];
     if (last) {
@@ -1710,12 +1829,16 @@ function scrollToLast() {
     }
 }
 
-function scrollToCurrentWallpaper() {
+async function scrollToCurrentWallpaper() {
     let card = document.querySelector('.wallpaper-card.current');
     if (!card) {
         // Card not rendered yet — find its index and render up to that batch
         const monitor = appState.monitors.find(m => m.name === appState.selectedMonitor);
         if (!monitor?.current_image) return;
+        while (!appState.imagesComplete && !appState.images.some(img => img.path === monitor.current_image)) {
+            const loaded = await loadMoreImages({ render: false });
+            if (!loaded) break;
+        }
         const targetIdx = appState.images.findIndex(img => img.path === monitor.current_image);
         if (targetIdx < 0) return;
         const targetEnd = Math.min(targetIdx + appState.batchSize, appState.images.length);
@@ -1726,7 +1849,7 @@ function scrollToCurrentWallpaper() {
             appState.currentBatchIndex++;
         }
         els.wallpaperGrid.appendChild(fragment);
-        if (appState.currentBatchIndex < appState.images.length) {
+        if (appState.currentBatchIndex < appState.images.length || (!appState.searchMatches && !appState.imagesComplete)) {
             els.wallpaperGrid.appendChild(sentinel);
             observer.observe(sentinel);
         }
@@ -1788,14 +1911,16 @@ function renderMonitors() {
 
 function renderImages() {
     console.log('[render]', appState.mode, 'images:', appState.images.length, 'search:', appState.searchQuery || '(none)');
-    els.wallpaperGrid.innerHTML = '';
-    appState.currentBatchIndex = 0;
-    _trashBannerShown = false;
 
     if (appState.mode === 'trash') {
+        _trashBannerShown = false;
         renderBlocklistView();
         return;
     }
+
+    els.wallpaperGrid.innerHTML = '';
+    appState.currentBatchIndex = 0;
+    _trashBannerShown = false;
 
     if (appState.images.length === 0) {
         const msg = appState.searchQuery
@@ -1818,10 +1943,12 @@ function renderBlocklistView() {
     if (appState.mode !== 'trash') return;
 
     syncAISuggestionAppliedState();
+    if (sentinel.parentNode) sentinel.remove();
+    observer?.unobserve(sentinel);
     els.wallpaperGrid.innerHTML = '';
     appState.currentBatchIndex = 0;
 
-    const bl = appState.blocklistData || { entries: [], total: 0, recoverable_count: 0 };
+    const bl = appState.blocklistData || { entries: [], total: 0, recoverable_count: 0, images: [] };
     const filteredEntries = appState.searchMatches
         ? bl.entries.filter(e => appState.searchMatches.has(e.filename))
         : bl.entries;
@@ -1914,7 +2041,7 @@ function renderBlocklistView() {
                 appState.reviewingTag = null;
                 appState.comboContext = [];
                 appState.comboRefinements = [];
-                clearSearch();
+                await clearSearch();
             };
         } else {
             excludeBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Exclude';
@@ -1928,7 +2055,7 @@ function renderBlocklistView() {
                 appState.reviewingTag = null;
                 appState.comboContext = [];
                 appState.comboRefinements = [];
-                clearSearch();
+                await clearSearch();
             };
         }
 
@@ -1984,7 +2111,7 @@ function renderBlocklistView() {
         nameEl.className = 'breadcrumb-tag';
         nameEl.textContent = uploaderName;
         nameEl.title = 'Exit review';
-        nameEl.onclick = () => { appState.reviewingUploader = null; clearSearch(); renderBlocklistView(); };
+        nameEl.onclick = async () => { appState.reviewingUploader = null; await clearSearch(); };
         textSpan.appendChild(nameEl);
         const countEl = document.createElement('span');
         countEl.className = 'review-bar-count';
@@ -2010,12 +2137,12 @@ function renderBlocklistView() {
                 });
             }
             appState.reviewingUploader = null;
-            clearSearch();
+            await clearSearch();
         };
         const backBtn = document.createElement('button');
         backBtn.className = 'review-btn-back';
         backBtn.textContent = 'Back';
-        backBtn.onclick = () => { appState.reviewingUploader = null; clearSearch(); renderBlocklistView(); };
+        backBtn.onclick = async () => { appState.reviewingUploader = null; await clearSearch(); };
         actions.appendChild(excludeBtn);
         actions.appendChild(backBtn);
         bar.appendChild(actions);
@@ -2268,7 +2395,12 @@ function renderBlockedList(entries) {
 }
 
 function renderNextBatch() {
-    if (appState.currentBatchIndex >= appState.images.length) return;
+    if (appState.currentBatchIndex >= appState.images.length) {
+        if (!appState.searchMatches && !appState.imagesComplete) {
+            loadMoreImages();
+        }
+        return;
+    }
 
     const start = appState.currentBatchIndex;
     const end = Math.min(start + appState.batchSize, appState.images.length);
@@ -2288,7 +2420,7 @@ function renderNextBatch() {
     appState.currentBatchIndex = end;
     if (!document.querySelector('.wallpaper-card.current')) markCurrentWallpaper();
 
-    if (appState.currentBatchIndex < appState.images.length) {
+    if (appState.currentBatchIndex < appState.images.length || (!appState.searchMatches && !appState.imagesComplete)) {
         els.wallpaperGrid.appendChild(sentinel);
         observer.observe(sentinel);
     } else {
@@ -2343,7 +2475,7 @@ function createCard(img) {
 
     if (appState.mode === 'trash') {
         card.innerHTML = `
-            <img class="loading" src="${thumbUrl}" loading="lazy" alt="${esc(img.name)}">
+            <img class="loading" src="${thumbUrl}" loading="lazy" decoding="async" alt="${esc(img.name)}">
             <div class="overlay">
                 <button class="action-btn restore" title="Restore to Pool">${ICONS.restore()}</button>
                 <button class="action-btn url" title="Open on Wallhaven">${ICONS.externalLink()}</button>
@@ -2362,7 +2494,7 @@ function createCard(img) {
         card.onclick = () => showLightbox(img);
     } else {
         card.innerHTML = `
-            <img class="loading" src="${thumbUrl}" loading="lazy" alt="${esc(img.name)}">
+            <img class="loading" src="${thumbUrl}" loading="lazy" decoding="async" alt="${esc(img.name)}">
             <div class="overlay">
                 <button class="action-btn" title="Set Wallpaper">${ICONS.setWallpaper()}</button>
                 <button class="action-btn fav ${img.is_favorite ? 'active' : ''}" title="Favorite">${ICONS.favorite(16, img.is_favorite)}</button>

@@ -26,7 +26,6 @@ from wayper.config import WayperConfig, load_config, save_config
 from wayper.core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
 from wayper.daemon import is_daemon_running, signal_daemon
 from wayper.pool import (
-    count_images,
     favorites_dir,
     list_blacklist,
     list_images,
@@ -36,9 +35,11 @@ from wayper.pool import (
 from wayper.state import (
     ALL_PURITIES,
     find_in_trash,
+    find_many_in_trash,
     purity_from_path,
     read_mode,
     restore_from_trash,
+    trash_state_token,
     write_mode,
 )
 from wayper.suggestions import suggest_combo_patterns, suggest_tags_to_exclude
@@ -115,6 +116,79 @@ def _build_favs_set(config) -> set[str]:
     return favs
 
 
+_image_dir_cache: dict[str, tuple[int, list[tuple[int, Path]]]] = {}
+_blocklist_cache: tuple[tuple[int, tuple[int, ...]], dict] | None = None
+MAX_IMAGE_PAGE_LIMIT = 500
+
+
+def _cached_dir_images(directory: Path) -> list[tuple[int, Path]]:
+    """Return image files sorted newest-first, cached by directory mtime."""
+    key = str(directory)
+    try:
+        dir_mtime = directory.stat().st_mtime_ns
+    except OSError:
+        _image_dir_cache.pop(key, None)
+        return []
+
+    cached = _image_dir_cache.get(key)
+    if cached and cached[0] == dir_mtime:
+        return cached[1]
+
+    records: list[tuple[int, Path]] = []
+    for path in list_images(directory):
+        try:
+            records.append((path.stat().st_mtime_ns, path))
+        except OSError:
+            continue
+    records.sort(key=lambda item: item[0], reverse=True)
+    _image_dir_cache[key] = (dir_mtime, records)
+    return records
+
+
+def _count_images_cached(directory: Path) -> int:
+    return len(_cached_dir_images(directory))
+
+
+def _parse_purities(raw: str) -> list[str]:
+    purities = [p.strip() for p in raw.split(",") if p.strip() in ALL_PURITIES]
+    return purities or ["sfw"]
+
+
+def _blocklist_token(config: WayperConfig) -> tuple[int, tuple[int, ...]]:
+    try:
+        blacklist_mtime = config.blacklist_file.stat().st_mtime_ns
+    except OSError:
+        blacklist_mtime = 0
+    return (blacklist_mtime, trash_state_token(config))
+
+
+def _blocklist_payload(config: WayperConfig) -> dict:
+    global _blocklist_cache
+
+    token = _blocklist_token(config)
+    if _blocklist_cache and _blocklist_cache[0] == token:
+        return _blocklist_cache[1]
+
+    entries = list_blacklist(config)
+    trashed = find_many_in_trash(config, {filename for _, filename in entries})
+    result = []
+    images = []
+    for ts, filename in entries:
+        recoverable = filename in trashed
+        result.append({"filename": filename, "timestamp": ts, "recoverable": recoverable})
+        if recoverable:
+            images.append(ImageItem(path=f"__trash/{filename}", name=filename, is_favorite=False))
+
+    payload = {
+        "entries": result,
+        "total": len(result),
+        "recoverable_count": len(images),
+        "images": images,
+    }
+    _blocklist_cache = (token, payload)
+    return payload
+
+
 # Pydantic models
 class StatusResponse(BaseModel):
     running: bool
@@ -130,6 +204,25 @@ class ImageItem(BaseModel):
     path: str
     name: str
     is_favorite: bool = False
+
+
+class ImagePage(BaseModel):
+    items: list[ImageItem]
+    total: int
+    next_offset: int | None = None
+
+
+class BlocklistEntry(BaseModel):
+    filename: str
+    timestamp: int
+    recoverable: bool
+
+
+class BlocklistResponse(BaseModel):
+    entries: list[BlocklistEntry]
+    total: int
+    recoverable_count: int
+    images: list[ImageItem] = []
 
 
 class MonitorInfo(BaseModel):
@@ -430,7 +523,7 @@ def control_action(action: str, monitor_name: str | None = Body(None, embed=True
 
 
 @app.get("/api/status", response_model=StatusResponse)
-def get_status(orient: str = ""):
+def get_status(orient: str = "", include_recoverable: bool = True):
     config = get_config()
     running, pid = is_daemon_running(config)
     purities = read_mode(config)
@@ -440,12 +533,14 @@ def get_status(orient: str = ""):
     fav_c = 0
     for purity in purities:
         for o in orientations:
-            pool_c += count_images(pool_dir(config, purity, o))
-            fav_c += count_images(favorites_dir(config, purity, o))
+            pool_c += _count_images_cached(pool_dir(config, purity, o))
+            fav_c += _count_images_cached(favorites_dir(config, purity, o))
 
     entries = list_blacklist(config)
     blocklist_c = len(entries)
-    recoverable_c = sum(1 for _, fn in entries if find_in_trash(config, fn))
+    recoverable_c = 0
+    if include_recoverable:
+        recoverable_c = _blocklist_payload(config)["recoverable_count"]
 
     return StatusResponse(
         running=running,
@@ -475,41 +570,75 @@ def get_monitors():
     return monitors
 
 
+def _image_records_for_mode(
+    config: WayperConfig,
+    mode: str,
+    purities: list[str],
+    orient: str,
+) -> list[tuple[int, Path, bool]]:
+    records: list[tuple[int, Path, bool]] = []
+    for purity in purities:
+        if mode == "pool":
+            path = pool_dir(config, purity, orient)
+            is_fav = False
+        else:
+            path = favorites_dir(config, purity, orient)
+            is_fav = True
+        records.extend((mtime, p, is_fav) for mtime, p in _cached_dir_images(path))
+
+    records.sort(key=lambda item: item[0], reverse=True)
+    return records
+
+
+def _image_items_from_records(
+    config: WayperConfig,
+    records: list[tuple[int, Path, bool]],
+) -> list[ImageItem]:
+    return [
+        ImageItem(
+            path=str(path.relative_to(config.download_dir)),
+            name=path.name,
+            is_favorite=is_fav,
+        )
+        for _, path, is_fav in records
+    ]
+
+
 @app.get("/api/images", response_model=list[ImageItem])
 def get_images(mode: str = "pool", purity: str = "sfw", orient: str = "landscape"):
     config = get_config()
 
     if mode == "trash":
-        entries = list_blacklist(config)
-        items = []
-        for _, filename in entries:
-            trashed = find_in_trash(config, filename)
-            if trashed:
-                items.append(
-                    ImageItem(
-                        path=f"__trash/{filename}",
-                        name=filename,
-                        is_favorite=False,
-                    )
-                )
-        return items
+        return _blocklist_payload(config)["images"]
 
-    if mode == "pool":
-        path = pool_dir(config, purity, orient)
+    records = _image_records_for_mode(config, mode, _parse_purities(purity), orient)
+    return _image_items_from_records(config, records)
+
+
+@app.get("/api/images/page", response_model=ImagePage)
+def get_images_page(
+    mode: str = "pool",
+    purity: str = "sfw",
+    orient: str = "landscape",
+    offset: int = 0,
+    limit: int = 120,
+):
+    config = get_config()
+    offset = max(0, offset)
+    limit = min(MAX_IMAGE_PAGE_LIMIT, max(1, limit))
+
+    if mode == "trash":
+        items = get_images(mode=mode, purity=purity, orient=orient)
+        total = len(items)
+        page = items[offset : offset + limit]
     else:
-        path = favorites_dir(config, purity, orient)
-
-    if not path.exists():
-        return []
-
-    images = list_images(path)
-    images.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    is_fav = mode == "favorites"
-
-    return [
-        ImageItem(path=str(p.relative_to(config.download_dir)), name=p.name, is_favorite=is_fav)
-        for p in images
-    ]
+        records = _image_records_for_mode(config, mode, _parse_purities(purity), orient)
+        total = len(records)
+        page = _image_items_from_records(config, records[offset : offset + limit])
+    next_offset = offset + len(page)
+    if next_offset >= total:
+        next_offset = None
+    return ImagePage(items=page, total=total, next_offset=next_offset)
 
 
 @app.post("/api/image/restore")
@@ -544,16 +673,10 @@ def restore_image(req: ActionRequest):
     return {"status": "ok", "new_path": str(dest.relative_to(config.download_dir))}
 
 
-@app.get("/api/blocklist")
+@app.get("/api/blocklist", response_model=BlocklistResponse)
 def get_blocklist():
     config = get_config()
-    entries = list_blacklist(config)
-    result = []
-    for ts, filename in entries:
-        recoverable = find_in_trash(config, filename) is not None
-        result.append({"filename": filename, "timestamp": ts, "recoverable": recoverable})
-    recoverable_count = sum(1 for e in result if e["recoverable"])
-    return {"entries": result, "total": len(result), "recoverable_count": recoverable_count}
+    return _blocklist_payload(config)
 
 
 class UnblockRequest(BaseModel):

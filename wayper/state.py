@@ -154,6 +154,66 @@ def find_in_trash(config: WayperConfig, filename: str) -> Path | None:
     return None
 
 
+def find_many_in_trash(config: WayperConfig, filenames: set[str]) -> dict[str, Path]:
+    """Find multiple files in system trash while reading trash state once."""
+    if not filenames:
+        return {}
+
+    found: dict[str, Path] = {}
+    mapping = _read_trash_map(config)
+    stored_by_parent: dict[Path, list[tuple[str, Path]]] = {}
+    for filename in filenames:
+        stored = mapping.get(filename)
+        if not stored:
+            continue
+        path = Path(stored)
+        stored_by_parent.setdefault(path.parent, []).append((filename, path))
+
+    for parent, paths in stored_by_parent.items():
+        try:
+            names = {path.name for path in parent.iterdir()}
+        except OSError:
+            for filename, path in paths:
+                if path.exists():
+                    found[filename] = path
+            continue
+
+        for filename, path in paths:
+            if path.name in names:
+                found[filename] = path
+
+    remaining = filenames - found.keys()
+    if not remaining:
+        return found
+
+    for directory in _trash_search_dirs():
+        if not directory.is_dir():
+            continue
+        try:
+            names = {path.name for path in directory.iterdir()}
+        except OSError:
+            continue
+        for filename in remaining & names:
+            found[filename] = directory / filename
+        remaining -= names
+        if not remaining:
+            break
+
+    return found
+
+
+def trash_state_token(config: WayperConfig) -> tuple[int, ...]:
+    """Return mtimes that affect trash lookup results."""
+
+    def mtime(path: Path) -> int:
+        try:
+            return path.stat().st_mtime_ns
+        except OSError:
+            return 0
+
+    return (mtime(config.trash_map_file), *(mtime(path) for path in _trash_search_dirs()))
+
+
 # ---------------------------------------------------------------------------
 # Undo / trash operations
 # ---------------------------------------------------------------------------
