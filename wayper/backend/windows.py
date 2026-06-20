@@ -198,12 +198,12 @@ class _DesktopWallpaper:
 class WindowsBackend(WallpaperBackend):
     """Windows backend using the native Desktop Wallpaper COM API."""
 
-    def _monitor_ids(self) -> list[str]:
-        with _DesktopWallpaper() as desktop:
-            return [desktop.monitor_id_at(i) for i in range(desktop.monitor_count())]
+    @staticmethod
+    def _monitor_ids(desktop: _DesktopWallpaper) -> list[str]:
+        return [desktop.monitor_id_at(i) for i in range(desktop.monitor_count())]
 
-    def _monitor_id_for_name(self, monitor: str) -> str | None:
-        ids = self._monitor_ids()
+    def _monitor_id_for_name(self, monitor: str, desktop: _DesktopWallpaper) -> str | None:
+        ids = self._monitor_ids(desktop)
         for index, monitor_id in enumerate(ids):
             if monitor in (monitor_id, _monitor_name(index)):
                 return monitor_id
@@ -238,11 +238,11 @@ class WindowsBackend(WallpaperBackend):
         del transition  # Windows does not expose transition controls for direct wallpaper changes.
 
         try:
-            monitor_id = self._monitor_id_for_name(monitor)
-            if monitor_id is None:
-                log.warning("Windows monitor not found: %s", monitor)
-                return
             with _DesktopWallpaper() as desktop:
+                monitor_id = self._monitor_id_for_name(monitor, desktop)
+                if monitor_id is None:
+                    log.warning("Windows monitor not found: %s", monitor)
+                    return
                 desktop.set_wallpaper(monitor_id, image)
         except Exception as e:
             log.warning("IDesktopWallpaper failed; falling back to system wallpaper: %s", e)

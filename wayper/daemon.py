@@ -37,6 +37,8 @@ ROTATE_SIGNAL = getattr(signal, "SIGUSR1", None)
 MODE_RELOAD_SIGNAL = getattr(signal, "SIGUSR2", None)
 CONFIG_RELOAD_SIGNAL = getattr(signal, "SIGHUP", None)
 TERMINATE_SIGNAL = getattr(signal, "SIGTERM", None)
+DAEMON_POLL_INTERVAL = 0.1 if os.name == "nt" else 1.0
+DAEMON_LOCK_POLL_INTERVAL = 0.5 if os.name == "nt" else 5.0
 
 _change_now = False
 _reload_mode = False
@@ -397,7 +399,7 @@ async def run_daemon(config: WayperConfig) -> None:
                         await reload_config_if_needed()
                     _wake.clear()
                     try:
-                        await asyncio.wait_for(_wake.wait(), timeout=5)
+                        await asyncio.wait_for(_wake.wait(), timeout=DAEMON_LOCK_POLL_INTERVAL)
                     except TimeoutError:
                         pass
 
@@ -450,7 +452,7 @@ async def run_daemon(config: WayperConfig) -> None:
                     await reload_config_if_needed()
                     _wake.clear()
                     try:
-                        await asyncio.wait_for(_wake.wait(), timeout=5)
+                        await asyncio.wait_for(_wake.wait(), timeout=DAEMON_LOCK_POLL_INTERVAL)
                     except TimeoutError:
                         pass
             else:
@@ -471,7 +473,10 @@ async def run_daemon(config: WayperConfig) -> None:
                                 await reload_config_if_needed()
                             _wake.clear()
                             try:
-                                await asyncio.wait_for(_wake.wait(), timeout=5)
+                                await asyncio.wait_for(
+                                    _wake.wait(),
+                                    timeout=DAEMON_LOCK_POLL_INTERVAL,
+                                )
                             except TimeoutError:
                                 pass
                         deadline += time.monotonic() - lock_start
@@ -486,7 +491,10 @@ async def run_daemon(config: WayperConfig) -> None:
 
                     _wake.clear()
                     try:
-                        await asyncio.wait_for(_wake.wait(), timeout=min(1.0, remaining))
+                        await asyncio.wait_for(
+                            _wake.wait(),
+                            timeout=min(DAEMON_POLL_INTERVAL, remaining),
+                        )
                     except TimeoutError:
                         pass
     except (KeyboardInterrupt, SystemExit):

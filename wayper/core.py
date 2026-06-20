@@ -49,12 +49,17 @@ class CoreResult:
 
 
 def _resolve_monitor(
-    config: WayperConfig, monitor: str | None
+    config: WayperConfig,
+    monitor: str | None,
+    *,
+    include_current: bool = True,
 ) -> tuple[str | None, object | None, Path | None]:
     """Resolve monitor name to (monitor, mon_cfg, current_img)."""
     if monitor is None:
         return get_context(config)
     mon_cfg = find_monitor(config, monitor)
+    if not include_current:
+        return monitor, mon_cfg, None
     current = query_current()
     return monitor, mon_cfg, current.get(monitor)
 
@@ -70,25 +75,34 @@ def _update_monitors_for_moved_image(config: WayperConfig, old_path: Path, new_p
             set_wallpaper(mon_name, new_path, NO_TRANSITION)
 
 
-def _replace_on_all_monitors(config: WayperConfig, banned_img: Path, purities: set[str]) -> None:
+def _replace_on_all_monitors(
+    config: WayperConfig,
+    banned_img: Path,
+    purities: set[str],
+    *,
+    exclude: Path | None = None,
+) -> dict[str, Path]:
     """Replace banned_img on any monitor currently showing it."""
+    replacements: dict[str, Path] = {}
     try:
         current = query_current()
     except Exception:
-        return
+        return replacements
     for mon in config.monitors:
         cur = current.get(mon.name)
         if cur and cur.resolve() == banned_img.resolve():
-            next_img = pick_random(config, purities, mon.orientation, exclude=banned_img)
+            next_img = pick_random(config, purities, mon.orientation, exclude=exclude or banned_img)
             if next_img:
                 set_wallpaper(mon.name, next_img, config.transition)
                 push_history(config, mon.name, next_img)
+                replacements[mon.name] = next_img
+    return replacements
 
 
 def do_next(config: WayperConfig, monitor: str | None = None) -> CoreResult:
     """Switch to next wallpaper (forward history or random pick)."""
     t0 = time.monotonic()
-    monitor, mon_cfg, _ = _resolve_monitor(config, monitor)
+    monitor, mon_cfg, _ = _resolve_monitor(config, monitor, include_current=False)
     t_resolve = time.monotonic() - t0
     if not mon_cfg:
         log.warning("next: no monitor config found (%.0fms)", t_resolve * 1000)
@@ -115,7 +129,7 @@ def do_next(config: WayperConfig, monitor: str | None = None) -> CoreResult:
 
 def do_prev(config: WayperConfig, monitor: str | None = None) -> CoreResult:
     """Go back to previous wallpaper in history."""
-    monitor, mon_cfg, _ = _resolve_monitor(config, monitor)
+    monitor, mon_cfg, _ = _resolve_monitor(config, monitor, include_current=False)
     if not mon_cfg:
         log.warning("prev: no monitor config found")
         return CoreResult(action="prev", ok=False, error="No monitor config found")
@@ -233,6 +247,8 @@ def do_ban(
     any monitor currently showing it.
     Otherwise, operate on the current wallpaper of `monitor`.
     """
+    replacement_img: Path | None = None
+    replacements: dict[str, Path] = {}
     with FileLock():
         if image is not None:
             img = image
@@ -240,6 +256,8 @@ def do_ban(
             monitor, mon_cfg, img = _resolve_monitor(config, monitor)
             if not img or not mon_cfg:
                 return CoreResult(action="ban", ok=False, error="No current wallpaper")
+
+        shown_img = img
 
         # If in favorites, move back to pool first
         if "favorites" in str(img):
@@ -254,12 +272,13 @@ def do_ban(
         # Replace on affected monitors
         purities = read_mode(config)
         if image is not None:
-            _replace_on_all_monitors(config, img, purities)
+            replacements = _replace_on_all_monitors(config, shown_img, purities, exclude=img)
         else:
             next_img = pick_random(config, purities, mon_cfg.orientation, exclude=img)
             if next_img:
                 set_wallpaper(monitor, next_img, config.transition)
                 push_history(config, monitor, next_img)
+                replacement_img = next_img
 
         add_to_blacklist(config, img.name)
         push_undo(config, img.name, img.parent)
@@ -276,7 +295,12 @@ def do_ban(
     wallhaven_web_unfav(config, img.name)
 
     log.info("ban: %s → trashed %s", monitor, img.name)
-    return CoreResult(action="ban", monitor=monitor, image=img)
+    extra = {}
+    if replacement_img:
+        extra["replacement_image"] = replacement_img
+    if replacements:
+        extra["replacement_images"] = replacements
+    return CoreResult(action="ban", monitor=monitor, image=img, extra=extra)
 
 
 def do_unban(config: WayperConfig, monitor: str | None = None) -> CoreResult:

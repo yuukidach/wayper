@@ -119,6 +119,23 @@ def _build_favs_set(config) -> set[str]:
     return favs
 
 
+def _relative_image(config: WayperConfig, image: Path | None) -> str | None:
+    if image is None:
+        return None
+    try:
+        return str(image.relative_to(config.download_dir))
+    except ValueError:
+        return str(image)
+
+
+def _relative_image_map(config: WayperConfig, images: dict[str, Path]) -> dict[str, str]:
+    return {
+        monitor: rel
+        for monitor, image in images.items()
+        if (rel := _relative_image(config, image)) is not None
+    }
+
+
 _image_dir_cache: dict[str, tuple[int, list[tuple[int, Path]]]] = {}
 _blocklist_cache: tuple[tuple[int, tuple[int, ...]], dict] | None = None
 _trash_image_cache: tuple[tuple[int, tuple[int, ...]], list[ImageItem]] | None = None
@@ -554,7 +571,19 @@ def control_action(action: str, monitor_name: str | None = Body(None, embed=True
     response = {"status": result.status or "ok"}
     if result.image:
         response["image"] = str(result.image)
+    if result.monitor:
+        response["monitor"] = result.monitor
+        if action == "ban":
+            response["current_image"] = _relative_image(
+                config, result.extra.get("replacement_image")
+            )
+        elif result.image:
+            response["current_image"] = _relative_image(config, result.image)
     response.update(result.extra)
+    if "replacement_image" in response:
+        response["replacement_image"] = _relative_image(config, response["replacement_image"])
+    if "replacement_images" in response:
+        response["replacement_images"] = _relative_image_map(config, response["replacement_images"])
     return response
 
 
@@ -733,7 +762,11 @@ def set_wallpaper_route(req: SetWallpaperRequest):
         raise HTTPException(404, "Monitor not found")
 
     set_wallpaper(req.monitor, img_full, config.transition)
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "monitor": req.monitor,
+        "current_image": _relative_image(config, img_full),
+    }
 
 
 @app.post("/api/image/favorite")
@@ -767,7 +800,12 @@ def ban_image_route(req: ActionRequest):
     if not result.ok:
         raise HTTPException(400, result.error)
 
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "replacement_images": _relative_image_map(
+            config, result.extra.get("replacement_images", {})
+        ),
+    }
 
 
 @app.post("/api/daemon/{action}")

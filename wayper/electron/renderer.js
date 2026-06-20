@@ -117,6 +117,28 @@ document.head.appendChild(loaderStyle);
 function showLoader() { loader.classList.add('visible'); }
 function hideLoader() { loader.classList.remove('visible'); }
 
+function applyMonitorCurrentImage(monitorName, imagePath) {
+    if (!monitorName || !imagePath) return;
+    const monitor = appState.monitors.find(m => m.name === monitorName);
+    if (monitor) {
+        monitor.current_image = imagePath;
+    }
+    renderMonitors();
+    markCurrentWallpaper();
+}
+
+function applyMonitorCurrentImages(imagesByMonitor) {
+    if (!imagesByMonitor) return;
+    for (const [monitorName, imagePath] of Object.entries(imagesByMonitor)) {
+        const monitor = appState.monitors.find(m => m.name === monitorName);
+        if (monitor && imagePath) {
+            monitor.current_image = imagePath;
+        }
+    }
+    renderMonitors();
+    markCurrentWallpaper();
+}
+
 // DOM Elements
 const els = {
     btnPrev: document.getElementById('btn-prev'),
@@ -954,13 +976,14 @@ async function saveSettings() {
 
 async function controlAction(action) {
     try {
-        await fetch(`${API_URL}/api/control/${action}`, {
+        const res = await fetch(`${API_URL}/api/control/${action}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ monitor_name: appState.selectedMonitor })
         });
-        // Wait a bit then refresh monitors to show new current image
-        setTimeout(fetchMonitors, 500);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        applyMonitorCurrentImage(data.monitor || appState.selectedMonitor, data.current_image);
     } catch (e) {
         console.error(`Action ${action} failed:`, e);
     }
@@ -1066,14 +1089,13 @@ async function toggleDaemon() {
 async function setWallpaper(path) {
     if (!appState.selectedMonitor) return;
 
-    showLoader();
-
     // Optimistic UI update
     const card = document.querySelector(`[data-path="${path}"]`);
     if (card) card.classList.add('setting');
 
     try {
-        await fetch(`${API_URL}/api/wallpaper/set`, {
+        applyMonitorCurrentImage(appState.selectedMonitor, path);
+        const res = await fetch(`${API_URL}/api/wallpaper/set`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1081,16 +1103,15 @@ async function setWallpaper(path) {
                 image_path: path
             })
         });
-
-        // Refresh monitor status to show new current
-        setTimeout(fetchMonitors, 500);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        applyMonitorCurrentImage(data.monitor || appState.selectedMonitor, data.current_image || path);
 
         if (card) card.classList.remove('setting');
     } catch (e) {
         console.error("Set wallpaper failed", e);
+        fetchMonitors();
         if (card) card.classList.remove('setting');
-    } finally {
-        hideLoader();
     }
 }
 
@@ -1132,12 +1153,14 @@ async function banImage(path) {
         updateStatusUI();
     }
     try {
-        await fetch(`${API_URL}/api/image/ban`, {
+        const res = await fetch(`${API_URL}/api/image/ban`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ image_path: path })
         });
-        setTimeout(fetchMonitors, 500);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        applyMonitorCurrentImages(data.replacement_images);
     } catch (e) {
         console.error("Ban failed", e);
         refreshImages();
