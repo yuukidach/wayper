@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from .config import WayperConfig
+from .process import windows_no_window_kwargs
 from .util import atomic_write
 
 ALL_PURITIES = ("sfw", "sketchy", "nsfw")
@@ -289,6 +290,7 @@ exit 2
             text=True,
             timeout=12,
             check=False,
+            **windows_no_window_kwargs(),
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None

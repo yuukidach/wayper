@@ -55,7 +55,8 @@ function startBackend() {
   console.log(`Starting backend from: ${binaryPath}`)
   backendProcess = spawn(binaryPath, [], {
     stdio: ['ignore', 'inherit', 'inherit'], // Pipe logs to main process stdout
-    env: { ...process.env, WAYPER_GUI: 'electron' }
+    env: { ...process.env, WAYPER_GUI: 'electron' },
+    windowsHide: true
   })
 
   backendProcess.on('error', (err) => {

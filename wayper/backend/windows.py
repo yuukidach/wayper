@@ -10,6 +10,7 @@ from ctypes import wintypes
 from pathlib import Path
 
 from ..config import MonitorConfig, TransitionConfig
+from ..process import windows_no_window_kwargs
 from .base import WallpaperBackend
 
 log = logging.getLogger("wayper")
@@ -315,6 +316,7 @@ class WindowsBackend(WallpaperBackend):
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                **windows_no_window_kwargs(),
             )
         except FileNotFoundError:
             pass

@@ -1,7 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
+
 from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
+is_windows = sys.platform == 'win32'
 
 # Collect hidden imports for uvicorn/fastapi
 hidden_imports = collect_submodules('uvicorn') + collect_submodules('fastapi') + ['_socket', 'socket', 'logging.config']
@@ -34,7 +37,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    console=not is_windows,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

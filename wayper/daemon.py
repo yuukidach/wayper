@@ -25,6 +25,7 @@ from .pool import (
     prune_blacklist,
     should_download,
 )
+from .process import windows_no_window_kwargs
 from .state import read_mode
 from .util import atomic_write
 from .wallhaven import WallhavenClient
@@ -179,6 +180,7 @@ def request_stop(config: WayperConfig) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
+            **windows_no_window_kwargs(),
         )
         return True
     except FileNotFoundError:
@@ -215,7 +217,7 @@ def start_daemon_process(*, close_stdin: bool = True) -> subprocess.Popen:
     if close_stdin:
         popen_kwargs["stdin"] = subprocess.DEVNULL
     if os.name == "nt":
-        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        popen_kwargs.update(windows_no_window_kwargs(subprocess.CREATE_NEW_PROCESS_GROUP))
     else:
         popen_kwargs["start_new_session"] = True
     return subprocess.Popen(daemon_command(), **popen_kwargs)
