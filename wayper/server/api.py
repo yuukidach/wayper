@@ -118,6 +118,7 @@ def _build_favs_set(config) -> set[str]:
 
 _image_dir_cache: dict[str, tuple[int, list[tuple[int, Path]]]] = {}
 _blocklist_cache: tuple[tuple[int, tuple[int, ...]], dict] | None = None
+_trash_image_cache: tuple[tuple[int, tuple[int, ...]], list[ImageItem]] | None = None
 MAX_IMAGE_PAGE_LIMIT = 500
 
 
@@ -162,31 +163,62 @@ def _blocklist_token(config: WayperConfig) -> tuple[int, tuple[int, ...]]:
     return (blacklist_mtime, trash_state_token(config))
 
 
-def _blocklist_payload(config: WayperConfig) -> dict:
+def _blocklist_payload(config: WayperConfig, *, include_images: bool = False) -> dict:
     global _blocklist_cache
 
     token = _blocklist_token(config)
     if _blocklist_cache and _blocklist_cache[0] == token:
-        return _blocklist_cache[1]
+        payload = dict(_blocklist_cache[1])
+        payload["images"] = _trash_images(config) if include_images else []
+        return payload
 
     entries = list_blacklist(config)
     trashed = find_many_in_trash(config, {filename for _, filename in entries})
     result = []
-    images = []
     for ts, filename in entries:
         recoverable = filename in trashed
         result.append({"filename": filename, "timestamp": ts, "recoverable": recoverable})
-        if recoverable:
-            images.append(ImageItem(path=f"__trash/{filename}", name=filename, is_favorite=False))
 
     payload = {
         "entries": result,
         "total": len(result),
-        "recoverable_count": len(images),
-        "images": images,
+        "recoverable_count": len(trashed),
     }
     _blocklist_cache = (token, payload)
+    payload = dict(payload)
+    payload["images"] = _trash_images(config) if include_images else []
     return payload
+
+
+def _trash_images(config: WayperConfig) -> list[ImageItem]:
+    global _trash_image_cache
+
+    token = _blocklist_token(config)
+    if _trash_image_cache and _trash_image_cache[0] == token:
+        return _trash_image_cache[1]
+
+    payload = _blocklist_payload(config)
+    images = [
+        ImageItem(path=f"__trash/{entry['filename']}", name=entry["filename"], is_favorite=False)
+        for entry in payload["entries"]
+        if entry["recoverable"]
+    ]
+    _trash_image_cache = (token, images)
+    return images
+
+
+def _trash_image_page(config: WayperConfig, offset: int, limit: int):
+    payload = _blocklist_payload(config)
+    recoverable_entries = [entry for entry in payload["entries"] if entry["recoverable"]]
+    page_entries = recoverable_entries[offset : offset + limit]
+    items = [
+        ImageItem(path=f"__trash/{entry['filename']}", name=entry["filename"], is_favorite=False)
+        for entry in page_entries
+    ]
+    next_offset = offset + len(items)
+    if next_offset >= len(recoverable_entries):
+        next_offset = None
+    return ImagePage(items=items, total=len(recoverable_entries), next_offset=next_offset)
 
 
 # Pydantic models
@@ -609,7 +641,7 @@ def get_images(mode: str = "pool", purity: str = "sfw", orient: str = "landscape
     config = get_config()
 
     if mode == "trash":
-        return _blocklist_payload(config)["images"]
+        return _blocklist_payload(config, include_images=True)["images"]
 
     records = _image_records_for_mode(config, mode, _parse_purities(purity), orient)
     return _image_items_from_records(config, records)
@@ -628,9 +660,7 @@ def get_images_page(
     limit = min(MAX_IMAGE_PAGE_LIMIT, max(1, limit))
 
     if mode == "trash":
-        items = get_images(mode=mode, purity=purity, orient=orient)
-        total = len(items)
-        page = items[offset : offset + limit]
+        return _trash_image_page(config, offset, limit)
     else:
         records = _image_records_for_mode(config, mode, _parse_purities(purity), orient)
         total = len(records)
@@ -1079,6 +1109,27 @@ def serve_trash_image(filename: str):
         log.warning("No permission to read %s — grant Full Disk Access to your terminal", trashed)
         raise HTTPException(403, "Permission denied: grant Full Disk Access to terminal")
     return FileResponse(trashed)
+
+
+@app.get("/trash-thumbnails/{filename}")
+def serve_trash_thumbnail(filename: str):
+    """Serve a cached thumbnail for an image in system trash."""
+    from fastapi.responses import FileResponse
+
+    from wayper.image import generate_thumbnail
+
+    config = get_config()
+    trashed = find_in_trash(config, filename)
+    if not trashed:
+        raise HTTPException(404, "Image not found in trash")
+    if not os.access(trashed, os.R_OK):
+        log.warning("No permission to read %s — grant Full Disk Access to your terminal", trashed)
+        raise HTTPException(403, "Permission denied: grant Full Disk Access to terminal")
+
+    cache_dir = config.download_dir / ".thumbnails" / "__trash"
+    thumb = generate_thumbnail(trashed, cache_dir)
+    target = thumb if thumb else trashed
+    return FileResponse(target, headers={"Cache-Control": "public, max-age=86400"})
 
 
 def _remove_thumbnail(config: WayperConfig, image_path: str) -> None:

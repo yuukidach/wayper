@@ -56,6 +56,8 @@ let appState = {
     blocklistData: null, // cached blocklist data
     tagSuggestions: null, // tag exclusion suggestions
     comboSuggestions: null, // auto-discovered combo exclusion suggestions
+    tagSuggestionsKey: null, // current purity/exclusion context for suggestions
+    tagSuggestionsGeneration: 0, // invalidates stale in-flight suggestion requests
     reviewingTag: null, // tag currently being reviewed in blocklist
     reviewingUploader: null, // uploader currently being reviewed in blocklist
     comboContext: [], // drill-down context for combo exclusion [tag1, tag2, ...]
@@ -654,13 +656,57 @@ function renderExcludeUploaders(uploaders) { renderChipList('exclude-uploaders-c
 function addExcludeUploader() { addChipItem('input-exclude-uploader', 'exclude-uploaders-container', renderExcludeUploaders); }
 function getExcludeUploaders() { return getChipList('exclude-uploaders-container'); }
 
-async function fetchTagSuggestions() {
+function blocklistSuggestionsKey() {
+    const wallhaven = appState.config?.wallhaven || {};
+    const purities = [...(appState.purity || [])].map(String).sort();
+    const excludeTags = (wallhaven.exclude_tags || [])
+        .map(t => String(t).toLowerCase())
+        .sort();
+    const excludeCombos = (wallhaven.exclude_combos || [])
+        .map(combo => JSON.stringify(
+            (Array.isArray(combo) ? combo : []).map(t => String(t).toLowerCase()).sort()
+        ))
+        .sort();
+    return JSON.stringify({ purities, excludeTags, excludeCombos });
+}
+
+function blocklistSuggestionsAreCurrent() {
+    return appState.tagSuggestionsKey !== null
+        && appState.tagSuggestionsKey === blocklistSuggestionsKey();
+}
+
+function invalidateBlocklistSuggestions() {
+    appState.tagSuggestionsKey = null;
+    appState.tagSuggestionsGeneration++;
+    renderBlocklistSuggestionsBar();
+}
+
+async function fetchTagSuggestions({ render = false, requestId = null } = {}) {
+    const suggestionsKey = blocklistSuggestionsKey();
+    const generation = appState.tagSuggestionsGeneration;
     try {
         const data = await WayperApi.tagSuggestions();
+        if (
+            generation !== appState.tagSuggestionsGeneration
+            || suggestionsKey !== blocklistSuggestionsKey()
+        ) {
+            return false;
+        }
         appState.tagSuggestions = data.suggestions || [];
         appState.comboSuggestions = data.combo_suggestions || [];
+        appState.tagSuggestionsKey = suggestionsKey;
+        if (
+            render
+            && appState.mode === 'trash'
+            && (requestId === null || requestId === appState.imageRequestId)
+            && blocklistSuggestionsAreCurrent()
+        ) {
+            renderBlocklistSuggestionsBar();
+        }
+        return true;
     } catch (e) {
         console.error('Failed to fetch tag suggestions:', e);
+        return false;
     }
 }
 
@@ -736,6 +782,7 @@ function buildExclusionUpdate(type, tags, action, options = {}) {
 async function applyExclusionUpdate({ type, tags, action = 'add', refreshSuggestions = false, render = true, ...options }) {
     const update = buildExclusionUpdate(type, tags, action, options);
     await WayperApi.patchConfig({ wallhaven: update });
+    invalidateBlocklistSuggestions();
     markMatchingAISuggestionsApplied(tags, type, action);
     await fetchConfig();
     if (refreshSuggestions) await fetchTagSuggestions();
@@ -893,6 +940,7 @@ async function saveSettings() {
         await WayperApi.patchConfig(updates);
 
         await fetchConfig(); // Reload config
+        invalidateBlocklistSuggestions();
         switchView('grid');
     } catch (e) {
         console.error("Failed to save settings", e);
@@ -968,6 +1016,7 @@ function toggleSinglePurity(purity) {
 
 async function setPurities(purities) {
     appState.purity = purities;
+    invalidateBlocklistSuggestions();
 
     try {
         await fetch(`${API_URL}/api/mode`, {
@@ -1046,6 +1095,7 @@ async function setWallpaper(path) {
 }
 
 async function toggleFavoriteImage(path) {
+    invalidateBlocklistSuggestions();
     removeImageFromState(path);
     // Update local counts so fetchStatus won't detect a "change" and trigger full refresh
     if (appState.status) {
@@ -1071,6 +1121,7 @@ async function toggleFavoriteImage(path) {
 }
 
 async function banImage(path) {
+    invalidateBlocklistSuggestions();
     removeImageFromState(path);
     // Update local counts so fetchStatus won't detect a "change" and trigger full refresh
     if (appState.status) {
@@ -1186,7 +1237,7 @@ function updateSearchCount() {
 }
 
 async function ensureAllImagesLoaded(searchRequestId) {
-    while (!appState.imagesComplete && appState.mode !== 'trash') {
+    while (!appState.imagesComplete) {
         if (searchRequestId !== undefined && searchRequestId !== appState.searchRequestId) return false;
         const loaded = await loadMoreImages({ render: false });
         if (searchRequestId !== undefined && searchRequestId !== appState.searchRequestId) return false;
@@ -1196,7 +1247,7 @@ async function ensureAllImagesLoaded(searchRequestId) {
 }
 
 async function applySearchFilter(preserveFocus = false, searchRequestId) {
-    if (appState.searchMatches && !appState.imagesComplete && appState.mode !== 'trash') {
+    if (appState.searchMatches && !appState.imagesComplete) {
         const completed = await ensureAllImagesLoaded(searchRequestId);
         if (!completed) return;
     }
@@ -1410,6 +1461,7 @@ async function fetchBlocklist() {
 }
 
 async function unblockImage(filename) {
+    invalidateBlocklistSuggestions();
     try {
         await fetch(`${API_URL}/api/blocklist/remove`, {
             method: 'POST',
@@ -1432,6 +1484,7 @@ async function unblockImage(filename) {
 }
 
 async function restoreImage(path) {
+    invalidateBlocklistSuggestions();
     removeImageFromState(path);
     // Update local counts so fetchStatus won't detect a "change" and trigger full refresh
     if (appState.status) {
@@ -1531,7 +1584,7 @@ function resetImagePaging() {
 }
 
 async function loadMoreImages({ render = true } = {}) {
-    if (appState.loadingMoreImages || appState.imagesComplete || appState.mode === 'trash') {
+    if (appState.loadingMoreImages || appState.imagesComplete) {
         return false;
     }
 
@@ -1682,21 +1735,25 @@ async function refreshImages(preserveFocus = false) {
     console.log('[refresh] start', appState.mode, orient);
 
     if (appState.mode === 'trash') {
+        const suggestionsPromise = fetchTagSuggestions({ render: true, requestId });
         try {
-            const [statusData, blocklistData] = await Promise.all([
+            resetImagePaging();
+            const [statusData, blocklistData, pageData] = await Promise.all([
                 fetch(`${API_URL}/api/status?orient=${orient}&include_recoverable=false`).then(r => r.json()),
                 fetchBlocklist(),
+                fetch(imagePageUrl(0)).then(r => r.json()),
             ]);
             if (requestId === appState.imageRequestId) {
-                appState.allImages = blocklistData.images || [];
-                appState.totalImages = appState.allImages.length;
-                appState.imagesComplete = true;
-                appState.nextOffset = null;
+                appState.allImages = pageData.items || [];
+                appState.totalImages = pageData.total ?? appState.allImages.length;
+                appState.nextOffset = pageData.next_offset;
+                appState.imagesComplete = pageData.next_offset === null || pageData.next_offset === undefined;
                 statusData.recoverable_count = blocklistData.recoverable_count || 0;
                 appState.status = statusData;
                 updateStatusUI();
                 await applySearchFilter(preserveFocus);
-                fetchTagSuggestions();
+                renderBlocklistSuggestionsBar();
+                suggestionsPromise.catch(() => {});
             }
         } catch (e) { console.error(e); }
     } else {
@@ -1939,6 +1996,112 @@ function renderImages() {
     setTimeout(updateGridMetrics, 100);
 }
 
+function createBlocklistSuggestionsBar() {
+    const tagSuggestions = appState.tagSuggestions || [];
+    const comboSuggestions = appState.comboSuggestions || [];
+    const hasSuggestions = tagSuggestions.length > 0 || comboSuggestions.length > 0;
+    if (
+        appState.searchQuery
+        || appState.reviewingTag
+        || appState.reviewingUploader
+        || !blocklistSuggestionsAreCurrent()
+        || !hasSuggestions
+    ) {
+        return null;
+    }
+
+    const bar = document.createElement('div');
+    bar.className = 'tag-suggestions-bar blocklist-suggestions';
+    const header = document.createElement('div');
+    header.className = 'suggestion-bar-header';
+    const label = document.createElement('span');
+    label.className = 'suggestion-bar-label';
+    label.textContent = 'Suggested exclusions';
+    header.appendChild(label);
+
+    const aiBtn = document.createElement('button');
+    aiBtn.className = 'agent-analyze-btn';
+    aiBtn.onclick = () => { if (!appState.aiLoading) fetchAISuggestions(); };
+    if (appState.aiLoading) {
+        aiBtn.disabled = true;
+        aiBtn.classList.add('agent-loading');
+        const elapsed = appState.aiStartTime ? Math.floor((Date.now() - appState.aiStartTime) / 1000) : 0;
+        const spinner = document.createElement('span');
+        spinner.className = 'agent-spinner';
+        aiBtn.appendChild(spinner);
+        const txt = document.createElement('span');
+        txt.className = 'agent-btn-text';
+        txt.textContent = `Analyzing ${elapsed}s`;
+        aiBtn.appendChild(txt);
+    } else {
+        const icon = document.createElement('span');
+        icon.className = 'agent-icon';
+        icon.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><path d="M16 14H8a5 5 0 0 0-5 5v1h18v-1a5 5 0 0 0-5-5z"/></svg>';
+        aiBtn.appendChild(icon);
+        const btnLabel = document.createElement('span');
+        btnLabel.textContent = 'Agent';
+        aiBtn.appendChild(btnLabel);
+        if (appState.aiSuggestions && appState.aiSuggestions.error) {
+            aiBtn.classList.add('agent-error');
+            aiBtn.title = appState.aiSuggestions.error;
+        } else {
+            const kbd = document.createElement('kbd');
+            kbd.textContent = 'A';
+            aiBtn.appendChild(kbd);
+        }
+    }
+    header.appendChild(aiBtn);
+    bar.appendChild(header);
+
+    for (const s of tagSuggestions) {
+        const chip = document.createElement('span');
+        chip.className = 'suggestion-chip';
+        chip.title = `Review "${s.tag}" in blocklist`;
+        chip.onclick = () => enterTagReview(s.tag);
+        chip.appendChild(createTypeBadge('tag'));
+        const tagLabel = document.createElement('span');
+        tagLabel.className = 'suggestion-chip-name';
+        tagLabel.textContent = s.tag;
+        const count = document.createElement('span');
+        count.className = 'suggestion-chip-count';
+        count.textContent = `${s.count}`;
+        chip.appendChild(tagLabel);
+        chip.appendChild(count);
+        bar.appendChild(chip);
+    }
+
+    for (const c of comboSuggestions) {
+        const chip = document.createElement('span');
+        chip.className = 'suggestion-chip combo-chip';
+        chip.title = `Review combo "${c.tags.join(' + ')}" — ${Math.round(c.precision * 100)}% precision`;
+        chip.onclick = () => enterTagReview([...c.tags]);
+        chip.appendChild(createTypeBadge('combo'));
+        const tagLabel = document.createElement('span');
+        tagLabel.className = 'suggestion-chip-name';
+        tagLabel.textContent = c.tags.join(' + ');
+        const count = document.createElement('span');
+        count.className = 'suggestion-chip-count';
+        count.textContent = `${c.count}`;
+        chip.appendChild(tagLabel);
+        chip.appendChild(count);
+        bar.appendChild(chip);
+    }
+
+    return bar;
+}
+
+function renderBlocklistSuggestionsBar() {
+    const existing = els.wallpaperGrid.querySelector('.blocklist-suggestions');
+    existing?.remove();
+
+    if (appState.mode !== 'trash') return;
+    const tabs = els.wallpaperGrid.querySelector('.blocklist-tabs');
+    if (!tabs) return;
+
+    const bar = createBlocklistSuggestionsBar();
+    if (bar) tabs.after(bar);
+}
+
 function renderBlocklistView() {
     if (appState.mode !== 'trash') return;
 
@@ -2147,86 +2310,9 @@ function renderBlocklistView() {
         actions.appendChild(backBtn);
         bar.appendChild(actions);
         els.wallpaperGrid.appendChild(bar);
-    } else if (!appState.searchQuery && ((appState.tagSuggestions && appState.tagSuggestions.length > 0) || (appState.comboSuggestions && appState.comboSuggestions.length > 0))) {
-        // Suggestions mode: wrapping chips with header
-        const bar = document.createElement('div');
-        bar.className = 'tag-suggestions-bar';
-        const header = document.createElement('div');
-        header.className = 'suggestion-bar-header';
-        const label = document.createElement('span');
-        label.className = 'suggestion-bar-label';
-        label.textContent = 'Suggested exclusions';
-        header.appendChild(label);
-
-        // Agent button in header
-        const aiBtn = document.createElement('button');
-        aiBtn.className = 'agent-analyze-btn';
-        aiBtn.onclick = () => { if (!appState.aiLoading) fetchAISuggestions(); };
-        if (appState.aiLoading) {
-            aiBtn.disabled = true;
-            aiBtn.classList.add('agent-loading');
-            const elapsed = appState.aiStartTime ? Math.floor((Date.now() - appState.aiStartTime) / 1000) : 0;
-            const spinner = document.createElement('span');
-            spinner.className = 'agent-spinner';
-            aiBtn.appendChild(spinner);
-            const txt = document.createElement('span');
-            txt.className = 'agent-btn-text';
-            txt.textContent = `Analyzing ${elapsed}s`;
-            aiBtn.appendChild(txt);
-        } else {
-            const icon = document.createElement('span');
-            icon.className = 'agent-icon';
-            icon.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><path d="M16 14H8a5 5 0 0 0-5 5v1h18v-1a5 5 0 0 0-5-5z"/></svg>';
-            aiBtn.appendChild(icon);
-            const label = document.createElement('span');
-            label.textContent = 'Agent';
-            aiBtn.appendChild(label);
-            if (appState.aiSuggestions && appState.aiSuggestions.error) {
-                aiBtn.classList.add('agent-error');
-                aiBtn.title = appState.aiSuggestions.error;
-            } else {
-                const kbd = document.createElement('kbd');
-                kbd.textContent = 'A';
-                aiBtn.appendChild(kbd);
-            }
-        }
-        header.appendChild(aiBtn);
-        bar.appendChild(header);
-
-        for (const s of appState.tagSuggestions) {
-            const chip = document.createElement('span');
-            chip.className = 'suggestion-chip';
-            chip.title = `Review "${s.tag}" in blocklist`;
-            chip.onclick = () => enterTagReview(s.tag);
-            chip.appendChild(createTypeBadge('tag'));
-            const tagLabel = document.createElement('span');
-            tagLabel.className = 'suggestion-chip-name';
-            tagLabel.textContent = s.tag;
-            const count = document.createElement('span');
-            count.className = 'suggestion-chip-count';
-            count.textContent = `${s.count}`;
-            chip.appendChild(tagLabel);
-            chip.appendChild(count);
-            bar.appendChild(chip);
-        }
-        // Auto-discovered combo suggestions
-        for (const c of (appState.comboSuggestions || [])) {
-            const chip = document.createElement('span');
-            chip.className = 'suggestion-chip combo-chip';
-            chip.title = `Review combo "${c.tags.join(' + ')}" — ${Math.round(c.precision * 100)}% precision`;
-            chip.onclick = () => enterTagReview([...c.tags]);
-            chip.appendChild(createTypeBadge('combo'));
-            const tagLabel = document.createElement('span');
-            tagLabel.className = 'suggestion-chip-name';
-            tagLabel.textContent = c.tags.join(' + ');
-            const count = document.createElement('span');
-            count.className = 'suggestion-chip-count';
-            count.textContent = `${c.count}`;
-            chip.appendChild(tagLabel);
-            chip.appendChild(count);
-            bar.appendChild(chip);
-        }
-        els.wallpaperGrid.appendChild(bar);
+    } else {
+        const suggestionsBar = createBlocklistSuggestionsBar();
+        if (suggestionsBar) els.wallpaperGrid.appendChild(suggestionsBar);
     }
 
     // AI analysis results panel
@@ -2456,7 +2542,7 @@ function imageUrl(path) {
 
 function thumbnailUrl(path) {
     if (path.startsWith('__trash/')) {
-        return `${API_URL}/trash/${encodeURIComponent(path.slice(8))}`;
+        return `${API_URL}/trash-thumbnails/${encodeURIComponent(path.slice(8))}`;
     }
     return `${API_URL}/thumbnails/${encodeURI(path)}`;
 }
