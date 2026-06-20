@@ -10,3 +10,4 @@ uv.lock
 .claude/scheduled_tasks.*
 .claude/worktrees/
 .DS_Store
+docs/superpowers/

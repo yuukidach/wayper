@@ -10,6 +10,9 @@ Take a screenshot of the running wayper-gui and analyze the current UI state.
 
 If `$ARGUMENTS` is provided, read that file as a screenshot instead of capturing a new one.
 
+This skill is shared by Codex and Claude Code. In Codex, use the available image viewing tool
+for the captured PNG. In Claude Code, use the `Read` tool on the PNG file.
+
 ## Capture Strategy
 
 Detect the display server and use the appropriate tool chain:
@@ -83,7 +86,10 @@ fi
 
 ## View
 
-Use the `Read` tool on the PNG file — Claude can read images directly.
+Open the captured PNG with the image-capable tool available in the current agent:
+
+- Codex: use the local image view tool.
+- Claude Code: use the `Read` tool.
 
 ## After capturing
 

@@ -21,7 +21,7 @@ Most wallpaper tools stop at "set image on desktop." wayper is a full **Wallhave
 **What makes it different:**
 
 - **Learns from you** — ban a wallpaper and wayper analyzes the pattern. AI-powered tag analysis suggests what to exclude next, with co-occurrence mining and iterative feedback tracking across sessions.
-- **AI-native (MCP)** — built-in [MCP](https://modelcontextprotocol.io/) server. Tell Claude *"switch to something with mountains"* or *"favorite this one"* — it just works. First wallpaper manager with native AI assistant integration.
+- **AI-native (MCP)** — built-in [MCP](https://modelcontextprotocol.io/) server. Tell Codex or Claude *"switch to something with mountains"* or *"favorite this one"* — it just works. First wallpaper manager with native AI assistant integration.
 - **Keyboard-driven GUI** — every single action has a shortcut. Grid navigation, lightbox, favorites, settings — fully operable without a mouse. Built for power users.
 
 **And the fundamentals:**
@@ -144,19 +144,36 @@ cmd-shift-f = 'exec-and-forget wayper fav'
 
 wayper ships an [MCP](https://modelcontextprotocol.io/) server so AI assistants can control your wallpapers natively.
 
-Add to your Claude Code config (`~/.claude/.mcp.json`):
+Use the absolute path to `wayper-mcp`. After installing from source, that is usually `.venv/bin/wayper-mcp`.
+
+**Codex:**
+
+```bash
+codex mcp add wayper -- /path/to/wayper/.venv/bin/wayper-mcp
+```
+
+Or edit `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.wayper]
+command = "/path/to/wayper/.venv/bin/wayper-mcp"
+```
+
+**Claude Code:**
+
+Add to `~/.claude/.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "wayper": {
-      "command": "/path/to/.venv/bin/wayper-mcp"
+      "command": "/path/to/wayper/.venv/bin/wayper-mcp"
     }
   }
 }
 ```
 
-Available tools: `status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `unfav` · `ban` · `unban` · `set_mode` · `delete_wallpaper` · `wallpaper_info` · `tag_stats_top` · `tag_stats_lookup` · `tag_stats_combo`
+Available tools: `status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `unfav` · `ban` · `unban` · `set_mode` · `delete_wallpaper` · `wallpaper_info` · `tag_stats_top` · `tag_stats_lookup` · `tag_stats_combo` · `uploader_stats_lookup`
 
 ## Config
 

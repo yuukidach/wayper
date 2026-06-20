@@ -21,7 +21,7 @@
 **核心差异：**
 
 - **越用越聪明** — 拉黑壁纸后，wayper 分析你的模式。AI 驱动的标签分析会建议下一步排除什么，支持共现挖掘与多轮迭代反馈追踪。
-- **AI 原生（MCP）** — 内置 [MCP](https://modelcontextprotocol.io/) 服务器。对 Claude 说 *"换一张有山的壁纸"* 或 *"收藏这张"* 就行。首个原生支持 AI 助手的壁纸管理器。
+- **AI 原生（MCP）** — 内置 [MCP](https://modelcontextprotocol.io/) 服务器。对 Codex 或 Claude 说 *"换一张有山的壁纸"* 或 *"收藏这张"* 就行。首个原生支持 AI 助手的壁纸管理器。
 - **全键盘操作 GUI** — 每个操作都有快捷键。网格导航、灯箱预览、收藏、设置——完全不需要鼠标。为重度用户打造。
 
 **基础能力：**
@@ -144,19 +144,36 @@ cmd-shift-f = 'exec-and-forget wayper fav'
 
 wayper 内置 [MCP](https://modelcontextprotocol.io/) 服务器，让 AI 助手原生控制壁纸。
 
-添加到 Claude Code 配置（`~/.claude/.mcp.json`）：
+请使用 `wayper-mcp` 的绝对路径。源码安装后通常是 `.venv/bin/wayper-mcp`。
+
+**Codex：**
+
+```bash
+codex mcp add wayper -- /path/to/wayper/.venv/bin/wayper-mcp
+```
+
+或编辑 `~/.codex/config.toml`：
+
+```toml
+[mcp_servers.wayper]
+command = "/path/to/wayper/.venv/bin/wayper-mcp"
+```
+
+**Claude Code：**
+
+添加到 `~/.claude/.mcp.json`：
 
 ```json
 {
   "mcpServers": {
     "wayper": {
-      "command": "/path/to/.venv/bin/wayper-mcp"
+      "command": "/path/to/wayper/.venv/bin/wayper-mcp"
     }
   }
 }
 ```
 
-可用工具：`status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `unfav` · `ban` · `unban` · `set_mode` · `delete_wallpaper` · `wallpaper_info` · `tag_stats_top` · `tag_stats_lookup` · `tag_stats_combo`
+可用工具：`status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `unfav` · `ban` · `unban` · `set_mode` · `delete_wallpaper` · `wallpaper_info` · `tag_stats_top` · `tag_stats_lookup` · `tag_stats_combo` · `uploader_stats_lookup`
 
 ## 配置
 
