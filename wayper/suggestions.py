@@ -275,134 +275,153 @@ def suggest_combo_patterns(
     if not blacklisted:
         return []
 
+    MIN_SUPPORT = 3
+    MIN_PRECISION = 0.85
+
     favorites = favorites or set()
     excluded_lower = {t.lower() for t in excluded_tags}
     existing_combos_fs = {frozenset(t.lower() for t in c) for c in (excluded_combos or [])}
     combo_sets_lower = [{t.lower() for t in c} for c in (excluded_combos or [])]
+    existing_pair_combos = {combo for combo in existing_combos_fs if len(combo) <= 2}
 
-    # --- 1. Build per-purity tag→images maps for banned / kept ---------------
-    # Also build excluded_union for overlap filtering
-    banned_tag_images: dict[str, set[str]] = {}  # tag → set of banned filenames
-    kept_tag_images: dict[str, set[str]] = {}  # tag → set of kept filenames
-    fav_tag_images: dict[str, set[str]] = {}  # tag → set of fav filenames
-    excluded_union: set[str] = set()
+    # Use integer bitsets for tag membership. Pair/triple mining does hundreds
+    # of thousands of intersections on larger libraries, and int bit ops are
+    # much cheaper than allocating temporary filename sets for every candidate.
+    banned_tag_masks: dict[str, int] = {}
+    kept_tag_masks: dict[str, int] = {}
+    fav_tag_masks: dict[str, int] = {}
+    excluded_union_mask = 0
 
-    for filename, meta in metadata.items():
+    for image_idx, (filename, meta) in enumerate(metadata.items()):
+        image_bit = 1 << image_idx
         tags = meta.get("tags", [])
         if filename in blacklisted:
             tags_lower = {t.lower() for t in tags}
-            # Check if already covered by existing exclusions
+            # Check if already covered by existing exclusions.
             if tags_lower & excluded_lower:
-                excluded_union.add(filename)
+                excluded_union_mask |= image_bit
             else:
                 for cs in combo_sets_lower:
                     if cs.issubset(tags_lower):
-                        excluded_union.add(filename)
+                        excluded_union_mask |= image_bit
                         break
             for tag in tags:
-                banned_tag_images.setdefault(tag, set()).add(filename)
+                banned_tag_masks[tag] = banned_tag_masks.get(tag, 0) | image_bit
         else:
             is_fav = filename in favorites
             for tag in tags:
-                kept_tag_images.setdefault(tag, set()).add(filename)
+                kept_tag_masks[tag] = kept_tag_masks.get(tag, 0) | image_bit
                 if is_fav:
-                    fav_tag_images.setdefault(tag, set()).add(filename)
+                    fav_tag_masks[tag] = fav_tag_masks.get(tag, 0) | image_bit
 
     # --- 2. Find candidate tags (appear in >=3 banned images) ----------------
+    banned_tag_counts = {tag: mask.bit_count() for tag, mask in banned_tag_masks.items()}
     candidate_tags = sorted(
         (
             tag
-            for tag, imgs in banned_tag_images.items()
-            if len(imgs) >= 3 and tag.lower() not in excluded_lower
+            for tag, count in banned_tag_counts.items()
+            if count >= MIN_SUPPORT and tag.lower() not in excluded_lower
         ),
-        key=lambda t: -len(banned_tag_images[t]),
+        key=lambda t: -banned_tag_counts[t],
     )[:150]  # Cap to limit O(n²) pair enumeration
 
     # --- 3. Enumerate pairs and score by precision ---------------------------
-    MIN_SUPPORT = 3
-    MIN_PRECISION = 0.85
-    pair_results: list[ComboSuggestion] = []
+    pair_records: list[tuple[ComboSuggestion, int, int, int]] = []
 
     for i, tag_a in enumerate(candidate_tags):
-        imgs_a = banned_tag_images[tag_a]
+        imgs_a = banned_tag_masks[tag_a]
         for tag_b in candidate_tags[i + 1 :]:
-            imgs_b = banned_tag_images[tag_b]
+            imgs_b = banned_tag_masks[tag_b]
             ban_both = imgs_a & imgs_b
-            if len(ban_both) < MIN_SUPPORT:
+            ban_count = ban_both.bit_count()
+            if ban_count < MIN_SUPPORT:
                 continue
             # Check if existing combo already covers this
             combo_lower = frozenset([tag_a.lower(), tag_b.lower()])
-            if any(ec.issubset(combo_lower) for ec in existing_combos_fs):
+            if combo_lower in existing_combos_fs or any(
+                ec.issubset(combo_lower) for ec in existing_pair_combos
+            ):
                 continue
             # Count kept/fav images with both tags
-            kept_a = kept_tag_images.get(tag_a, set())
-            kept_b = kept_tag_images.get(tag_b, set())
-            kept_both = kept_a & kept_b
-            fav_a = fav_tag_images.get(tag_a, set())
-            fav_b = fav_tag_images.get(tag_b, set())
-            fav_both = fav_a & fav_b
-            precision = len(ban_both) / (
-                len(ban_both) + len(kept_both) + FAV_WEIGHT * len(fav_both)
-            )
+            kept_both = kept_tag_masks.get(tag_a, 0) & kept_tag_masks.get(tag_b, 0)
+            fav_both = fav_tag_masks.get(tag_a, 0) & fav_tag_masks.get(tag_b, 0)
+            kept_count = kept_both.bit_count()
+            fav_count = fav_both.bit_count()
+            precision = ban_count / (ban_count + kept_count + FAV_WEIGHT * fav_count)
             if precision < MIN_PRECISION:
                 continue
             # Overlap check: skip if most banned images are already covered
-            if excluded_union and len(ban_both & excluded_union) / len(ban_both) > 0.5:
+            if (
+                excluded_union_mask
+                and (ban_both & excluded_union_mask).bit_count() / ban_count > 0.5
+            ):
                 continue
-            pair_results.append(
-                {
-                    "tags": sorted([tag_a, tag_b]),
-                    "count": len(ban_both),
-                    "precision": round(precision, 2),
-                }
+            pair = {
+                "tags": sorted([tag_a, tag_b]),
+                "count": ban_count,
+                "precision": round(precision, 2),
+            }
+            pair_records.append(
+                (
+                    pair,
+                    ban_both,
+                    kept_both,
+                    fav_both,
+                )
             )
 
     # --- 4. Greedy triple expansion ------------------------------------------
     triple_results: list[ComboSuggestion] = []
-    for pair in pair_results:
+    for pair, pair_banned, pair_kept, pair_fav in pair_records:
         tag_a, tag_b = pair["tags"]
-        pair_banned = banned_tag_images[tag_a] & banned_tag_images[tag_b]
-        pair_kept = kept_tag_images.get(tag_a, set()) & kept_tag_images.get(tag_b, set())
         for tag_c in candidate_tags:
             if tag_c in (tag_a, tag_b):
                 continue
-            tri_banned = pair_banned & banned_tag_images[tag_c]
-            if len(tri_banned) < MIN_SUPPORT:
+            tri_banned = pair_banned & banned_tag_masks[tag_c]
+            tri_ban_count = tri_banned.bit_count()
+            if tri_ban_count < MIN_SUPPORT:
                 continue
             combo_lower = frozenset([tag_a.lower(), tag_b.lower(), tag_c.lower()])
-            if any(ec.issubset(combo_lower) for ec in existing_combos_fs):
+            if combo_lower in existing_combos_fs or any(
+                ec.issubset(combo_lower) for ec in existing_pair_combos
+            ):
                 continue
-            tri_kept = pair_kept & kept_tag_images.get(tag_c, set())
-            tri_fav = (
-                fav_tag_images.get(tag_a, set())
-                & fav_tag_images.get(tag_b, set())
-                & fav_tag_images.get(tag_c, set())
-            )
-            tri_precision = len(tri_banned) / (
-                len(tri_banned) + len(tri_kept) + FAV_WEIGHT * len(tri_fav)
+            tri_kept_count = (pair_kept & kept_tag_masks.get(tag_c, 0)).bit_count()
+            tri_fav_count = (pair_fav & fav_tag_masks.get(tag_c, 0)).bit_count()
+            tri_precision = tri_ban_count / (
+                tri_ban_count + tri_kept_count + FAV_WEIGHT * tri_fav_count
             )
             # Only keep triple if it improves precision over the pair
             if tri_precision <= pair["precision"]:
                 continue
-            if excluded_union and len(tri_banned & excluded_union) / len(tri_banned) > 0.5:
+            if (
+                excluded_union_mask
+                and (tri_banned & excluded_union_mask).bit_count() / tri_ban_count > 0.5
+            ):
                 continue
             triple_results.append(
                 {
                     "tags": sorted([tag_a, tag_b, tag_c]),
-                    "count": len(tri_banned),
+                    "count": tri_ban_count,
                     "precision": round(tri_precision, 2),
                 }
             )
 
     # --- 5. Merge, deduplicate, minimize -------------------------------------
+    pair_results = [pair for pair, _, _, _ in pair_records]
     all_combos = pair_results + triple_results
     # Remove triples where the pair already qualifies (prefer simpler rules)
     pair_sets = {frozenset(c["tags"]) for c in pair_results}
-    all_combos = [
-        c
-        for c in all_combos
-        if len(c["tags"]) == 2 or not any(ps.issubset(set(c["tags"])) for ps in pair_sets)
-    ]
+
+    def has_pair_subset(combo: ComboSuggestion) -> bool:
+        tags = combo["tags"]
+        return (
+            frozenset((tags[0], tags[1])) in pair_sets
+            or frozenset((tags[0], tags[2])) in pair_sets
+            or frozenset((tags[1], tags[2])) in pair_sets
+        )
+
+    all_combos = [c for c in all_combos if len(c["tags"]) == 2 or not has_pair_subset(c)]
     all_combos.sort(key=lambda c: (-c["count"], -c["precision"]))
     return all_combos[:max_results]
 
