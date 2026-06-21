@@ -206,7 +206,7 @@ New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
 Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
-See [`example-config.toml`](example-config.toml) for all options — API key, proxy, intervals, quota, transitions, etc. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
+See [`example-config.toml`](example-config.toml) for all options — API key, proxy, intervals, quota, minimum Wallhaven favorites, transitions, etc. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
 
 ## Requirements
 

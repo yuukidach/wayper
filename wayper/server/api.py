@@ -298,6 +298,7 @@ class WallhavenConfigModel(BaseModel):
     top_range: str
     sorting: str
     ai_art_filter: int
+    min_favorites: int = 0
     exclude_tags: list[str]
     exclude_combos: list[list[str]] = []
     exclude_uploaders: list[str] = []
@@ -354,6 +355,7 @@ def get_config_route():
             "top_range": config.wallhaven.top_range,
             "sorting": config.wallhaven.sorting,
             "ai_art_filter": config.wallhaven.ai_art_filter,
+            "min_favorites": config.wallhaven.min_favorites,
             "exclude_tags": config.wallhaven.exclude_tags,
             "exclude_combos": config.wallhaven.exclude_combos,
             "exclude_uploaders": config.wallhaven.exclude_uploaders,
@@ -415,6 +417,8 @@ def update_config_route(updates: dict = Body(...)):
             config.wallhaven.sorting = wh["sorting"]
         if "ai_art_filter" in wh:
             config.wallhaven.ai_art_filter = wh["ai_art_filter"]
+        if "min_favorites" in wh:
+            config.wallhaven.min_favorites = max(0, int(wh["min_favorites"]))
         if "exclude_tags" in wh:
             config.wallhaven.exclude_tags = _dedup_by(wh["exclude_tags"], str.lower)
         if "exclude_combos" in wh:

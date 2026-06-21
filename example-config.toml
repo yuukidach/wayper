@@ -27,6 +27,7 @@ top_range = "1M"
 sorting = "toplist"
 ai_art_filter = 0      # 0=off, 1=on
 batch_size = 5
+min_favorites = 0      # skip downloads with fewer Wallhaven favorites (0 = disabled)
 # exclude_tags = ["MetArt", "watermarked"]  # synced to Wallhaven cloud blacklist if credentials are set
 # exclude_combos = [["blonde", "nude", "standing"], ["pornstar", "nude"]]
 # exclude_uploaders = ["username1", "username2"]  # synced to Wallhaven user blacklist if credentials are set

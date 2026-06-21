@@ -206,7 +206,7 @@ New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
 Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
-详见 [`example-config.toml`](../example-config.toml) — API key、代理、轮换间隔、配额、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
+详见 [`example-config.toml`](../example-config.toml) — API key、代理、轮换间隔、配额、Wallhaven 最低收藏数、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
 
 ## 依赖
 

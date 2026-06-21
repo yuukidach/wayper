@@ -32,6 +32,7 @@ class WallhavenConfig:
     sorting: str = "toplist"
     ai_art_filter: int = 0
     batch_size: int = 5
+    min_favorites: int = 0
     exclude_tags: list[str] = field(default_factory=list)
     exclude_combos: list[list[str]] = field(default_factory=list)
     exclude_uploaders: list[str] = field(default_factory=list)
@@ -146,6 +147,7 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
     lines.append(f'sorting = "{wh.sorting}"')
     lines.append(f"ai_art_filter = {wh.ai_art_filter}")
     lines.append(f"batch_size = {wh.batch_size}")
+    lines.append(f"min_favorites = {wh.min_favorites}")
     if wh.exclude_tags:
         tags_str = ", ".join(f'"{_esc(t)}"' for t in wh.exclude_tags)
         lines.append(f"exclude_tags = [{tags_str}]")
@@ -201,6 +203,7 @@ def load_config(path: Path | None = None) -> WayperConfig:
         sorting=wallhaven_raw.get("sorting", "toplist"),
         ai_art_filter=wallhaven_raw.get("ai_art_filter", 0),
         batch_size=wallhaven_raw.get("batch_size", 5),
+        min_favorites=max(0, int(wallhaven_raw.get("min_favorites", 0))),
         exclude_tags=wallhaven_raw.get("exclude_tags", []),
         exclude_combos=wallhaven_raw.get("exclude_combos", []),
         exclude_uploaders=wallhaven_raw.get("exclude_uploaders", []),
