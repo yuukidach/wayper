@@ -66,6 +66,7 @@ let appState = {
     aiLoading: false,              // Whether AI analysis is in progress
     aiStartTime: null,             // Timestamp when AI analysis started
     aiTimer: null,                 // Interval ID for elapsed time updates
+    updateInfo: null,              // Latest app update check payload
 
     // Search
     searchQuery: '',
@@ -158,6 +159,7 @@ const els = {
 
     btnDaemon: document.getElementById('btn-daemon'),
     btnSettings: document.getElementById('btn-settings'),
+    updateBannerRoot: document.getElementById('update-banner-root'),
 
     monitorsList: document.getElementById('monitors-list'),
 
@@ -221,6 +223,10 @@ async function init() {
         if (!document.hidden) fetchStatus();
     }, 10000);
     setInterval(fetchDiskUsage, 30000);
+    checkForAppUpdates();
+    setInterval(() => {
+        if (!document.hidden) checkForAppUpdates();
+    }, 12 * 60 * 60 * 1000);
 }
 
 function setupEventListeners() {
@@ -259,6 +265,12 @@ function setupEventListeners() {
     document.getElementById('input-exclude-uploader').addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); addExcludeUploader(); }
     });
+    const browseDownloadDir = document.getElementById('btn-browse-download-dir');
+    browseDownloadDir.onclick = async () => {
+        if (!window.electronAPI?.selectDownloadDir) return;
+        const selected = await window.electronAPI.selectDownloadDir();
+        if (selected) document.getElementById('input-download-dir').value = selected;
+    };
 
     // Search
     els.searchInput.addEventListener('input', onSearchInput);
@@ -569,6 +581,7 @@ function populateSettingsForm() {
     // General
     document.getElementById('input-interval').value = c.interval_min ?? 5;
     document.getElementById('input-quota').value = c.quota_mb;
+    document.getElementById('input-download-dir').value = c.download_dir || '';
 
     // Wallhaven
     document.getElementById('input-categories').value = w.categories;
@@ -923,6 +936,7 @@ async function saveSettings() {
     const updates = {
         interval_min: parseInt(document.getElementById('input-interval').value) || 0,
         quota_mb: parseInt(document.getElementById('input-quota').value) || 4000,
+        download_dir: document.getElementById('input-download-dir').value.trim(),
         proxy: document.getElementById('input-proxy').value,
         pause_on_lock: document.getElementById('input-pause-on-lock').checked,
         safe_mode: document.getElementById('input-safe-mode').checked,
@@ -966,9 +980,10 @@ async function saveSettings() {
         await fetchConfig(); // Reload config
         invalidateBlocklistSuggestions();
         switchView('grid');
+        await Promise.all([fetchStatus(), fetchDiskUsage(), refreshImages()]);
     } catch (e) {
         console.error("Failed to save settings", e);
-        alert('Failed to save settings');
+        alert(`Failed to save settings: ${e.message}`);
     } finally {
         els.btnSaveSettings.innerText = 'Save Changes';
     }
@@ -1543,7 +1558,8 @@ function removeImageFromState(path) {
         }
     }
 
-    const card = document.querySelector(`.wallpaper-card[data-path="${path}"]`);
+    const card = [...document.querySelectorAll('.wallpaper-card')]
+        .find(el => el.dataset.path === path);
     if (card) {
         // Preserve focus — preventScroll avoids the browser jumping to make the
         // newly focused card fully visible (especially noticeable with tall portrait cards)
@@ -1565,6 +1581,70 @@ function removeImageFromState(path) {
 }
 
 // --- Data Fetching ---
+
+function dismissedUpdateVersion() {
+    try {
+        return window.localStorage.getItem('wayper.dismissedUpdateVersion');
+    } catch {
+        return null;
+    }
+}
+
+function dismissUpdateBanner(version) {
+    if (version) {
+        try {
+            window.localStorage.setItem('wayper.dismissedUpdateVersion', version);
+        } catch { }
+    }
+    els.updateBannerRoot.classList.add('hidden');
+    els.updateBannerRoot.innerHTML = '';
+}
+
+function renderUpdateBanner(info) {
+    if (!els.updateBannerRoot) return;
+    if (!info?.update_available || !info.latest_version) {
+        els.updateBannerRoot.classList.add('hidden');
+        els.updateBannerRoot.innerHTML = '';
+        return;
+    }
+    if (dismissedUpdateVersion() === info.latest_version) return;
+
+    els.updateBannerRoot.innerHTML = `
+        <div class="update-banner">
+            <span class="update-banner-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+            </span>
+            <span class="update-banner-text">
+                <strong>Wayper ${esc(info.latest_version)}</strong> is available. Current version: ${esc(info.current_version)}.
+            </span>
+            <span class="update-banner-actions">
+                <button class="update-banner-open" type="button">Get Update</button>
+                <button class="update-banner-close" type="button" title="Dismiss">&times;</button>
+            </span>
+        </div>
+    `;
+    els.updateBannerRoot.classList.remove('hidden');
+    els.updateBannerRoot.querySelector('.update-banner-open').onclick = () => {
+        window.open(info.release_url || 'https://github.com/yuukidach/wayper/releases/latest', '_blank');
+    };
+    els.updateBannerRoot.querySelector('.update-banner-close').onclick = () => {
+        dismissUpdateBanner(info.latest_version);
+    };
+}
+
+async function checkForAppUpdates(force = false) {
+    try {
+        const data = await WayperApi.updateCheck(force);
+        appState.updateInfo = data;
+        renderUpdateBanner(data);
+    } catch (e) {
+        console.error('Update check failed:', e);
+    }
+}
 
 async function fetchConfig() {
     try {
@@ -2562,14 +2642,14 @@ function imageUrl(path) {
     if (path.startsWith('__trash/')) {
         return `${API_URL}/trash/${encodeURIComponent(path.slice(8))}`;
     }
-    return `${API_URL}/images/${encodeURI(path)}`;
+    return `${API_URL}/images?path=${encodeURIComponent(path)}`;
 }
 
 function thumbnailUrl(path) {
     if (path.startsWith('__trash/')) {
         return `${API_URL}/trash-thumbnails/${encodeURIComponent(path.slice(8))}`;
     }
-    return `${API_URL}/thumbnails/${encodeURI(path)}`;
+    return `${API_URL}/thumbnails?path=${encodeURIComponent(path)}`;
 }
 
 function createCard(img) {

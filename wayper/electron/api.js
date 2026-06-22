@@ -47,6 +47,11 @@
         return request('/api/ai-suggestions', { method: 'POST' });
     }
 
+    function updateCheck(force = false) {
+        const query = force ? '?force=true' : '';
+        return request(`/api/update-check${query}`);
+    }
+
     window.WayperApi = {
         request,
         config,
@@ -55,5 +60,6 @@
         aiSuggestionFeedback,
         aiSuggestionStatus,
         aiSuggestions,
+        updateCheck,
     };
 })();

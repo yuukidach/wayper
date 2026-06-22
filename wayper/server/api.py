@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel
 
@@ -29,6 +29,7 @@ from wayper.daemon import (
     start_daemon_process,
 )
 from wayper.pool import (
+    ensure_directories,
     favorites_dir,
     list_blacklist,
     list_images,
@@ -46,6 +47,7 @@ from wayper.state import (
     write_mode,
 )
 from wayper.suggestions import suggest_combo_patterns, suggest_tags_to_exclude
+from wayper.update import check_for_updates
 
 log = logging.getLogger("wayper.api")
 
@@ -304,6 +306,17 @@ class WallhavenConfigModel(BaseModel):
     exclude_uploaders: list[str] = []
 
 
+class UpdateCheckResponse(BaseModel):
+    current_version: str
+    latest_version: str | None
+    update_available: bool
+    release_url: str
+    release_name: str | None = None
+    published_at: str | None = None
+    checked_at: str | None = None
+    error: str | None = None
+
+
 class ConfigResponse(BaseModel):
     download_dir: str
     interval_min: int
@@ -335,6 +348,19 @@ def _resolve_image(config: WayperConfig, image_path: str) -> Path:
     return img_full
 
 
+def _resolve_download_dir(raw_path: object) -> Path:
+    """Validate a user-provided download directory path."""
+    if not isinstance(raw_path, str):
+        raise HTTPException(400, "download_dir must be a string")
+    value = raw_path.strip()
+    if not value:
+        raise HTTPException(400, "download_dir cannot be empty")
+    path = Path(os.path.expandvars(value)).expanduser()
+    if not path.is_absolute():
+        raise HTTPException(400, "download_dir must be an absolute path or start with ~")
+    return path
+
+
 @app.get("/api/config", response_model=ConfigResponse)
 def get_config_route():
     config = get_config()
@@ -363,6 +389,12 @@ def get_config_route():
     }
 
 
+@app.get("/api/update-check", response_model=UpdateCheckResponse)
+def update_check_route(force: bool = False):
+    config = get_config()
+    return check_for_updates(config, force=force)
+
+
 def _dedup_by(items: list, key) -> list:
     """Dedup a list, preserving first occurrence per `key(item)`."""
     seen = set()
@@ -379,6 +411,7 @@ def _dedup_by(items: list, key) -> list:
 @app.patch("/api/config")
 def update_config_route(updates: dict = Body(...)):
     config = get_config()
+    old_download_dir = config.download_dir
 
     if "interval_min" in updates:
         config.interval = updates["interval_min"] * 60
@@ -387,6 +420,12 @@ def update_config_route(updates: dict = Body(...)):
 
     if "quota_mb" in updates:
         config.quota_mb = updates["quota_mb"]
+    if "download_dir" in updates:
+        config.download_dir = _resolve_download_dir(updates["download_dir"])
+        try:
+            ensure_directories(config)
+        except OSError as e:
+            raise HTTPException(400, f"Cannot create download directory: {e}") from e
     if "proxy" in updates:
         config.proxy = updates["proxy"].strip() or None
     if "pause_on_lock" in updates:
@@ -433,6 +472,13 @@ def update_config_route(updates: dict = Body(...)):
     global _cached_config, _cached_mtime
     _cached_config = config
     _cached_mtime = 0  # force reload on next get_config if file changes again
+    if config.download_dir != old_download_dir:
+        _image_dir_cache.clear()
+        global _cached_metadata, _cached_meta_mtime, _blocklist_cache, _trash_image_cache
+        _cached_metadata = None
+        _cached_meta_mtime = 0
+        _blocklist_cache = None
+        _trash_image_cache = None
 
     # Sync exclude_tags to Wallhaven cloud tag_blacklist (fire-and-forget)
     if "wallhaven" in updates and "exclude_tags" in updates["wallhaven"]:
@@ -1133,8 +1179,6 @@ async def ai_suggestions_feedback(body: dict = Body()):
 @app.get("/trash/{filename}")
 def serve_trash_image(filename: str):
     """Serve an image from system trash (not under download_dir)."""
-    from fastapi.responses import FileResponse
-
     config = get_config()
     trashed = find_in_trash(config, filename)
     if not trashed:
@@ -1148,8 +1192,6 @@ def serve_trash_image(filename: str):
 @app.get("/trash-thumbnails/{filename}")
 def serve_trash_thumbnail(filename: str):
     """Serve a cached thumbnail for an image in system trash."""
-    from fastapi.responses import FileResponse
-
     from wayper.image import generate_thumbnail
 
     config = get_config()
@@ -1173,16 +1215,12 @@ def _remove_thumbnail(config: WayperConfig, image_path: str) -> None:
     thumb.unlink(missing_ok=True)
 
 
-@app.get("/thumbnails/{path:path}")
-def serve_thumbnail(path: str):
+def _thumbnail_response(config: WayperConfig, image_path: str) -> FileResponse:
     """Serve a cached thumbnail, generating on first request."""
-    from fastapi.responses import FileResponse
-
     from wayper.image import generate_thumbnail
 
-    config = get_config()
     download_dir = config.download_dir.resolve()
-    img_full = (download_dir / path).resolve()
+    img_full = (download_dir / image_path).resolve()
     if not img_full.is_relative_to(download_dir):
         raise HTTPException(403, "Path traversal not allowed")
     if not img_full.exists():
@@ -1196,10 +1234,34 @@ def serve_thumbnail(path: str):
     return FileResponse(target, headers={"Cache-Control": "public, max-age=86400"})
 
 
-# Mount images directory
-_dl_dir = get_config().download_dir
-_dl_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/images", StaticFiles(directory=_dl_dir), name="images")
+@app.get("/thumbnails")
+def serve_thumbnail_query(path: str):
+    """Serve a cached thumbnail for a relative image path from a query parameter."""
+    config = get_config()
+    return _thumbnail_response(config, path)
+
+
+@app.get("/thumbnails/{path:path}")
+def serve_thumbnail(path: str):
+    """Serve a cached thumbnail for a relative image path in the URL."""
+    config = get_config()
+    return _thumbnail_response(config, path)
+
+
+@app.get("/images")
+def serve_image_query(path: str):
+    """Serve an image for a relative image path from a query parameter."""
+    config = get_config()
+    img_full = _resolve_image(config, path)
+    return FileResponse(img_full, headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/images/{path:path}")
+def serve_image(path: str):
+    """Serve images from the currently configured download directory."""
+    config = get_config()
+    img_full = _resolve_image(config, path)
+    return FileResponse(img_full, headers={"Cache-Control": "public, max-age=86400"})
 
 
 def _find_free_port() -> int:

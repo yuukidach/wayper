@@ -77,7 +77,7 @@ uv pip install -e ".[browser]"  # 可选：浏览器 cookie 提取，用于 Wall
 - **标签搜索** — 按 Wallhaven 标签、分类或文件名搜索，支持自动补全
 - **智能建议** — 分析拉黑模式，推荐要排除的标签；共现挖掘找出跨排除个体的共同描述符；支持组合排除（如"tattoo + nude"）精细过滤
 - **AI 分析** — 基于 Claude 的深度分析，支持迭代反馈。识别上传者模式并建议 Wallhaven 用户黑名单候选。点击建议标签可预览匹配图片
-- **设置** — 在 GUI 中配置 Wallhaven 查询、排除标签/组合、纯度和显示器。修改即时生效，无需重启 daemon
+- **设置** — 在 GUI 中配置下载目录、Wallhaven 查询、排除标签/组合、纯度和显示器。修改即时生效，无需重启 daemon
 - **全键盘操作** — 每个操作都有快捷键：网格导航、标签切换、灯箱、收藏、拉黑、撤销
 
 **网格浏览：**
@@ -206,7 +206,7 @@ New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
 Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
-详见 [`example-config.toml`](../example-config.toml) — API key、代理、轮换间隔、配额、Wallhaven 最低收藏数、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
+壁纸下载目录可在 GUI 设置页修改，也可编辑 [`example-config.toml`](../example-config.toml) 中的 `download_dir`。详见该文件的所有选项 — API key、代理、轮换间隔、配额、Wallhaven 最低收藏数、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
 
 ## 依赖
 

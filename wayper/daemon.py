@@ -369,6 +369,7 @@ async def run_daemon(config: WayperConfig) -> None:
         _reload_config = False
         _config_mtime = current_mtime
         config = load_config()
+        ensure_directories(config)
         _mode_mtime = _mode_file_mtime(config)
         old, client = client, WallhavenClient(config)
         await asyncio.to_thread(client.refresh_cloud_tags)

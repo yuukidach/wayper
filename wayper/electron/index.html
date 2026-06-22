@@ -72,6 +72,8 @@
         </div>
     </header>
 
+    <div id="update-banner-root" class="update-banner-root hidden"></div>
+
     <div class="app-container">
         <aside>
             <div class="sidebar-section">
@@ -143,6 +145,18 @@
                         <div class="field">
                             <label for="input-quota">Disk Quota (MB)</label>
                             <input type="number" id="input-quota" min="100" value="4000">
+                        </div>
+                        <div class="field">
+                            <label for="input-download-dir">Download Folder</label>
+                            <div class="path-input-row">
+                                <input type="text" id="input-download-dir" placeholder="~/Pictures/wallpaper" class="code-font">
+                                <button type="button" id="btn-browse-download-dir" class="btn-icon" title="Choose Folder">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <small class="hint">New downloads and library views use this folder</small>
                         </div>
                         <div class="field">
                             <label for="input-proxy">Proxy</label>

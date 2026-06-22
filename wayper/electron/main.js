@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, shell, ipcMain } = require('electron')
+const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const http = require('http')
@@ -129,6 +129,17 @@ function buildMenu() {
 // IPC handler: renderer asks for the API port (cached from env var set by launcher/waitForPortFile)
 ipcMain.handle('get-api-port', () => {
   return parseInt(process.env.WAYPER_API_PORT || '0', 10)
+})
+
+ipcMain.handle('select-download-dir', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select Wallpaper Download Folder',
+    properties: ['openDirectory', 'createDirectory']
+  })
+  if (result.canceled || !result.filePaths.length) {
+    return null
+  }
+  return result.filePaths[0]
 })
 
 function createWindow () {

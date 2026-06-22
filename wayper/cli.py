@@ -456,6 +456,34 @@ def suggest(ctx, use_ai):
                 click.echo("No suggestions at this time.")
 
 
+@cli.command("update-check")
+@click.option("--force", is_flag=True, help="Bypass cached update check.")
+@click.pass_context
+def update_check(ctx, force):
+    """Check GitHub Releases for a newer Wayper version."""
+    config = ctx.obj["config"]
+    use_json = ctx.obj["json"]
+
+    from .update import check_for_updates
+
+    result = check_for_updates(config, force=force)
+    if use_json:
+        click.echo(json_mod.dumps(result, indent=2))
+        return
+
+    if result.get("error"):
+        click.echo(f"Update check failed: {result['error']}", err=True)
+        raise SystemExit(1)
+
+    current = result["current_version"]
+    latest = result.get("latest_version") or "unknown"
+    if result.get("update_available"):
+        click.echo(f"Wayper {latest} is available (current: {current})")
+        click.echo(f"Get the update: {result['release_url']}")
+    else:
+        click.echo(f"Wayper is up to date ({current})")
+
+
 @cli.command()
 def setup():
     """Install .desktop entry (Linux)."""

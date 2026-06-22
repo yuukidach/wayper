@@ -4,4 +4,5 @@ const { contextBridge, clipboard, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   copyToClipboard: (text) => clipboard.writeText(text),
   getApiPort: () => ipcRenderer.invoke('get-api-port'),
+  selectDownloadDir: () => ipcRenderer.invoke('select-download-dir'),
 });

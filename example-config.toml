@@ -2,7 +2,7 @@ api_key = ""  # https://wallhaven.cc/settings/account
 # wallhaven_username = ""  # for syncing favorites and tag blacklist to wallhaven.cc
 # wallhaven_password = ""
 # proxy = "http://127.0.0.1:7897"
-download_dir = "~/Pictures/wallpaper"
+download_dir = "~/Pictures/wallpaper"  # can also be changed from GUI Settings
 interval = 300         # seconds between rotations (0 = no auto-rotation)
 quota_mb = 4000        # max disk usage
 blacklist_ttl_days = 30

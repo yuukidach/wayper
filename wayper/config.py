@@ -107,9 +107,12 @@ class WayperConfig:
 
 def compact_home(path: Path | str) -> str:
     """Replace home dir prefix with ~ for display/serialization."""
-    s = str(path)
-    home = str(Path.home())
-    return "~" + s[len(home) :] if s.startswith(home) else s
+    p = Path(path)
+    try:
+        rel = p.relative_to(Path.home())
+    except ValueError:
+        return str(path)
+    return "~" if str(rel) == "." else str(Path("~") / rel)
 
 
 def _esc(s: str) -> str:
@@ -224,7 +227,7 @@ def load_config(path: Path | None = None) -> WayperConfig:
     )
 
     download_dir = (
-        Path(raw["download_dir"]).expanduser()
+        Path(os.path.expandvars(raw["download_dir"])).expanduser()
         if "download_dir" in raw
         else (Path.home() / "Pictures" / "wallpaper")
     )

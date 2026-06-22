@@ -77,7 +77,7 @@ uv pip install -e ".[browser]"  # optional: browser cookie extraction for Wallha
 - **Tag search** — search by Wallhaven tags, category, or filename with autocomplete
 - **Smart suggestions** — analyzes ban patterns to recommend tags to exclude; co-occurrence mining finds common descriptors across excluded individuals; drill into combo exclusions (e.g., "tattoo + nude") for precise filtering
 - **AI analysis** — Claude-powered deep analysis of ban patterns with iterative feedback. Identifies uploader patterns and suggests Wallhaven user blacklist candidates. Click suggested tags to preview matching images
-- **Settings** — configure Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI. Changes apply to the running daemon instantly
+- **Settings** — configure the download folder, Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI. Changes apply to the running daemon instantly
 - **Keyboard-driven** — every action has a shortcut: grid navigation, tab switching, lightbox, favorites, ban, undo
 
 **Grid view:**
@@ -206,7 +206,7 @@ New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
 Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
-See [`example-config.toml`](example-config.toml) for all options — API key, proxy, intervals, quota, minimum Wallhaven favorites, transitions, etc. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
+Set the wallpaper download folder in the GUI Settings view, or edit `download_dir` in [`example-config.toml`](example-config.toml). See that file for all options — API key, proxy, intervals, quota, minimum Wallhaven favorites, transitions, etc. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
 
 ## Requirements
 
