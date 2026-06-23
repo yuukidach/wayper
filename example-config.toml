@@ -1,6 +1,6 @@
 api_key = ""  # https://wallhaven.cc/settings/account
 # wallhaven_username = ""  # for syncing favorites and tag blacklist to wallhaven.cc
-# wallhaven_password = ""
+# wallhaven_password = ""  # optional if browser cookie support can reuse a logged-in session
 # proxy = "http://127.0.0.1:7897"
 download_dir = "~/Pictures/wallpaper"  # can also be changed from GUI Settings
 interval = 300         # seconds between rotations (0 = no auto-rotation)

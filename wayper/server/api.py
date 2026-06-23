@@ -826,15 +826,15 @@ def favorite_image(req: ActionRequest):
 
     is_fav = img_full.is_relative_to((config.download_dir / "favorites").resolve())
     if is_fav:
-        result = do_unfav(config, image=img_full)
+        result = do_unfav(config, image=img_full, wait_remote=False)
     else:
-        result = do_fav(config, image=img_full)
+        result = do_fav(config, image=img_full, wait_remote=False)
 
     if not result.ok:
         raise HTTPException(400, result.error)
 
     new_path = str(result.image.relative_to(config.download_dir)) if result.image else ""
-    return {"status": "ok", "new_path": new_path}
+    return {"status": "ok", "new_path": new_path, "remote_sync": result.extra.get("remote_sync")}
 
 
 @app.post("/api/image/ban")
@@ -845,6 +845,7 @@ def ban_image_route(req: ActionRequest):
     result = do_ban(
         config,
         image=img_full,
+        wait_remote=False,
         clear_thumbnail=lambda p: _remove_thumbnail(config, p),
     )
     if not result.ok:

@@ -15,6 +15,8 @@ import shutil
 import sys
 import threading
 import time
+from html import unescape
+from importlib.util import find_spec
 from pathlib import Path
 
 import httpx
@@ -27,6 +29,7 @@ log = logging.getLogger("wayper.wallhaven")
 
 _COOKIE_FILE = CONFIG_DIR / ".wh_session.json"
 _COOKIE_MAX_AGE = 86400  # 24 hours
+_ATTR_RE = re.compile(r"([\w:-]+)\s*=\s*(['\"])(.*?)\2", re.DOTALL)
 
 
 def _find_chrome() -> str | None:
@@ -83,6 +86,19 @@ class WallhavenWeb:
         m = re.search(r'csrf-token"\s+content="([^"]+)"', html)
         return m.group(1) if m else ""
 
+    def _absolute_url(self, url: str) -> str:
+        if url.startswith(("http://", "https://")):
+            return url
+        if url.startswith("//"):
+            return f"https:{url}"
+        if url.startswith("/"):
+            return f"{self.BASE}{url}"
+        return f"{self.BASE}/{url}"
+
+    @staticmethod
+    def _attrs(tag: str) -> dict[str, str]:
+        return {name.lower(): unescape(value) for name, _, value in _ATTR_RE.findall(tag)}
+
     def _login(self) -> bool:
         if self._load_cookies():
             if self._verify_session():
@@ -97,6 +113,10 @@ class WallhavenWeb:
             self._save_cookies()
             log.info("wallhaven web: logged in via browser cookies")
             return True
+
+        if not self._password:
+            log.warning("wallhaven web: no valid browser session found and no password configured")
+            return False
 
         try:
             resp = self._client.get(f"{self.BASE}/login")
@@ -413,35 +433,47 @@ class WallhavenWeb:
         url: str | None = None
         is_faved: bool | None = None
 
-        # Check #fav-button element for state
-        m = re.search(r'id="fav-button"([^>]*)', html)
-        if m:
-            attrs = m.group(1)
-            cls_m = re.search(r'class="([^"]*)"', attrs)
-            if cls_m:
-                classes = cls_m.group(1).split()
-                is_faved = "add-button" not in classes
-            else:
-                is_faved = True  # no class attr → already favorited (simple button)
-            href_m = re.search(r'href="([^"]+)"', attrs)
-            if href_m:
-                url = href_m.group(1)
+        # Check #fav-button element for state. Attribute order varies, so parse
+        # the whole start tag instead of assuming id/class/href order.
+        fav_match = re.search(
+            r"<(?P<tag>[\w:-]+)\b(?=[^>]*\bid\s*=\s*['\"]fav-button['\"])(?P<attrs>[^>]*)>",
+            html,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if fav_match:
+            tag_html = fav_match.group(0)
+            attrs = self._attrs(tag_html)
+            classes = attrs.get("class", "").split()
+            is_faved = "add-button" not in classes if classes else True
+            url = attrs.get("href")
 
-        # Find URL from child .add-fav elements (when add-button is present)
-        if not url:
-            urls = re.findall(r'href="([^"]+)"[^>]*class="[^"]*add-fav', html)
-            if not urls:
-                urls = re.findall(r'class="[^"]*add-fav[^"]*"[^>]*href="([^"]+)"', html)
-            if urls:
-                url = urls[0]
-                if is_faved is None:
-                    is_faved = False  # .add-fav child present → not yet favorited
+            if not url and "add-button" in classes:
+                tag = fav_match.group("tag")
+                end = html.find(f"</{tag}>", fav_match.end())
+                body = html[fav_match.end() : end if end != -1 else fav_match.end() + 2000]
+                add_match = re.search(
+                    r"<[\w:-]+\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\badd-fav\b)"
+                    r"(?P<attrs>[^>]*)>",
+                    body,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                if add_match:
+                    url = self._attrs(add_match.group(0)).get("href")
 
-        # Fallback: data-href from non-logged-in page
+        # Fallback for the not-yet-favorited state if the wrapper id changes
+        # but Wallhaven keeps the .add-fav link used by its frontend.
         if not url:
-            m = re.search(r'data-href="([^"]*wallpaper/fav/[^"]*)"', html)
-            if m:
-                url = m.group(1)
+            add_match = re.search(
+                r"<[\w:-]+\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\badd-fav\b)(?P<attrs>[^>]*)>",
+                html,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if add_match:
+                url = self._attrs(add_match.group(0)).get("href")
+                is_faved = False
+
+        if url:
+            url = self._absolute_url(url)
 
         return url, is_faved
 
@@ -604,45 +636,87 @@ class WallhavenWeb:
 
 
 _web_session: WallhavenWeb | None = None
+_web_session_key: tuple[str, str, str | None] | None = None
 _web_lock = threading.Lock()
 
 
 def _ensure_web_session(config: WayperConfig) -> WallhavenWeb:
     """Return the module-level WallhavenWeb singleton, creating it if needed."""
-    global _web_session
-    if _web_session is None:
+    global _web_session, _web_session_key
+    key = (config.wallhaven_username, config.wallhaven_password, config.proxy)
+    if _web_session is None or _web_session_key != key:
+        if _web_session is not None:
+            _web_session.close()
         _web_session = WallhavenWeb(
             config.wallhaven_username, config.wallhaven_password, config.proxy
         )
+        _web_session_key = key
     return _web_session
 
 
-def _wallhaven_web_set(config: WayperConfig, filename: str, *, want_fav: bool) -> None:
-    """Set fav state on Wallhaven in a background thread (fire-and-forget).
+def _can_sync_favorites(config: WayperConfig) -> bool:
+    """Return True when Wallhaven web favorite sync has a login path."""
+    if not config.wallhaven_username:
+        return False
+    return bool(
+        config.wallhaven_password
+        or _COOKIE_FILE.exists()
+        or find_spec("browser_cookie3") is not None
+    )
+
+
+def _wallhaven_web_set_now(config: WayperConfig, filename: str, *, want_fav: bool) -> bool | None:
+    """Set fav state on Wallhaven immediately.
 
     Checks remote state before toggling to avoid accidental toggle inversion.
-    No-op if wallhaven_username/password are not configured.
+    Returns None when sync is not configured.
     """
-    if not config.wallhaven_username or not config.wallhaven_password:
-        return
+    if not _can_sync_favorites(config):
+        return None
 
     wh_id = wallhaven_id(filename)
+    with _web_lock:
+        return _ensure_web_session(config).fav(wh_id, want_fav=want_fav)
+
+
+def _wallhaven_web_set(
+    config: WayperConfig,
+    filename: str,
+    *,
+    want_fav: bool,
+    wait: bool,
+) -> bool | None:
+    """Set fav state on Wallhaven, optionally in a background thread."""
+    if wait:
+        return _wallhaven_web_set_now(config, filename, want_fav=want_fav)
+    if not _can_sync_favorites(config):
+        return None
 
     def _do():
-        with _web_lock:
-            _ensure_web_session(config).fav(wh_id, want_fav=want_fav)
+        _wallhaven_web_set_now(config, filename, want_fav=want_fav)
 
     threading.Thread(target=_do, daemon=True).start()
+    return None
 
 
-def wallhaven_web_fav(config: WayperConfig, filename: str) -> None:
-    """Favorite a wallpaper on Wallhaven (fire-and-forget background thread)."""
-    _wallhaven_web_set(config, filename, want_fav=True)
+def wallhaven_web_fav(
+    config: WayperConfig,
+    filename: str,
+    *,
+    wait: bool = True,
+) -> bool | None:
+    """Favorite a wallpaper on Wallhaven."""
+    return _wallhaven_web_set(config, filename, want_fav=True, wait=wait)
 
 
-def wallhaven_web_unfav(config: WayperConfig, filename: str) -> None:
-    """Unfavorite a wallpaper on Wallhaven (fire-and-forget background thread)."""
-    _wallhaven_web_set(config, filename, want_fav=False)
+def wallhaven_web_unfav(
+    config: WayperConfig,
+    filename: str,
+    *,
+    wait: bool = True,
+) -> bool | None:
+    """Unfavorite a wallpaper on Wallhaven."""
+    return _wallhaven_web_set(config, filename, want_fav=False, wait=wait)
 
 
 PUSH_BATCH_SIZE = 5  # max wallpapers to push per sync cycle
@@ -756,9 +830,9 @@ def merge_cloud_blacklists_into_config(config: WayperConfig) -> bool:
 def sync_cloud_tag_blacklist(config: WayperConfig, tags: list[str]) -> None:
     """Sync exclude_tags to Wallhaven cloud tag_blacklist (fire-and-forget thread).
 
-    No-op if wallhaven_username/password are not configured.
+    No-op if no Wallhaven login path is configured.
     """
-    if not config.wallhaven_username or not config.wallhaven_password:
+    if not _can_sync_favorites(config):
         return
 
     def _do():
@@ -771,9 +845,9 @@ def sync_cloud_tag_blacklist(config: WayperConfig, tags: list[str]) -> None:
 def sync_cloud_user_blacklist(config: WayperConfig, usernames: list[str]) -> None:
     """Sync exclude_uploaders to Wallhaven cloud user blacklist (fire-and-forget thread).
 
-    No-op if wallhaven_username/password are not configured.
+    No-op if no Wallhaven login path is configured.
     """
-    if not config.wallhaven_username or not config.wallhaven_password:
+    if not _can_sync_favorites(config):
         return
 
     def _do():
@@ -789,7 +863,7 @@ def push_local_favorites(config: WayperConfig, remote_files: set[str]) -> int:
     Remote state is checked before each toggle, so re-pushing an already-favorited
     wallpaper is a safe no-op (it won't accidentally unfavorite).
     """
-    if not config.wallhaven_username or not config.wallhaven_password:
+    if not _can_sync_favorites(config):
         return 0
 
     from .pool import list_images

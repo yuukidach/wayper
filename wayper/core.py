@@ -149,6 +149,7 @@ def do_fav(
     open_url: bool = False,
     *,
     image: Path | None = None,
+    wait_remote: bool = True,
 ) -> CoreResult:
     """Favorite a wallpaper.
 
@@ -181,7 +182,7 @@ def do_fav(
 
     from .wallhaven_web import wallhaven_web_fav
 
-    wallhaven_web_fav(config, dest.name)
+    remote_sync = wallhaven_web_fav(config, dest.name, wait=wait_remote)
 
     if open_url:
         import webbrowser
@@ -190,7 +191,12 @@ def do_fav(
 
         webbrowser.open(wallhaven_url(img))
 
-    return CoreResult(action="fav", monitor=monitor, image=dest, extra={"opened": open_url})
+    return CoreResult(
+        action="fav",
+        monitor=monitor,
+        image=dest,
+        extra={"opened": open_url, "remote_sync": remote_sync},
+    )
 
 
 def do_unfav(
@@ -198,6 +204,7 @@ def do_unfav(
     monitor: str | None = None,
     *,
     image: Path | None = None,
+    wait_remote: bool = True,
 ) -> CoreResult:
     """Remove a wallpaper from favorites.
 
@@ -229,9 +236,14 @@ def do_unfav(
 
     from .wallhaven_web import wallhaven_web_unfav
 
-    wallhaven_web_unfav(config, dest.name)
+    remote_sync = wallhaven_web_unfav(config, dest.name, wait=wait_remote)
 
-    return CoreResult(action="unfav", monitor=monitor, image=dest)
+    return CoreResult(
+        action="unfav",
+        monitor=monitor,
+        image=dest,
+        extra={"remote_sync": remote_sync},
+    )
 
 
 def do_ban(
@@ -240,6 +252,7 @@ def do_ban(
     clear_thumbnail: Callable[[str], None] | None = None,
     *,
     image: Path | None = None,
+    wait_remote: bool = True,
 ) -> CoreResult:
     """Ban a wallpaper: blacklist, trash, switch to next.
 
@@ -292,10 +305,10 @@ def do_ban(
 
     from .wallhaven_web import wallhaven_web_unfav
 
-    wallhaven_web_unfav(config, img.name)
+    remote_sync = wallhaven_web_unfav(config, img.name, wait=wait_remote)
 
     log.info("ban: %s → trashed %s", monitor, img.name)
-    extra = {}
+    extra = {"remote_sync": remote_sync}
     if replacement_img:
         extra["replacement_image"] = replacement_img
     if replacements:
