@@ -5,10 +5,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 
-from wayper.config import WallhavenConfig, WayperConfig
+from wayper.config import MonitorConfig, WallhavenConfig, WayperConfig
 from wayper.pool import load_metadata, save_metadata
 from wayper.server.api import app
 from wayper.wallhaven import WallhavenClient
@@ -97,6 +98,42 @@ class RegressionTest(unittest.TestCase):
 
         self.assertIn("HEAD", methods_by_path["/trash/{filename}"])
         self.assertIn("HEAD", methods_by_path["/trash-thumbnails/{filename}"])
+
+    def test_do_next_records_last_wallpaper_change(self) -> None:
+        from wayper.core import do_next
+        from wayper.state import read_last_wallpaper_change
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(
+                download_dir=Path(td),
+                monitors=[MonitorConfig("main", 1920, 1080, "landscape")],
+            )
+            image = config.download_dir / "sfw" / "landscape" / "next.jpg"
+            image.parent.mkdir(parents=True)
+            image.touch()
+
+            with (
+                patch("wayper.core.pick_next", return_value=image),
+                patch("wayper.core.set_wallpaper") as set_wallpaper,
+                patch("wayper.state.time.time", return_value=1234.5),
+            ):
+                result = do_next(config, "main")
+
+            self.assertTrue(result.ok)
+            set_wallpaper.assert_called_once_with("main", image, config.transition)
+            self.assertEqual(read_last_wallpaper_change(config), 1234.5)
+
+    def test_seconds_until_next_rotation_uses_last_wallpaper_change(self) -> None:
+        from wayper.daemon import seconds_until_next_rotation
+        from wayper.state import record_wallpaper_change
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td), interval=300)
+            record_wallpaper_change(config, when=1000.0)
+
+            self.assertEqual(seconds_until_next_rotation(config, now=1175.0), 125.0)
+            self.assertEqual(seconds_until_next_rotation(config, now=1400.0), 0.0)
+            self.assertEqual(seconds_until_next_rotation(config, now=900.0), 300.0)
 
 
 if __name__ == "__main__":

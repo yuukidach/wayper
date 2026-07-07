@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from .config import WayperConfig
@@ -37,6 +38,23 @@ def write_mode(config: WayperConfig, mode: set[str]) -> None:
     # Canonical order: sfw, sketchy, nsfw
     ordered = [p for p in ALL_PURITIES if p in mode]
     atomic_write(config.state_file, ",".join(ordered))
+
+
+def read_last_wallpaper_change(config: WayperConfig) -> float | None:
+    """Read the wall-clock timestamp of the last wallpaper change."""
+    path = config.download_dir / ".last_rotation"
+    try:
+        return float(path.read_text().strip())
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+
+
+def record_wallpaper_change(config: WayperConfig, when: float | None = None) -> None:
+    """Record the timestamp used to schedule the next daemon rotation."""
+    config.download_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write(
+        config.download_dir / ".last_rotation", str(when if when is not None else time.time())
+    )
 
 
 def toggle_base(current: set[str]) -> set[str]:

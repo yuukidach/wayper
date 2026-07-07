@@ -14,6 +14,7 @@ from pathlib import Path
 from .backend import ensure_ready, is_locked, set_wallpaper
 from .config import CONFIG_FILE, WayperConfig, load_config
 from .history import push_many
+from .lock import FileLock
 from .pool import (
     count_images,
     disk_usage_mb,
@@ -26,8 +27,7 @@ from .pool import (
     should_download,
 )
 from .process import windows_no_window_kwargs
-from .state import read_mode
-from .util import atomic_write
+from .state import read_last_wallpaper_change, read_mode, record_wallpaper_change
 from .wallhaven import WallhavenClient
 
 log = logging.getLogger("wayper")
@@ -227,22 +227,31 @@ def start_daemon_process(*, close_stdin: bool = True) -> subprocess.Popen:
 
 def read_last_rotation(config: WayperConfig) -> float | None:
     """Read the timestamp of the last wallpaper rotation. Returns None if missing/invalid."""
-    path = config.download_dir / ".last_rotation"
-    try:
-        return float(path.read_text().strip())
-    except (FileNotFoundError, ValueError, OSError):
-        return None
+    return read_last_wallpaper_change(config)
+
+
+def seconds_until_next_rotation(config: WayperConfig, now: float | None = None) -> float:
+    """Return seconds left before the next automatic rotation is due."""
+    if config.interval <= 0:
+        return 0.0
+    last_rotation = read_last_rotation(config)
+    if last_rotation is None:
+        return 0.0
+    elapsed = max(0.0, (time.time() if now is None else now) - last_rotation)
+    return max(0.0, config.interval - elapsed)
 
 
 def set_all_wallpapers(config: WayperConfig, purities: set[str]) -> None:
     """Set wallpaper on all configured monitors."""
-    history_items: list[tuple[str, Path]] = []
-    for mon in config.monitors:
-        img = pick_random(config, purities, mon.orientation)
-        if img:
-            set_wallpaper(mon.name, img, config.transition)
-            history_items.append((mon.name, img))
-    push_many(config, history_items)
+    with FileLock():
+        history_items: list[tuple[str, Path]] = []
+        for mon in config.monitors:
+            img = pick_random(config, purities, mon.orientation)
+            if img:
+                set_wallpaper(mon.name, img, config.transition)
+                history_items.append((mon.name, img))
+        push_many(config, history_items)
+        record_wallpaper_change(config)
 
 
 def update_greeter(config: WayperConfig) -> None:
@@ -378,41 +387,59 @@ async def run_daemon(config: WayperConfig) -> None:
         fav_sync_count = FAV_SYNC_INTERVAL  # trigger sync on next cycle
         log.info("Configuration reloaded")
 
+    async def sleep_or_wake(timeout: float) -> None:
+        _wake.clear()
+        try:
+            await asyncio.wait_for(_wake.wait(), timeout=timeout)
+        except TimeoutError:
+            pass
+
+    async def wait_for_turn() -> None:
+        """Wait for an explicit rotate signal or for the cooldown to expire."""
+        global _change_now, _reload_mode
+        logged_disabled = False
+
+        while True:
+            await reload_config_if_needed()
+            if _reload_mode:
+                _reload_mode = False
+
+            if _change_now:
+                _change_now = False
+                return
+
+            if config.interval <= 0:
+                if not logged_disabled:
+                    log.info("Auto-rotation disabled (interval=0), waiting for signal")
+                    logged_disabled = True
+                await sleep_or_wake(DAEMON_LOCK_POLL_INTERVAL)
+                continue
+
+            remaining = seconds_until_next_rotation(config)
+            if remaining <= 0:
+                return
+
+            await sleep_or_wake(min(DAEMON_POLL_INTERVAL, remaining))
+
     download_task: asyncio.Task | None = None
     sync_task: asyncio.Task | None = None
     greeter_task: asyncio.Task | None = None
 
     try:
         while True:
-            _change_now = False
-            await reload_config_if_needed()
+            await wait_for_turn()
 
-            if _reload_mode:
-                _reload_mode = False
-
-            # Check lock state at start of cycle
             if config.pause_on_lock and is_locked():
                 log.info("Session locked, waiting before rotation")
                 while config.pause_on_lock and is_locked():
-                    if _change_now or _reload_mode:
-                        break
-                    if _reload_config:
-                        await reload_config_if_needed()
-                    _wake.clear()
-                    try:
-                        await asyncio.wait_for(_wake.wait(), timeout=DAEMON_LOCK_POLL_INTERVAL)
-                    except TimeoutError:
-                        pass
+                    await reload_config_if_needed()
+                    await sleep_or_wake(DAEMON_LOCK_POLL_INTERVAL)
+                continue
 
-                if _change_now or _reload_mode:
-                    continue
-
-            cycle_start = time.monotonic()
             purities = read_mode(config)
 
             # Set wallpapers immediately — fast, must not block on slow tasks
             set_all_wallpapers(config, purities)
-            atomic_write(config.download_dir / ".last_rotation", str(time.time()))
 
             # Spawn downloads in background; skip if previous still running
             if download_task is None or download_task.done():
@@ -444,60 +471,6 @@ async def run_daemon(config: WayperConfig) -> None:
                 else:
                     log.info("skip greeter update: previous task still running")
                 greeter_count = 0
-
-            # Deadline-based sleep — accounts for time already spent in this cycle
-            if config.interval <= 0:
-                # No auto-rotation: wait indefinitely for a signal
-                log.info("Auto-rotation disabled (interval=0), waiting for signal")
-                while not _change_now and not _reload_mode:
-                    await reload_config_if_needed()
-                    _wake.clear()
-                    try:
-                        await asyncio.wait_for(_wake.wait(), timeout=DAEMON_LOCK_POLL_INTERVAL)
-                    except TimeoutError:
-                        pass
-            else:
-                deadline = cycle_start + config.interval
-                while True:
-                    if _change_now or _reload_mode:
-                        break
-                    await reload_config_if_needed()
-
-                    # Pause if locked — extend deadline by the locked duration
-                    if config.pause_on_lock and is_locked():
-                        log.info("Session locked, pausing timer")
-                        lock_start = time.monotonic()
-                        while config.pause_on_lock and is_locked():
-                            if _change_now or _reload_mode:
-                                break
-                            if _reload_config:
-                                await reload_config_if_needed()
-                            _wake.clear()
-                            try:
-                                await asyncio.wait_for(
-                                    _wake.wait(),
-                                    timeout=DAEMON_LOCK_POLL_INTERVAL,
-                                )
-                            except TimeoutError:
-                                pass
-                        deadline += time.monotonic() - lock_start
-                        log.info("Session unlocked, resuming timer")
-
-                        if _change_now or _reload_mode:
-                            break
-
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        break
-
-                    _wake.clear()
-                    try:
-                        await asyncio.wait_for(
-                            _wake.wait(),
-                            timeout=min(DAEMON_POLL_INTERVAL, remaining),
-                        )
-                    except TimeoutError:
-                        pass
     except (KeyboardInterrupt, SystemExit):
         log.info("Daemon shutting down")
     finally:

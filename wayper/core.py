@@ -29,6 +29,7 @@ from .state import (
     purity_from_path,
     push_undo,
     read_mode,
+    record_wallpaper_change,
     restore_from_trash,
 )
 
@@ -99,22 +100,38 @@ def _replace_on_all_monitors(
     return replacements
 
 
+def do_set_wallpaper(config: WayperConfig, monitor: str, image: Path) -> CoreResult:
+    """Set a specific wallpaper on a monitor."""
+    mon_cfg = find_monitor(config, monitor)
+    if not mon_cfg:
+        return CoreResult(action="set", ok=False, error="Monitor not found")
+
+    with FileLock():
+        set_wallpaper(monitor, image, config.transition)
+        record_wallpaper_change(config)
+
+    return CoreResult(action="set", monitor=monitor, image=image)
+
+
 def do_next(config: WayperConfig, monitor: str | None = None) -> CoreResult:
     """Switch to next wallpaper (forward history or random pick)."""
     t0 = time.monotonic()
-    monitor, mon_cfg, _ = _resolve_monitor(config, monitor, include_current=False)
-    t_resolve = time.monotonic() - t0
-    if not mon_cfg:
-        log.warning("next: no monitor config found (%.0fms)", t_resolve * 1000)
-        return CoreResult(action="next", ok=False, error="No monitor config found")
+    with FileLock():
+        monitor, mon_cfg, _ = _resolve_monitor(config, monitor, include_current=False)
+        t_resolve = time.monotonic() - t0
+        if not mon_cfg:
+            log.warning("next: no monitor config found (%.0fms)", t_resolve * 1000)
+            return CoreResult(action="next", ok=False, error="No monitor config found")
 
-    img = pick_next(config, monitor, mon_cfg.orientation)
-    t_pick = time.monotonic() - t0
-    if not img:
-        log.warning("next: no images available for %s (%.0fms)", monitor, t_pick * 1000)
-        return CoreResult(action="next", ok=False, error="No images available")
+        img = pick_next(config, monitor, mon_cfg.orientation)
+        t_pick = time.monotonic() - t0
+        if not img:
+            log.warning("next: no images available for %s (%.0fms)", monitor, t_pick * 1000)
+            return CoreResult(action="next", ok=False, error="No images available")
 
-    set_wallpaper(monitor, img, config.transition)
+        set_wallpaper(monitor, img, config.transition)
+        record_wallpaper_change(config)
+
     t_total = time.monotonic() - t0
     log.info(
         "next: %s → %s (resolve=%.0fms pick=%.0fms total=%.0fms)",
@@ -129,16 +146,19 @@ def do_next(config: WayperConfig, monitor: str | None = None) -> CoreResult:
 
 def do_prev(config: WayperConfig, monitor: str | None = None) -> CoreResult:
     """Go back to previous wallpaper in history."""
-    monitor, mon_cfg, _ = _resolve_monitor(config, monitor, include_current=False)
-    if not mon_cfg:
-        log.warning("prev: no monitor config found")
-        return CoreResult(action="prev", ok=False, error="No monitor config found")
+    with FileLock():
+        monitor, mon_cfg, _ = _resolve_monitor(config, monitor, include_current=False)
+        if not mon_cfg:
+            log.warning("prev: no monitor config found")
+            return CoreResult(action="prev", ok=False, error="No monitor config found")
 
-    img = go_prev(config, monitor)
-    if not img:
-        return CoreResult(action="prev", ok=True, status="at_oldest")
+        img = go_prev(config, monitor)
+        if not img:
+            return CoreResult(action="prev", ok=True, status="at_oldest")
 
-    set_wallpaper(monitor, img, config.transition)
+        set_wallpaper(monitor, img, config.transition)
+        record_wallpaper_change(config)
+
     log.info("prev: %s → %s", monitor, img.name)
     return CoreResult(action="prev", monitor=monitor, image=img)
 
@@ -286,11 +306,14 @@ def do_ban(
         purities = read_mode(config)
         if image is not None:
             replacements = _replace_on_all_monitors(config, shown_img, purities, exclude=img)
+            if replacements:
+                record_wallpaper_change(config)
         else:
             next_img = pick_random(config, purities, mon_cfg.orientation, exclude=img)
             if next_img:
                 set_wallpaper(monitor, next_img, config.transition)
                 push_history(config, monitor, next_img)
+                record_wallpaper_change(config)
                 replacement_img = next_img
 
         add_to_blacklist(config, img.name)
@@ -332,6 +355,7 @@ def do_unban(config: WayperConfig, monitor: str | None = None) -> CoreResult:
                 monitor = get_focused_monitor()
             if monitor:
                 set_wallpaper(monitor, restored, config.transition)
+                record_wallpaper_change(config)
             return CoreResult(action="unban", monitor=monitor, image=restored)
 
         return CoreResult(

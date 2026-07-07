@@ -18,9 +18,17 @@ from wayper.ai_suggestions import (
     get_ai_status,
     update_ai_history_feedback,
 )
-from wayper.backend import query_current, set_wallpaper
+from wayper.backend import query_current
 from wayper.config import WayperConfig, load_config, save_config
-from wayper.core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
+from wayper.core import (
+    do_ban,
+    do_fav,
+    do_next,
+    do_prev,
+    do_set_wallpaper,
+    do_unban,
+    do_unfav,
+)
 from wayper.daemon import (
     is_daemon_running,
     request_config_reload,
@@ -515,12 +523,13 @@ def set_mode_route(req: SetModeRequest):
         purities = {"sfw"}
 
     write_mode(config, purities)
-    request_mode_reload(config)
 
     current = query_current()
     for monitor_name, img_path in current.items():
         if img_path and purity_from_path(config, img_path) not in purities:
             do_next(config, monitor_name)
+
+    request_mode_reload(config)
 
     return {"status": "ok", "purities": sorted(purities)}
 
@@ -811,7 +820,10 @@ def set_wallpaper_route(req: SetWallpaperRequest):
     if not any(m.name == req.monitor for m in config.monitors):
         raise HTTPException(404, "Monitor not found")
 
-    set_wallpaper(req.monitor, img_full, config.transition)
+    result = do_set_wallpaper(config, req.monitor, img_full)
+    if not result.ok:
+        raise HTTPException(400, result.error)
+
     return {
         "status": "ok",
         "monitor": req.monitor,
