@@ -159,13 +159,27 @@ class WallhavenClient:
                     return []
                 last_page = max_page
 
-            page = random.randint(1, last_page)
-            if page == 1:
-                return data.get("data", [])
-            params["page"] = page
-            resp = await self.client.get(SEARCH_URL, params=params)
-            resp.raise_for_status()
-            return resp.json().get("data", [])
+            page_one = data.get("data", [])
+            pages_tried: set[int] = set()
+            attempts = min(5, last_page)
+            for _ in range(attempts):
+                page = random.randint(1, last_page)
+                if page in pages_tried:
+                    continue
+                pages_tried.add(page)
+                if page == 1:
+                    return page_one
+                items = await self._search_page(params, page)
+                if items is not None:
+                    return items
+
+            log.info(
+                "Wallhaven search falling back to page 1 after page fetch failures "
+                "(orientation=%s, purity=%s)",
+                orientation,
+                purity,
+            )
+            return page_one
         except Exception:
             log.warning(
                 "Wallhaven search failed (orientation=%s, purity=%s)",
@@ -174,6 +188,18 @@ class WallhavenClient:
                 exc_info=True,
             )
             return []
+
+    async def _search_page(self, params: dict, page: int) -> list[dict] | None:
+        """Fetch a search page, returning None when Wallhaven rejects the page."""
+        page_params = dict(params)
+        page_params["page"] = page
+        try:
+            resp = await self.client.get(SEARCH_URL, params=page_params)
+            resp.raise_for_status()
+            return resp.json().get("data", [])
+        except Exception:
+            log.debug("Wallhaven search page %d failed", page, exc_info=True)
+            return None
 
     async def _max_favorites_page(self, params: dict, last_page: int, page_one: list[dict]) -> int:
         """Find the last sorted-by-favorites page that may contain eligible items."""
@@ -184,21 +210,17 @@ class WallhavenClient:
             return 0
 
         high = last_page
-        page_cache: dict[int, list[dict]] = {1: page_one}
+        page_cache: dict[int, list[dict] | None] = {1: page_one}
 
-        async def page_items(page: int) -> list[dict]:
+        async def page_items(page: int) -> list[dict] | None:
             if page not in page_cache:
-                page_params = dict(params)
-                page_params["page"] = page
-                resp = await self.client.get(SEARCH_URL, params=page_params)
-                resp.raise_for_status()
-                page_cache[page] = resp.json().get("data", [])
+                page_cache[page] = await self._search_page(params, page)
             return page_cache[page]
 
         while low < high:
             mid = (low + high + 1) // 2
             items = await page_items(mid)
-            if any(_item_favorites(item) >= min_favorites for item in items):
+            if items is not None and any(_item_favorites(item) >= min_favorites for item in items):
                 low = mid
             else:
                 high = mid - 1

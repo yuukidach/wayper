@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 from pathlib import Path
 from typing import TypedDict
 
 from .config import WayperConfig
+from .lock import FileLock
 from .state import ALL_PURITIES
 from .util import atomic_write
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+log = logging.getLogger("wayper.pool")
 
 
 class ImageMetadata(TypedDict, total=False):
@@ -229,36 +232,60 @@ def save_metadata(config: WayperConfig, filename: str, item: dict) -> None:
     import time
 
     mf = config.metadata_file
-    data: dict = json.loads(mf.read_text()) if mf.exists() else {}
     tags = item.get("tags") or []
     uploader = item.get("uploader") or {}
-    data[filename] = {
-        "id": item.get("id", ""),
-        "tags": extract_tag_names(tags),
-        "category": item.get("category", ""),
-        "purity": item.get("purity", ""),
-        "resolution": item.get("resolution", ""),
-        "ratio": item.get("ratio", ""),
-        "views": item.get("views", 0),
-        "favorites": item.get("favorites", 0),
-        "url": item.get("url", ""),
-        "source": item.get("source", ""),
-        "colors": item.get("colors", []),
-        "file_size": item.get("file_size", 0),
-        "file_type": item.get("file_type", ""),
-        "uploader": uploader.get("username", "") if isinstance(uploader, dict) else uploader,
-        "created_at": item.get("created_at", ""),
-        "downloaded_at": int(time.time()),
-    }
-    atomic_write(mf, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    with FileLock():
+        data = _read_metadata_file(mf)
+        data[filename] = {
+            "id": item.get("id", ""),
+            "tags": extract_tag_names(tags),
+            "category": item.get("category", ""),
+            "purity": item.get("purity", ""),
+            "resolution": item.get("resolution", ""),
+            "ratio": item.get("ratio", ""),
+            "views": item.get("views", 0),
+            "favorites": item.get("favorites", 0),
+            "url": item.get("url", ""),
+            "source": item.get("source", ""),
+            "colors": item.get("colors", []),
+            "file_size": item.get("file_size", 0),
+            "file_type": item.get("file_type", ""),
+            "uploader": uploader.get("username", "") if isinstance(uploader, dict) else uploader,
+            "created_at": item.get("created_at", ""),
+            "downloaded_at": int(time.time()),
+        }
+        atomic_write(mf, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+
+def _read_metadata_file(path: Path) -> dict:
+    """Read metadata JSON, tolerating trailing junk from interrupted concurrent writes."""
+    if not path.exists():
+        return {}
+    text = path.read_text()
+    if not text.strip():
+        return {}
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        try:
+            data, end = decoder.raw_decode(text)
+        except json.JSONDecodeError:
+            log.warning("Metadata file is invalid; ignoring %s", path, exc_info=True)
+            return {}
+        if text[end:].strip():
+            log.warning("Metadata file has trailing data; ignoring extra bytes in %s", path)
+
+    if not isinstance(data, dict):
+        log.warning("Metadata file does not contain a JSON object: %s", path)
+        return {}
+    return data
 
 
 def load_metadata(config: WayperConfig) -> dict[str, ImageMetadata]:
     """Load all saved metadata."""
-    mf = config.metadata_file
-    if not mf.exists():
-        return {}
-    return json.loads(mf.read_text())
+    return _read_metadata_file(config.metadata_file)
 
 
 def ensure_directories(config: WayperConfig) -> None:

@@ -1177,6 +1177,7 @@ async def ai_suggestions_feedback(body: dict = Body()):
     return {"ok": True}
 
 
+@app.head("/trash/{filename}")
 @app.get("/trash/{filename}")
 def serve_trash_image(filename: str):
     """Serve an image from system trash (not under download_dir)."""
@@ -1190,6 +1191,7 @@ def serve_trash_image(filename: str):
     return FileResponse(trashed)
 
 
+@app.head("/trash-thumbnails/{filename}")
 @app.get("/trash-thumbnails/{filename}")
 def serve_trash_thumbnail(filename: str):
     """Serve a cached thumbnail for an image in system trash."""
