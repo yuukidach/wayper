@@ -392,13 +392,13 @@ def status(ctx):
 
 
 @cli.command()
-@click.option("--ai", "use_ai", is_flag=True, help="Use Claude AI for intelligent analysis.")
+@click.option("--ai", "use_ai", is_flag=True, help="Use Codex for intelligent analysis.")
 @click.pass_context
 def suggest(ctx, use_ai):
     """Show tag exclusion suggestions.
 
     Without --ai: shows frequency-based suggestions.
-    With --ai: calls Claude CLI for semantic analysis.
+    With --ai: calls Codex CLI for semantic analysis.
     """
     config = ctx.obj["config"]
     use_json = ctx.obj["json"]

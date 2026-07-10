@@ -2144,7 +2144,7 @@ function createBlocklistSuggestionsBar() {
         icon.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><path d="M16 14H8a5 5 0 0 0-5 5v1h18v-1a5 5 0 0 0-5-5z"/></svg>';
         aiBtn.appendChild(icon);
         const btnLabel = document.createElement('span');
-        btnLabel.textContent = 'Agent';
+        btnLabel.textContent = 'Codex';
         aiBtn.appendChild(btnLabel);
         if (appState.aiSuggestions && appState.aiSuggestions.error) {
             aiBtn.classList.add('agent-error');

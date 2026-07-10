@@ -76,7 +76,7 @@ uv pip install -e ".[browser]"  # 可选：浏览器 cookie 提取，用于 Wall
 - **浏览与预览** — 网格浏览（缩略图缓存）、灯箱预览、Enter 设为壁纸
 - **标签搜索** — 按 Wallhaven 标签、分类或文件名搜索，支持自动补全
 - **智能建议** — 分析拉黑模式，推荐要排除的标签；共现挖掘找出跨排除个体的共同描述符；支持组合排除（如"tattoo + nude"）精细过滤
-- **AI 分析** — 基于 Claude 的深度分析，支持迭代反馈。识别上传者模式并建议 Wallhaven 用户黑名单候选。点击建议标签可预览匹配图片
+- **AI 分析** — 基于 Codex 的深度分析，支持迭代反馈。识别上传者模式并建议 Wallhaven 用户黑名单候选。点击建议标签可预览匹配图片
 - **设置** — 在 GUI 中配置下载目录、Wallhaven 查询、排除标签/组合、纯度和显示器。修改即时生效，无需重启 daemon
 - **全键盘操作** — 每个操作都有快捷键：网格导航、标签切换、灯箱、收藏、拉黑、撤销
 
@@ -123,7 +123,7 @@ wayper mode                 # 切换 sfw↔nsfw（保留 sketchy 状态）
 wayper mode sketchy         # 开关 sketchy
 wayper mode sfw,sketchy     # 设置精确组合
 wayper suggest             # 基于频率的标签排除建议
-wayper suggest --ai        # 通过 Claude CLI 进行 AI 分析
+wayper suggest --ai        # 通过 Codex CLI 进行 AI 分析
 wayper status               # 查看当前状态
 wayper-gui                  # GUI 应用（浏览、操作、daemon、设置）
 wayper setup                # 安装 .desktop（Linux）

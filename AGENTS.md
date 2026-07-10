@@ -67,8 +67,8 @@ a FastAPI backend for the Electron GUI, and a stdio MCP server.
 - When changing user-facing docs, keep `README.md` and `docs/README.zh-CN.md` in sync. Update
   `docs/index.html` when the public site content changes.
 - When changing MCP docs, include Codex TOML config and Claude Code JSON config where relevant.
-- AI tag suggestions currently depend on the local `claude` CLI. Do not describe that feature
-  as Codex-powered unless the implementation changes.
+- AI tag suggestions depend on the local `codex` CLI. Keep implementation, errors, and docs
+  aligned when changing the AI provider.
 - For version bumps, keep `pyproject.toml`, `wayper/__init__.py`, and
   `wayper/electron/package.json` in sync.
 - Do not modify local user config, wallpaper state, `.claude/settings.local.json`, or generated

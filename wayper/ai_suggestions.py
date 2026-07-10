@@ -1,4 +1,4 @@
-"""AI-powered tag exclusion suggestions via local claude CLI."""
+"""AI-powered tag exclusion suggestions via the local Codex CLI."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import logging
 import re
 import shutil
 import sys
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,10 +26,56 @@ from .util import atomic_write
 
 log = logging.getLogger("wayper.ai")
 
-# Deterministic guardrails applied after Claude returns suggestions. These keep
+# Deterministic guardrails applied after Codex returns suggestions. These keep
 # the UI from offering broad excludes that would remove liked content.
 MIN_AI_SUPPORT = 3
 MIN_AI_PRECISION = 0.85
+
+_AI_SUGGESTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "analysis": {"type": "string"},
+        "add_suggestions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": ["tag", "combo", "uploader"]},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "reason": {"type": "string"},
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                    },
+                },
+                "required": ["type", "tags", "reason", "confidence"],
+                "additionalProperties": False,
+            },
+        },
+        "remove_suggestions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": ["tag", "combo", "uploader"]},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "reason": {"type": "string"},
+                },
+                "required": ["type", "tags", "reason"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["analysis", "add_suggestions", "remove_suggestions"],
+    "additionalProperties": False,
+}
+
+_CODEX_MCP_TOOLS = [
+    "tag_stats_top",
+    "tag_stats_lookup",
+    "tag_stats_combo",
+    "uploader_stats_lookup",
+]
 
 # Module-level status for UI polling
 _ai_status: dict[str, str | None] = {"phase": None, "detail": None}
@@ -438,7 +485,7 @@ def _filter_ai_suggestions(
     favorites: set[str],
     config: WayperConfig,
 ) -> dict:
-    """Validate Claude suggestions against local stats before showing them."""
+    """Validate Codex suggestions against local stats before showing them."""
     parsed = {
         "analysis": str(result.get("analysis", "")),
         "add_suggestions": [],
@@ -694,15 +741,20 @@ def _build_prompt(
     return "".join(parts)
 
 
-def _find_claude_bin() -> str | None:
-    """Find claude CLI binary, checking PATH and common install locations."""
-    found = shutil.which("claude")
+def _find_codex_bin() -> str | None:
+    """Find the Codex CLI binary, checking PATH and common install locations."""
+    found = shutil.which("codex")
     if found:
         return found
     # PyInstaller / GUI apps often have a stripped PATH — check common locations
     for candidate in (
-        Path.home() / ".local" / "bin" / "claude",
-        Path("/usr/local/bin/claude"),
+        Path.home() / ".local" / "bin" / "codex",
+        Path.home() / ".npm-global" / "bin" / "codex",
+        Path.home() / ".volta" / "bin" / "codex",
+        Path.home() / ".local" / "share" / "mise" / "shims" / "codex",
+        Path("/opt/homebrew/bin/codex"),
+        Path("/usr/local/bin/codex"),
+        Path("/Applications/Codex.app/Contents/Resources/codex"),
     ):
         if candidate.is_file():
             return str(candidate)
@@ -731,70 +783,93 @@ def _find_mcp_bin() -> str | None:
     return None
 
 
-async def _invoke_claude(
+async def _invoke_codex(
     prompt: str, *, use_tools: bool = False, timeout: float = 600.0
 ) -> tuple[dict, bool]:
-    """Call claude CLI in print mode and return (parsed JSON, tools_used)."""
-    claude_bin = _find_claude_bin()
-    if not claude_bin:
+    """Call Codex non-interactively and return (parsed JSON, tools_used)."""
+    codex_bin = _find_codex_bin()
+    if not codex_bin:
         raise AISuggestionError(
-            "AI analysis requires Claude CLI installed locally. "
-            "Install from https://claude.ai/download",
+            "AI analysis requires the Codex CLI installed and signed in locally. "
+            "See https://developers.openai.com/codex/cli",
             code="cli_not_found",
         )
 
-    cmd = [claude_bin, "-p"]
+    mcp_bin = _find_mcp_bin() if use_tools else None
     if use_tools:
-        mcp_bin = _find_mcp_bin()
-        if mcp_bin:
-            # Inline MCP config — works for any user without pre-existing .mcp.json
-            mcp_json = json.dumps({"mcpServers": {"wayper": {"command": mcp_bin, "args": []}}})
-            cmd += [
-                "--mcp-config",
-                mcp_json,
-                "--allowedTools",
-                "mcp__wayper__tag_stats_top mcp__wayper__tag_stats_lookup"
-                " mcp__wayper__tag_stats_combo mcp__wayper__uploader_stats_lookup",
-            ]
-        else:
+        if not mcp_bin:
             log.warning("wayper-mcp not found, running AI without tools")
             use_tools = False
 
-    t0 = time.monotonic()
-    log.info("Spawning claude CLI: %s", " ".join(cmd[:4]) + ("..." if len(cmd) > 4 else ""))
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    with tempfile.TemporaryDirectory(prefix="wayper-codex-") as temp_dir:
+        schema_path = Path(temp_dir) / "ai-suggestion-schema.json"
+        schema_path.write_text(json.dumps(_AI_SUGGESTION_SCHEMA), encoding="utf-8")
+        cmd = [
+            codex_bin,
+            "exec",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--sandbox",
+            "read-only",
+            "--skip-git-repo-check",
+            "--color",
+            "never",
+            "--cd",
+            temp_dir,
+            "--output-schema",
+            str(schema_path),
+        ]
+        if use_tools and mcp_bin:
+            cmd += [
+                "--config",
+                f"mcp_servers.wayper.command={json.dumps(mcp_bin)}",
+                "--config",
+                "mcp_servers.wayper.args=[]",
+                "--config",
+                "mcp_servers.wayper.required=true",
+                "--config",
+                f"mcp_servers.wayper.enabled_tools={json.dumps(_CODEX_MCP_TOOLS)}",
+                "--config",
+                'mcp_servers.wayper.default_tools_approval_mode="approve"',
+            ]
+        cmd.append("-")
 
-    try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=prompt.encode()),
-            timeout=timeout,
+        t0 = time.monotonic()
+        log.info("Spawning Codex CLI%s", " with Wayper MCP tools" if use_tools else "")
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-    except TimeoutError:
-        elapsed = time.monotonic() - t0
-        proc.kill()
-        await proc.wait()
-        raise AISuggestionError(f"Claude CLI timed out after {elapsed:.1f}s", code="timeout")
+
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=prompt.encode()),
+                timeout=timeout,
+            )
+        except TimeoutError:
+            elapsed = time.monotonic() - t0
+            proc.kill()
+            await proc.wait()
+            raise AISuggestionError(f"Codex CLI timed out after {elapsed:.1f}s", code="timeout")
 
     elapsed = time.monotonic() - t0
     stderr_text = stderr.decode().strip()
     if stderr_text:
-        log.info("Claude stderr (%d lines): %s", stderr_text.count("\n") + 1, stderr_text[:500])
+        log.info("Codex stderr (%d lines): %s", stderr_text.count("\n") + 1, stderr_text[:500])
 
     if proc.returncode != 0:
+        detail = stderr_text or stdout.decode().strip()
         log.warning(
-            "Claude CLI failed after %.1fs (exit %d): %s",
+            "Codex CLI failed after %.1fs (exit %d): %s",
             elapsed,
             proc.returncode,
-            stderr_text[:300],
+            detail[:300],
         )
-        raise AISuggestionError(f"Claude CLI failed (exit {proc.returncode}): {stderr_text}")
+        raise AISuggestionError(f"Codex CLI failed (exit {proc.returncode}): {detail}")
 
-    log.info("Claude CLI completed in %.1fs, output %d bytes", elapsed, len(stdout))
+    log.info("Codex CLI completed in %.1fs, output %d bytes", elapsed, len(stdout))
     text = stdout.decode().strip()
     # Extract JSON from markdown code blocks if present
     m = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
@@ -802,10 +877,13 @@ async def _invoke_claude(
         text = m.group(1).strip()
 
     try:
-        return json.loads(text), use_tools
+        result = json.loads(text)
     except json.JSONDecodeError as e:
-        log.warning("Claude response was not valid JSON: %s", text[:200])
-        raise AISuggestionError(f"Claude returned invalid JSON: {e}")
+        log.warning("Codex response was not valid JSON: %s", text[:200])
+        raise AISuggestionError(f"Codex returned invalid JSON: {e}")
+    if not isinstance(result, dict):
+        raise AISuggestionError("Codex returned JSON with an unexpected top-level type")
+    return result, use_tools
 
 
 async def generate_ai_suggestions(config: WayperConfig) -> dict:
@@ -984,11 +1062,11 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
         len(combo_patterns),
     )
     _ai_status["phase"] = "analyzing"
-    _ai_status["detail"] = f"Sent {prompt_kb}KB to Claude"
+    _ai_status["detail"] = f"Sent {prompt_kb}KB to Codex"
     try:
-        result, tools_used = await _invoke_claude(prompt, use_tools=True)
+        result, tools_used = await _invoke_codex(prompt, use_tools=True)
         if tools_used:
-            _ai_status["detail"] = "Claude querying tag data..."
+            _ai_status["detail"] = "Codex queried tag data"
     finally:
         _ai_status["phase"] = None
         _ai_status["detail"] = None

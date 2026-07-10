@@ -1166,7 +1166,7 @@ async def ai_suggestions_status():
 
 @app.post("/api/ai-suggestions")
 async def ai_suggestions_route():
-    """Generate AI-powered tag exclusion suggestions using Claude CLI."""
+    """Generate AI-powered tag exclusion suggestions using Codex CLI."""
     config = get_config()
     try:
         result = await generate_ai_suggestions(config)

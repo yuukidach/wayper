@@ -76,7 +76,7 @@ uv pip install -e ".[browser]"  # optional: browser cookie extraction for Wallha
 - **Browse & preview** — grid view with thumbnail caching, lightbox preview, set wallpaper with Enter
 - **Tag search** — search by Wallhaven tags, category, or filename with autocomplete
 - **Smart suggestions** — analyzes ban patterns to recommend tags to exclude; co-occurrence mining finds common descriptors across excluded individuals; drill into combo exclusions (e.g., "tattoo + nude") for precise filtering
-- **AI analysis** — Claude-powered deep analysis of ban patterns with iterative feedback. Identifies uploader patterns and suggests Wallhaven user blacklist candidates. Click suggested tags to preview matching images
+- **AI analysis** — Codex-powered deep analysis of ban patterns with iterative feedback. Identifies uploader patterns and suggests Wallhaven user blacklist candidates. Click suggested tags to preview matching images
 - **Settings** — configure the download folder, Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI. Changes apply to the running daemon instantly
 - **Keyboard-driven** — every action has a shortcut: grid navigation, tab switching, lightbox, favorites, ban, undo
 
@@ -123,7 +123,7 @@ wayper mode                 # toggle sfw↔nsfw (preserves sketchy)
 wayper mode sketchy         # toggle sketchy on/off
 wayper mode sfw,sketchy     # set exact purity combination
 wayper suggest             # frequency-based tag exclusion suggestions
-wayper suggest --ai        # AI-powered analysis via Claude CLI
+wayper suggest --ai        # AI-powered analysis via Codex CLI
 wayper status               # show current state
 wayper-gui                  # GUI app (browse, actions, daemon, settings)
 wayper setup                # install .desktop entry (Linux)
