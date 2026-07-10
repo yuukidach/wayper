@@ -66,7 +66,7 @@ class CodexSuggestionTest(unittest.TestCase):
         self.assertEqual(args[:2], ("/opt/bin/codex", "exec"))
         self.assertEqual(args[-1], "-")
         self.assertIn("--ephemeral", args)
-        self.assertIn("--ignore-user-config", args)
+        self.assertNotIn("--ignore-user-config", args)
         self.assertEqual(args[args.index("--sandbox") + 1], "read-only")
         self.assertIn("--skip-git-repo-check", args)
 

@@ -808,7 +808,6 @@ async def _invoke_codex(
             codex_bin,
             "exec",
             "--ephemeral",
-            "--ignore-user-config",
             "--sandbox",
             "read-only",
             "--skip-git-repo-check",
