@@ -12,6 +12,7 @@ import httpx
 from .config import WayperConfig
 from .image import resize_crop, validate_image
 from .pool import extract_tag_names, favorites_dir, is_blacklisted, pool_dir, save_metadata
+from .suggestions import normalize_tag
 
 log = logging.getLogger("wayper.wallhaven")
 
@@ -116,14 +117,14 @@ class WallhavenClient:
         """Return True if any tag matches overflow exclude_tags filtered locally."""
         if not self._local_exclude_tags:
             return False
-        lower = {t.lower() for t in tag_names}
-        return any(t.lower() in lower for t in self._local_exclude_tags)
+        normalized = {normalize_tag(t) for t in tag_names if normalize_tag(t)}
+        return any(normalize_tag(t) in normalized for t in self._local_exclude_tags)
 
     def _matches_exclude_combo(self, tag_names: list[str]) -> bool:
         """Return True if tag_names matches any exclude combo rule (case-insensitive)."""
-        tag_set = {t.lower() for t in tag_names}
+        tag_set = {normalize_tag(t) for t in tag_names if normalize_tag(t)}
         return any(
-            all(t.lower() in tag_set for t in combo)
+            all(normalize_tag(t) in tag_set for t in combo)
             for combo in self.config.wallhaven.exclude_combos
         )
 

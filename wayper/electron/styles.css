@@ -1202,6 +1202,14 @@ main {
   white-space: nowrap;
 }
 
+.suggestion-evidence-legend {
+  font-size: 9px;
+  color: var(--overlay1);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  cursor: help;
+}
+
 .suggestion-chip {
   display: inline-flex;
   align-items: center;
@@ -1241,6 +1249,7 @@ main {
   padding: 1px 6px;
   border-radius: 10px;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .suggestion-chip.removing {
@@ -2226,6 +2235,14 @@ footer {
 .ai-confidence-low {
   background: rgba(147, 153, 178, 0.15);
   color: var(--overlay1);
+}
+
+.ai-suggestion-stats {
+  font-size: 10px;
+  color: var(--overlay1);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .ai-suggestion-reason {

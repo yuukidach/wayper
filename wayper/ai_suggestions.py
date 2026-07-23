@@ -21,7 +21,17 @@ from .pool import (
     load_metadata,
 )
 from .state import read_mode
-from .suggestions import FAV_WEIGHT, KEPT_WEIGHT, suggest_combo_patterns
+from .suggestions import (
+    FAV_WEIGHT,
+    KEPT_WEIGHT,
+    MIN_SUGGESTION_PRECISION,
+    is_broad_positive_tag,
+    is_non_preference_tag,
+    is_subject_tag,
+    normalize_tag,
+    passes_positive_feedback_guard,
+    suggest_combo_patterns,
+)
 from .util import atomic_write
 
 log = logging.getLogger("wayper.ai")
@@ -29,7 +39,10 @@ log = logging.getLogger("wayper.ai")
 # Deterministic guardrails applied after Codex returns suggestions. These keep
 # the UI from offering broad excludes that would remove liked content.
 MIN_AI_SUPPORT = 3
-MIN_AI_PRECISION = 0.85
+# Keep AI additions at least as conservative as the deterministic suggestions.
+# The model can still explain broader patterns, but they are not actionable
+# unless the local evidence shows very little positive collateral.
+MIN_AI_PRECISION = MIN_SUGGESTION_PRECISION
 
 _AI_SUGGESTION_SCHEMA = {
     "type": "object",
@@ -220,10 +233,10 @@ def update_ai_history_feedback(path: Path, tags: list[str], action: str) -> None
         return
 
     last = history[-1]
-    tags_lower = {t.lower() for t in tags}
+    tags_lower = {normalize_tag(t) for t in tags if normalize_tag(t)}
     for section in ("add_suggestions", "remove_suggestions"):
         for s in last.get(section, []):
-            if {t.lower() for t in s.get("tags", [])} == tags_lower:
+            if {normalize_tag(t) for t in s.get("tags", []) if normalize_tag(t)} == tags_lower:
                 s["feedback"] = action
                 atomic_write(path, json.dumps(history, ensure_ascii=False, indent=2))
                 return
@@ -240,7 +253,7 @@ def _clean_values(values: object) -> list[str]:
         text = str(value).strip()
         if not text:
             continue
-        lower = text.lower()
+        lower = normalize_tag(text)
         if lower in seen:
             continue
         seen.add(lower)
@@ -249,18 +262,18 @@ def _clean_values(values: object) -> list[str]:
 
 
 def _lower_values(values: object) -> set[str]:
-    return {v.lower() for v in _clean_values(values)}
+    return {normalize_tag(v) for v in _clean_values(values) if normalize_tag(v)}
 
 
 def _suggestion_type(suggestion: dict, tags: list[str]) -> str:
-    raw = str(suggestion.get("type", "")).strip().lower()
+    raw = str(suggestion.get("type", "")).strip().casefold()
     if raw in {"tag", "combo", "uploader"}:
         return raw
     return "combo" if len(tags) > 1 else "tag"
 
 
 def _meta_tag_lowers(meta: dict) -> set[str]:
-    return {str(t).lower() for t in meta.get("tags", []) if str(t).strip()}
+    return {normalize_tag(t) for t in meta.get("tags", []) if normalize_tag(t)}
 
 
 def _weighted_precision(banned: int, kept: int, favorites: int) -> float:
@@ -295,7 +308,7 @@ def _stats_for_match(metadata: dict, blacklisted: set[str], favorites: set[str],
 
 
 def _stats_for_tag(metadata: dict, blacklisted: set[str], favorites: set[str], tag: str) -> dict:
-    tag_lower = tag.lower()
+    tag_lower = normalize_tag(tag)
     return _stats_for_match(
         metadata,
         blacklisted,
@@ -319,12 +332,12 @@ def _stats_for_combo(
 def _stats_for_uploader(
     metadata: dict, blacklisted: set[str], favorites: set[str], uploader: str
 ) -> dict:
-    uploader_lower = uploader.lower()
+    uploader_lower = str(uploader).strip().casefold()
     return _stats_for_match(
         metadata,
         blacklisted,
         favorites,
-        lambda meta: str(meta.get("uploader", "")).lower() == uploader_lower,
+        lambda meta: str(meta.get("uploader", "")).strip().casefold() == uploader_lower,
     )
 
 
@@ -365,7 +378,7 @@ def _annotate_suggestion(raw: dict, s_type: str, tags: list[str], stats: dict) -
 
 
 def _suggestion_key(s_type: str, tags: list[str]) -> tuple[str, tuple[str, ...]]:
-    lowers = [t.lower() for t in tags]
+    lowers = [normalize_tag(t) for t in tags]
     if s_type == "combo":
         lowers = sorted(lowers)
     return s_type, tuple(lowers)
@@ -388,7 +401,7 @@ def _all_banned_files_from_uploaders(
     if not banned_files or not uploader_lowers:
         return False
     for filename in banned_files:
-        uploader = str(metadata.get(filename, {}).get("uploader", "")).lower()
+        uploader = str(metadata.get(filename, {}).get("uploader", "")).strip().casefold()
         if uploader not in uploader_lowers:
             return False
     return True
@@ -416,7 +429,11 @@ def _validate_add_suggestion(
     excluded_uploaders_lower = _lower_values(config.wallhaven.exclude_uploaders)
 
     if s_type == "tag":
-        if len(tags) != 1 or tags[0].lower() in excluded_tags_lower:
+        if (
+            len(tags) != 1
+            or normalize_tag(tags[0]) in excluded_tags_lower
+            or is_non_preference_tag(tags[0])
+        ):
             return None
         stats = _stats_for_tag(metadata, blacklisted, favorites, tags[0])
     elif s_type == "combo":
@@ -424,9 +441,26 @@ def _validate_add_suggestion(
             return None
         if _lower_values(tags) & excluded_tags_lower:
             return None
+        if any(is_non_preference_tag(tag) for tag in tags):
+            return None
         stats = _stats_for_combo(metadata, blacklisted, favorites, tags)
+        # A high-degree positive tag can still be useful in a very specific
+        # combo, but only when that exact combo has no positive examples.
+        if stats["kept"] > 0 or stats["favorites"] > 0:
+            for tag in tags:
+                tag_stats = _stats_for_tag(metadata, blacklisted, favorites, tag)
+                if is_broad_positive_tag(
+                    tag_stats["banned"], tag_stats["kept"], tag_stats["favorites"]
+                ):
+                    return None
+        for tag in tags:
+            tag_stats = _stats_for_tag(metadata, blacklisted, favorites, tag)
+            if is_subject_tag(tag) and is_broad_positive_tag(
+                tag_stats["banned"], tag_stats["kept"], tag_stats["favorites"]
+            ):
+                return None
     elif s_type == "uploader":
-        if len(tags) != 1 or tags[0].lower() in excluded_uploaders_lower:
+        if len(tags) != 1 or tags[0].strip().casefold() in excluded_uploaders_lower:
             return None
         stats = _stats_for_uploader(metadata, blacklisted, favorites, tags[0])
     else:
@@ -434,9 +468,15 @@ def _validate_add_suggestion(
 
     if stats["banned"] < MIN_AI_SUPPORT:
         return None
-    if stats["favorites"] > 0:
-        return None
-    if stats["precision"] < MIN_AI_PRECISION or stats["net_benefit"] <= 0:
+    if (
+        not passes_positive_feedback_guard(
+            stats["banned"],
+            stats["kept"],
+            stats["favorites"],
+            min_precision=MIN_AI_PRECISION,
+        )
+        or stats["net_benefit"] <= 0
+    ):
         return None
     if _all_banned_files_from_uploaders(stats, metadata, excluded_uploaders_lower):
         return None
@@ -456,7 +496,7 @@ def _validate_remove_suggestion(
     excluded_uploaders_lower = _lower_values(config.wallhaven.exclude_uploaders)
 
     if s_type == "tag":
-        if len(tags) != 1 or tags[0].lower() not in excluded_tags_lower:
+        if len(tags) != 1 or normalize_tag(tags[0]) not in excluded_tags_lower:
             return None
         stats = _stats_for_tag(metadata, blacklisted, favorites, tags[0])
     elif s_type == "combo":
@@ -464,7 +504,7 @@ def _validate_remove_suggestion(
             return None
         stats = _stats_for_combo(metadata, blacklisted, favorites, tags)
     elif s_type == "uploader":
-        if len(tags) != 1 or tags[0].lower() not in excluded_uploaders_lower:
+        if len(tags) != 1 or tags[0].strip().casefold() not in excluded_uploaders_lower:
             return None
         stats = _stats_for_uploader(metadata, blacklisted, favorites, tags[0])
         if not (stats["favorites"] > 0 or stats["kept"] > 0 or stats["banned"] == 0):
@@ -592,6 +632,8 @@ def _build_prompt(
         f"- Additions must have positive net benefit using banned - {KEPT_WEIGHT}*kept "
         f"- {FAV_WEIGHT}*favorites.\n"
         "- Never suggest adding a rule with any favorite matches.\n"
+        "- Never suggest layout/orientation tags such as 'portrait' or 'landscape'; "
+        "those describe display geometry, not content preference.\n"
         "- Never suggest adding a rule already covered by an existing tag, combo, or uploader.\n"
         "- Removal suggestions must target existing rules only, and should be reserved for "
         "rules with kept/favorite collateral, zero current banned support, or redundancy.\n\n"
@@ -605,7 +647,10 @@ def _build_prompt(
         "5. Keep tool calls to 5-12 total — don't query redundantly.\n\n"
         "CRITICAL RULE: If a tag has significant presence in Kept or Favorites, "
         "the user LIKES that content. NEVER suggest excluding it as a single tag. "
-        "Only suggest it in a combo if the combo isolates a specific unwanted subset.\n\n"
+        "Do not use a high-support broad subject tag such as 'women' or 'men' "
+        "as an automatic combo building block; let the user drill into it manually.\n"
+        "Other broad tags are allowed only when the exact combo has zero Kept "
+        "and zero Favorites.\n\n"
         "PRIORITY ORDER for suggestions (most to least valuable):\n"
         "1. SPECIFIC IDENTIFIERS: studio names, photographer names, source sites, "
         "model names — most precise exclusion targets with minimal collateral damage\n"
@@ -951,8 +996,8 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
     history = _load_ai_history(config.ai_history_file)
 
     # --- Co-occurrence analysis: find common tags across excluded individuals ---
-    excluded_lower = {t.lower() for t in config.wallhaven.exclude_tags}
-    combo_sets_lower = [{t.lower() for t in c} for c in config.wallhaven.exclude_combos]
+    excluded_lower = _lower_values(config.wallhaven.exclude_tags)
+    combo_sets_lower = [_lower_values(c) for c in config.wallhaven.exclude_combos]
     cooccur_map: dict[str, set[str]] = {}  # tag → set of excluded tags it co-occurs with
     uploader_ban_count: dict[str, int] = {}
     uploader_kept_count: dict[str, int] = {}
@@ -965,7 +1010,7 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
 
         if fn in blacklisted:
             tags = meta.get("tags", [])
-            tags_lc = {t.lower() for t in tags}
+            tags_lc = {normalize_tag(t) for t in tags if normalize_tag(t)}
             matched_lc = tags_lc & excluded_lower
             if matched_lc:
                 for tl in tags_lc - excluded_lower:
@@ -997,9 +1042,14 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
         for u, c in sorted(uploader_ban_count.items(), key=lambda x: -x[1])
         if c >= MIN_AI_SUPPORT
         and uploader_fav_count.get(u, 0) == 0
-        and _weighted_precision(c, uploader_kept_count.get(u, 0), 0) >= MIN_AI_PRECISION
+        and passes_positive_feedback_guard(
+            c,
+            uploader_kept_count.get(u, 0),
+            uploader_fav_count.get(u, 0),
+            min_precision=MIN_AI_PRECISION,
+        )
         and _net_benefit(c, uploader_kept_count.get(u, 0), 0) > 0
-        and u.lower() not in _lower_values(config.wallhaven.exclude_uploaders)
+        and u.strip().casefold() not in _lower_values(config.wallhaven.exclude_uploaders)
     ][:10]
 
     rule_health = _build_rule_health(metadata, blacklisted, fav_files_set, config)
@@ -1015,7 +1065,7 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
         tags = metadata[fn].get("tags", [])
         if not tags:
             continue
-        tags_lower = {t.lower() for t in tags}
+        tags_lower = {normalize_tag(t) for t in tags if normalize_tag(t)}
         # Skip if covered by existing exclusion rules
         if tags_lower & excluded_lower:
             continue

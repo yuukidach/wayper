@@ -54,7 +54,7 @@ from wayper.state import (
     trash_state_token,
     write_mode,
 )
-from wayper.suggestions import suggest_combo_patterns, suggest_tags_to_exclude
+from wayper.suggestions import normalize_tag, suggest_combo_patterns, suggest_tags_to_exclude
 from wayper.update import check_for_updates
 
 log = logging.getLogger("wayper.api")
@@ -910,9 +910,9 @@ def search_images(q: str = "", tags: str = "", uploader: str = ""):
 
     if tags:
         # Exact tag intersection: image must have ALL specified tags
-        required = {t.strip().lower() for t in tags.split(",") if t.strip()}
+        required = {normalize_tag(t) for t in tags.split(",") if normalize_tag(t)}
         for filename, meta in metadata.items():
-            img_tags = {t.lower() for t in meta.get("tags", [])}
+            img_tags = {normalize_tag(t) for t in meta.get("tags", []) if normalize_tag(t)}
             if required.issubset(img_tags):
                 matches.append(filename)
         return {"matches": matches, "suggestions": []}
@@ -1052,6 +1052,7 @@ def tag_stats(
     tag_banned: dict[str, int] = {}
     tag_kept: dict[str, int] = {}
     tag_fav: dict[str, int] = {}
+    tag_display: dict[str, str] = {}
     total_banned = 0
     total_kept = 0
     total_fav = 0
@@ -1060,16 +1061,25 @@ def tag_stats(
         if purity_set and meta.get("purity", "sfw") not in purity_set:
             continue
         file_tags = meta.get("tags", [])
+        normalized_tags: list[str] = []
+        seen_tags: set[str] = set()
+        for raw_tag in file_tags:
+            key = normalize_tag(raw_tag)
+            if not key or key in seen_tags:
+                continue
+            seen_tags.add(key)
+            normalized_tags.append(key)
+            tag_display.setdefault(key, str(raw_tag).strip())
         if filename in blacklisted:
             total_banned += 1
-            for t in file_tags:
+            for t in normalized_tags:
                 tag_banned[t] = tag_banned.get(t, 0) + 1
         else:
             total_kept += 1
             is_fav = filename in favs
             if is_fav:
                 total_fav += 1
-            for t in file_tags:
+            for t in normalized_tags:
                 tag_kept[t] = tag_kept.get(t, 0) + 1
                 if is_fav:
                     tag_fav[t] = tag_fav.get(t, 0) + 1
@@ -1084,18 +1094,16 @@ def tag_stats(
     if tags:
         query_tags = [t.strip() for t in tags.split(",") if t.strip()]
         # Case-insensitive lookup map
-        lower_map: dict[str, str] = {}
-        for t in set(tag_banned) | set(tag_kept):
-            lower_map.setdefault(t.lower(), t)
         results = []
         for qt in query_tags:
-            canonical = lower_map.get(qt.lower(), qt)
+            key = normalize_tag(qt)
+            canonical = tag_display.get(key, qt.strip())
             results.append(
                 {
                     "tag": canonical,
-                    "banned": tag_banned.get(canonical, 0),
-                    "kept": tag_kept.get(canonical, 0),
-                    "favorites": tag_fav.get(canonical, 0),
+                    "banned": tag_banned.get(key, 0),
+                    "kept": tag_kept.get(key, 0),
+                    "favorites": tag_fav.get(key, 0),
                 }
             )
         return {"tags": results, "summary": summary}
@@ -1103,17 +1111,14 @@ def tag_stats(
     # Mode: combo lookup
     if combo:
         combo_tags = [t.strip() for t in combo.split(",") if t.strip()]
-        lower_map_c: dict[str, str] = {}
-        for t in set(tag_banned) | set(tag_kept):
-            lower_map_c.setdefault(t.lower(), t)
-        canonical_combo = [lower_map_c.get(t.lower(), t) for t in combo_tags]
-        combo_lower = {t.lower() for t in canonical_combo}
+        canonical_combo = [tag_display.get(normalize_tag(t), t.strip()) for t in combo_tags]
+        combo_lower = {normalize_tag(t) for t in canonical_combo if normalize_tag(t)}
 
         combo_banned = 0
         combo_kept = 0
         combo_fav = 0
         for filename, meta in metadata.items():
-            file_tags_lower = {t.lower() for t in meta.get("tags", [])}
+            file_tags_lower = {normalize_tag(t) for t in meta.get("tags", []) if normalize_tag(t)}
             if combo_lower.issubset(file_tags_lower):
                 if filename in blacklisted:
                     combo_banned += 1
@@ -1148,7 +1153,7 @@ def tag_stats(
     for t, count in sorted_tags:
         results_top.append(
             {
-                "tag": t,
+                "tag": tag_display.get(t, t),
                 "banned": tag_banned.get(t, 0),
                 "kept": tag_kept.get(t, 0),
                 "favorites": tag_fav.get(t, 0),

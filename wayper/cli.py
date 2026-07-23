@@ -12,7 +12,7 @@ import click
 from .backend import notify, query_current
 from .config import load_config
 from .core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
-from .pool import count_images, favorites_dir, pool_dir, should_download
+from .pool import count_images, favorites_dir, list_images, pool_dir, should_download
 from .state import ALL_PURITIES, read_mode, toggle_base, toggle_purity, write_mode
 
 
@@ -439,11 +439,18 @@ def suggest(ctx, use_ai):
 
         metadata = load_metadata(config)
         blacklisted = {fn for _, fn in list_blacklist(config)}
+        favorites = {
+            image.name
+            for purity in ALL_PURITIES
+            for orientation in ("landscape", "portrait")
+            for image in list_images(favorites_dir(config, purity, orientation))
+        }
         results = suggest_tags_to_exclude(
             metadata,
             blacklisted,
             config.wallhaven.exclude_tags,
             config.wallhaven.exclude_combos,
+            favorites,
         )
         if use_json:
             click.echo(json_mod.dumps({"suggestions": results}, ensure_ascii=False, indent=2))
@@ -451,7 +458,10 @@ def suggest(ctx, use_ai):
             if results:
                 click.echo("Suggested exclusions (by ban frequency):")
                 for s in results:
-                    click.echo(f"  {s['tag']} (count: {s['count']}, ratio: {s['ratio']}x)")
+                    click.echo(
+                        f"  {s['tag']} ({s['banned']}/{s['kept']}/{s['favorites']}, "
+                        f"net benefit: {s['net_benefit']:g})"
+                    )
             else:
                 click.echo("No suggestions at this time.")
 

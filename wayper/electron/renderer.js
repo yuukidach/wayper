@@ -2101,6 +2101,14 @@ function renderImages() {
     setTimeout(updateGridMetrics, 100);
 }
 
+function suggestionEvidence(item) {
+    const stats = item?.stats || item || {};
+    const banned = stats.banned ?? stats.ban_count ?? item?.count ?? 0;
+    const kept = stats.kept ?? stats.kept_count ?? 0;
+    const favorites = stats.favorites ?? stats.fav_count ?? 0;
+    return `${banned}/${kept}/${favorites}`;
+}
+
 function createBlocklistSuggestionsBar() {
     const tagSuggestions = appState.tagSuggestions || [];
     const comboSuggestions = appState.comboSuggestions || [];
@@ -2123,6 +2131,11 @@ function createBlocklistSuggestionsBar() {
     label.className = 'suggestion-bar-label';
     label.textContent = 'Suggested exclusions';
     header.appendChild(label);
+    const legend = document.createElement('span');
+    legend.className = 'suggestion-evidence-legend';
+    legend.textContent = 'B/K/F';
+    legend.title = 'Counts are Banned / Kept / Favorites';
+    header.appendChild(legend);
 
     const aiBtn = document.createElement('button');
     aiBtn.className = 'agent-analyze-btn';
@@ -2161,7 +2174,7 @@ function createBlocklistSuggestionsBar() {
     for (const s of tagSuggestions) {
         const chip = document.createElement('span');
         chip.className = 'suggestion-chip';
-        chip.title = `Review "${s.tag}" in blocklist`;
+        chip.title = `Review "${s.tag}" in blocklist — banned / kept / favorites`;
         chip.onclick = () => enterTagReview(s.tag);
         chip.appendChild(createTypeBadge('tag'));
         const tagLabel = document.createElement('span');
@@ -2169,7 +2182,8 @@ function createBlocklistSuggestionsBar() {
         tagLabel.textContent = s.tag;
         const count = document.createElement('span');
         count.className = 'suggestion-chip-count';
-        count.textContent = `${s.count}`;
+        count.textContent = suggestionEvidence(s);
+        count.title = 'Banned / kept / favorites';
         chip.appendChild(tagLabel);
         chip.appendChild(count);
         bar.appendChild(chip);
@@ -2178,7 +2192,7 @@ function createBlocklistSuggestionsBar() {
     for (const c of comboSuggestions) {
         const chip = document.createElement('span');
         chip.className = 'suggestion-chip combo-chip';
-        chip.title = `Review combo "${c.tags.join(' + ')}" — ${Math.round(c.precision * 100)}% precision`;
+        chip.title = `Review combo "${c.tags.join(' + ')}" — ${Math.round(c.precision * 100)}% precision — banned / kept / favorites`;
         chip.onclick = () => enterTagReview([...c.tags]);
         chip.appendChild(createTypeBadge('combo'));
         const tagLabel = document.createElement('span');
@@ -2186,7 +2200,8 @@ function createBlocklistSuggestionsBar() {
         tagLabel.textContent = c.tags.join(' + ');
         const count = document.createElement('span');
         count.className = 'suggestion-chip-count';
-        count.textContent = `${c.count}`;
+        count.textContent = suggestionEvidence(c);
+        count.title = 'Banned / kept / favorites';
         chip.appendChild(tagLabel);
         chip.appendChild(count);
         bar.appendChild(chip);
@@ -2350,7 +2365,7 @@ function renderBlocklistView() {
             for (const r of appState.comboRefinements) {
                 const chip = document.createElement('span');
                 chip.className = 'suggestion-chip';
-                chip.title = `Add "${r.tag}" to combo`;
+                chip.title = `Add "${r.tag}" to combo — banned / kept / favorites`;
                 chip.onclick = async () => {
                     appState.comboContext = [...ctx, r.tag];
                     appState.reviewingTag = r;
@@ -2361,7 +2376,8 @@ function renderBlocklistView() {
                 tagLabel.textContent = r.tag;
                 const count = document.createElement('span');
                 count.className = 'suggestion-chip-count';
-                count.textContent = `${r.count}`;
+                count.textContent = suggestionEvidence(r);
+                count.title = 'Banned / kept / favorites';
                 chip.appendChild(tagLabel);
                 chip.appendChild(count);
                 refBar.appendChild(chip);
@@ -2488,6 +2504,13 @@ function renderBlocklistView() {
                     confSpan.className = `ai-confidence ai-confidence-${validConf}`;
                     confSpan.textContent = s.confidence;
                     info.appendChild(confSpan);
+                }
+                if (s.stats) {
+                    const statsSpan = document.createElement('span');
+                    statsSpan.className = 'ai-suggestion-stats';
+                    statsSpan.textContent = suggestionEvidence(s.stats);
+                    statsSpan.title = 'Banned / kept / favorites';
+                    info.appendChild(statsSpan);
                 }
                 const reasonSpan = document.createElement('span');
                 reasonSpan.className = 'ai-suggestion-reason';

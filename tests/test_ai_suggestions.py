@@ -10,8 +10,10 @@ from wayper.ai_suggestions import (
     _AI_SUGGESTION_SCHEMA,
     _CODEX_MCP_TOOLS,
     AISuggestionError,
+    _filter_ai_suggestions,
     _invoke_codex,
 )
+from wayper.config import WayperConfig
 
 
 class _FakeProcess:
@@ -34,6 +36,64 @@ class _FakeProcess:
 
 
 class CodexSuggestionTest(unittest.TestCase):
+    def test_filter_drops_broad_positive_tag_and_combo(self) -> None:
+        metadata = {
+            **{f"ban{index}.jpg": {"tags": ["women"], "purity": "sfw"} for index in range(100)},
+            **{f"keep{index}.jpg": {"tags": ["woman"], "purity": "sfw"} for index in range(20)},
+        }
+        result = _filter_ai_suggestions(
+            {
+                "analysis": "",
+                "add_suggestions": [
+                    {
+                        "type": "tag",
+                        "tags": ["women"],
+                        "reason": "broad",
+                        "confidence": "high",
+                    },
+                    {
+                        "type": "combo",
+                        "tags": ["women", "portrait"],
+                        "reason": "broad",
+                        "confidence": "high",
+                    },
+                ],
+                "remove_suggestions": [],
+            },
+            metadata,
+            {f"ban{index}.jpg" for index in range(100)},
+            set(),
+            WayperConfig(),
+        )
+
+        self.assertEqual(result["add_suggestions"], [])
+
+    def test_filter_drops_layout_tag(self) -> None:
+        metadata = {
+            **{f"ban{index}.jpg": {"tags": ["portrait"], "purity": "sfw"} for index in range(10)},
+            **{f"keep{index}.jpg": {"tags": ["landscape"], "purity": "sfw"} for index in range(40)},
+        }
+        result = _filter_ai_suggestions(
+            {
+                "analysis": "",
+                "add_suggestions": [
+                    {
+                        "type": "tag",
+                        "tags": ["portrait"],
+                        "reason": "layout",
+                        "confidence": "high",
+                    }
+                ],
+                "remove_suggestions": [],
+            },
+            metadata,
+            {f"ban{index}.jpg" for index in range(10)},
+            set(),
+            WayperConfig(),
+        )
+
+        self.assertEqual(result["add_suggestions"], [])
+
     def test_invoke_codex_uses_structured_output_and_scoped_mcp_tools(self) -> None:
         response = {
             "analysis": "pattern",

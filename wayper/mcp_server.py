@@ -21,6 +21,7 @@ from .pool import (
     pool_dir,
 )
 from .state import ALL_PURITIES, read_mode, write_mode
+from .suggestions import normalize_tag
 
 mcp = FastMCP("wayper")
 
@@ -258,16 +259,24 @@ def _build_tag_counts(
         if purity_set and meta.get("purity", "sfw") not in purity_set:
             continue
         file_tags = meta.get("tags", [])
+        normalized_tags: list[str] = []
+        seen_tags: set[str] = set()
+        for raw_tag in file_tags:
+            key = normalize_tag(raw_tag)
+            if not key or key in seen_tags:
+                continue
+            seen_tags.add(key)
+            normalized_tags.append(key)
         if filename in blacklisted:
             total_banned += 1
-            for t in file_tags:
+            for t in normalized_tags:
                 tag_banned[t] = tag_banned.get(t, 0) + 1
         else:
             total_kept += 1
             is_fav = filename in fav_files
             if is_fav:
                 total_fav += 1
-            for t in file_tags:
+            for t in normalized_tags:
                 tag_kept[t] = tag_kept.get(t, 0) + 1
                 if is_fav:
                     tag_fav[t] = tag_fav.get(t, 0) + 1
@@ -323,14 +332,10 @@ def tag_stats_lookup(tags: str, purity: str | None = None) -> dict:
     tag_banned, tag_kept, tag_fav, summary = _build_tag_counts(purity)
 
     # Case-insensitive lookup
-    lower_map: dict[str, str] = {}
-    for t in set(tag_banned) | set(tag_kept):
-        lower_map.setdefault(t.lower(), t)
-
     query_tags = [t.strip() for t in tags.split(",") if t.strip()]
     results = []
     for qt in query_tags:
-        canonical = lower_map.get(qt.lower(), qt)
+        canonical = normalize_tag(qt)
         results.append(
             {
                 "tag": canonical,
@@ -360,13 +365,13 @@ def tag_stats_combo(combo: str, purity: str | None = None) -> dict:
         purity_set = {p.strip().lower() for p in purity.split(",") if p.strip()}
 
     combo_tags = [t.strip() for t in combo.split(",") if t.strip()]
-    combo_lower = {t.lower() for t in combo_tags}
+    combo_lower = {normalize_tag(t) for t in combo_tags if normalize_tag(t)}
 
     combo_banned = combo_kept = combo_fav = 0
     for filename, meta in metadata.items():
         if purity_set and meta.get("purity", "sfw") not in purity_set:
             continue
-        file_tags_lower = {t.lower() for t in meta.get("tags", [])}
+        file_tags_lower = {normalize_tag(t) for t in meta.get("tags", []) if normalize_tag(t)}
         if combo_lower.issubset(file_tags_lower):
             if filename in blacklisted:
                 combo_banned += 1
@@ -412,7 +417,7 @@ def uploader_stats_lookup(uploaders: str, purity: str | None = None) -> dict:
         uploader = str(meta.get("uploader", "")).strip()
         if not uploader:
             continue
-        canonical = lower_map.setdefault(uploader.lower(), uploader)
+        canonical = lower_map.setdefault(uploader.casefold(), uploader)
         row = counts.setdefault(
             canonical,
             {"uploader": canonical, "banned": 0, "kept": 0, "favorites": 0},
@@ -427,7 +432,7 @@ def uploader_stats_lookup(uploaders: str, purity: str | None = None) -> dict:
     query_uploaders = [u.strip() for u in uploaders.split(",") if u.strip()]
     results = []
     for uploader in query_uploaders:
-        canonical = lower_map.get(uploader.lower(), uploader)
+        canonical = lower_map.get(uploader.casefold(), uploader)
         row = counts.get(
             canonical,
             {"uploader": canonical, "banned": 0, "kept": 0, "favorites": 0},
