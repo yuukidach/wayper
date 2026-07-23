@@ -1193,6 +1193,102 @@ main {
   margin-bottom: 2px;
 }
 
+/* The blocklist suggestions are a small dashboard rather than a loose row of
+   pills.  Keep every signal in a predictable column so short tags and long
+   combos do not produce a ragged layout. */
+.blocklist-suggestions {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  align-self: start;
+  justify-content: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px 16px;
+}
+
+.blocklist-suggestions .suggestion-bar-header {
+  width: 100%;
+  flex: 0 0 auto;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 0;
+}
+
+.suggestion-bar-title,
+.suggestion-bar-meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.suggestion-bar-title {
+  gap: 10px;
+}
+
+.suggestion-bar-subtitle {
+  overflow: hidden;
+  color: var(--overlay1);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggestion-bar-meta {
+  flex-shrink: 0;
+  gap: 9px;
+}
+
+.suggestion-group {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.suggestion-group + .suggestion-group {
+  padding-top: 11px;
+  border-top: 1px solid rgba(137, 180, 250, 0.11);
+}
+
+.suggestion-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 16px;
+}
+
+.suggestion-group-heading::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(137, 180, 250, 0.09);
+}
+
+.suggestion-group-label {
+  color: var(--subtext0);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+}
+
+.suggestion-group-count {
+  flex-shrink: 0;
+  color: var(--overlay0);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.suggestion-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
 .suggestion-bar-label {
   font-size: 10px;
   text-transform: uppercase;
@@ -1266,6 +1362,81 @@ main {
 .suggestion-chip.combo-chip:hover {
   border-color: rgba(137, 180, 250, 0.3);
   background: rgba(137, 180, 250, 0.1);
+}
+
+.blocklist-suggestions .suggestion-chip {
+  width: 100%;
+  min-width: 0;
+  min-height: 35px;
+  justify-content: flex-start;
+  padding: 6px 9px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.blocklist-suggestions .suggestion-chip .search-type-badge {
+  display: inline-flex;
+  flex: 0 0 42px;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  margin-right: 0;
+  text-align: center;
+}
+
+.blocklist-suggestions .suggestion-chip-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blocklist-suggestions .suggestion-chip-count {
+  flex: 0 0 auto;
+  min-width: 48px;
+  padding-left: 5px;
+  padding-right: 5px;
+  text-align: center;
+}
+
+.blocklist-suggestions .suggestion-chip:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
+@media (max-width: 1100px) {
+  .suggestion-chip-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .suggestion-bar-subtitle {
+    display: none;
+  }
+
+  .suggestion-chip-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 460px) {
+  .blocklist-suggestions {
+    padding: 12px;
+  }
+
+  .blocklist-suggestions .suggestion-bar-header {
+    align-items: flex-start;
+  }
+
+  .suggestion-bar-meta {
+    gap: 6px;
+  }
+
+  .suggestion-chip-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .combo-refinements {
@@ -1567,10 +1738,12 @@ footer {
   border: 1px solid var(--surface1);
   border-radius: 10px;
   padding: 3px;
-  width: fit-content;
+  width: min(100%, 460px);
 }
 
 .blocklist-tab {
+  flex: 1 1 0;
+  min-width: 0;
   padding: 6px 16px;
   background: transparent;
   border: none;
@@ -1688,6 +1861,11 @@ footer {
   border-color: var(--green);
   color: var(--green);
   background: rgba(166, 227, 161, 0.08);
+}
+
+.blocklist-scroll-sentinel {
+  grid-column: 1 / -1;
+  height: 1px;
 }
 
 /* ---------- Lightbox ---------- */
@@ -2305,6 +2483,251 @@ footer {
 
 .ai-close-btn:hover {
   background: var(--surface1);
+}
+
+/* ---------- Metadata Model Review ---------- */
+
+.model-review-panel {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background: rgba(137, 180, 250, 0.045);
+  border: 1px solid rgba(137, 180, 250, 0.16);
+  border-radius: var(--radius-lg);
+}
+
+.model-review-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.model-review-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.model-review-title {
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.model-review-subtitle,
+.model-review-count,
+.model-review-learning,
+.model-review-empty {
+  color: var(--overlay1);
+  font-size: 11px;
+}
+
+.model-review-count {
+  color: var(--overlay0);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.model-review-learning {
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-review-empty {
+  padding: 2px 0;
+}
+
+.model-review-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(285px, 1fr));
+  gap: 8px;
+}
+
+.model-review-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  padding: 8px;
+  background: rgba(49, 50, 68, 0.46);
+  border: 1px solid rgba(69, 71, 90, 0.65);
+  border-radius: var(--radius);
+  transition: opacity var(--duration) var(--ease), border-color var(--duration) var(--ease);
+}
+
+.model-review-row:hover {
+  border-color: rgba(137, 180, 250, 0.28);
+}
+
+.model-review-row.is-busy {
+  opacity: 0.58;
+}
+
+.model-review-thumbnail-button {
+  width: 88px;
+  height: 66px;
+  align-self: center;
+  overflow: hidden;
+  padding: 0;
+  background: var(--surface0);
+  border-color: rgba(137, 180, 250, 0.18);
+  border-radius: 6px;
+}
+
+.model-review-thumbnail-button:hover {
+  border-color: rgba(137, 180, 250, 0.48);
+}
+
+.model-review-thumbnail {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 5px;
+}
+
+.model-review-thumbnail.missing {
+  opacity: 0.35;
+}
+
+.model-review-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-review-item-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.model-review-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--subtext1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-review-probability {
+  flex-shrink: 0;
+  color: var(--peach);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.model-review-explanation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 18px;
+  color: var(--overlay1);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.model-review-explanation-label {
+  color: var(--overlay0);
+  margin-right: 1px;
+}
+
+.model-review-feature {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 5px;
+  color: var(--subtext0);
+  background: rgba(137, 180, 250, 0.08);
+  border: 1px solid rgba(137, 180, 250, 0.13);
+  border-radius: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-review-feature.combo {
+  color: var(--blue);
+  background: rgba(137, 180, 250, 0.13);
+}
+
+.model-review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+  margin-top: auto;
+}
+
+.model-review-actions button {
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 10px;
+}
+
+.model-review-preview {
+  color: var(--blue);
+  background: rgba(137, 180, 250, 0.08);
+  border-color: rgba(137, 180, 250, 0.2);
+}
+
+.model-review-preview:hover {
+  color: var(--blue);
+  background: rgba(137, 180, 250, 0.16);
+  border-color: rgba(137, 180, 250, 0.36);
+}
+
+.model-review-keep {
+  color: var(--green);
+  background: rgba(166, 227, 161, 0.08);
+  border-color: rgba(166, 227, 161, 0.2);
+}
+
+.model-review-keep:hover {
+  color: var(--green);
+  background: rgba(166, 227, 161, 0.16);
+  border-color: rgba(166, 227, 161, 0.36);
+}
+
+.model-review-ban {
+  color: var(--red);
+  background: rgba(243, 139, 168, 0.08);
+  border-color: rgba(243, 139, 168, 0.2);
+}
+
+.model-review-ban:hover {
+  color: var(--red);
+  background: rgba(243, 139, 168, 0.16);
+  border-color: rgba(243, 139, 168, 0.36);
+}
+
+@media (max-width: 560px) {
+  .model-review-header,
+  .model-review-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .model-review-learning {
+    max-width: 100%;
+    text-align: left;
+  }
 }
 
 /* ---------- Accessibility ---------- */

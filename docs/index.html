@@ -368,10 +368,17 @@ wayper unban                # undo last ban
 wayper mode                 # toggle sfw↔nsfw (preserves sketchy)
 wayper mode sketchy         # toggle sketchy on/off
 wayper mode sfw,sketchy     # set exact purity combination
+wayper model train         # train local tag + controlled-combo preference model
+wayper model score --tags "tag1,tag2"  # explain a local dislike score
+wayper model status        # inspect local model validation
 wayper status               # show current state
 wayper-gui                  # GUI app
 wayper setup                # install .desktop entry (Linux)
 wayper --json status        # machine-readable output</code></pre>
+  <p><code>wayper model train</code> stays local and never auto-deletes. Open Blocklist to
+  review high-confidence model candidates; Ban uses the normal system-trash flow and Keep
+  becomes positive feedback. Preview lets you inspect and zoom the full image before deciding.
+  Wayper refreshes locally after enough new feedback.</p>
 </section>
 
 <section id="browse">

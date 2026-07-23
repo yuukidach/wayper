@@ -54,6 +54,7 @@ let appState = {
     view: 'grid', // grid, settings
     blocklistTab: 'recoverable', // recoverable, blocked
     blocklistData: null, // cached blocklist data
+    blocklistPager: WayperBlocklistPager.createState(),
     tagSuggestions: null, // tag exclusion suggestions
     comboSuggestions: null, // auto-discovered combo exclusion suggestions
     tagSuggestionsKey: null, // current purity/exclusion context for suggestions
@@ -66,6 +67,8 @@ let appState = {
     aiLoading: false,              // Whether AI analysis is in progress
     aiStartTime: null,             // Timestamp when AI analysis started
     aiTimer: null,                 // Interval ID for elapsed time updates
+    preferenceSuggestions: null,   // Local metadata-model image review candidates
+    preferenceSuggestionRequestId: 0, // Invalidates stale model-review responses
     updateInfo: null,              // Latest app update check payload
 
     // Search
@@ -91,6 +94,12 @@ let appState = {
 
 let observer = null;
 let sentinel = null;
+let blocklistObserver = null;
+let blocklistSentinel = null;
+const PREFERENCE_REVIEW_LIMIT = 8;
+const BLOCKLIST_PAGE_SIZE = WayperBlocklistPager.DEFAULT_PAGE_SIZE;
+const blocklistDateFormatter = new Intl.DateTimeFormat();
+const blocklistTimeFormatter = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' });
 
 // Global Loader
 const loader = document.createElement('div');
@@ -201,6 +210,7 @@ async function init() {
     }
     setupEventListeners();
     setupInfiniteScroll();
+    setupBlocklistInfiniteScroll();
 
     // Resize listener for grid layout
     window.addEventListener('resize', debounce(() => {
@@ -330,18 +340,33 @@ function handleGlobalKeydown(e) {
                 return;
             case 'Enter':
                 e.preventDefault();
-                if (lightboxImg) { setWallpaper(lightboxImg.path); closeLightbox(); }
+                if (lightboxImg && !lightboxImg.reviewOnly) {
+                    setWallpaper(lightboxImg.path);
+                    closeLightbox();
+                }
                 return;
             case ' ':
                 e.preventDefault();
                 closeLightbox();
                 return;
             case 'f':
-                if (lightboxImg) { toggleFavoriteImage(lightboxImg.path); closeLightbox(); }
+                if (lightboxImg && !lightboxImg.reviewOnly) {
+                    toggleFavoriteImage(lightboxImg.path);
+                    closeLightbox();
+                }
                 return;
             case 'x':
+            case 'X':
             case 'Delete':
-                if (lightboxImg) { banImage(lightboxImg.path); closeLightbox(); }
+                if (lightboxImg) {
+                    e.preventDefault();
+                    if (lightboxImg.reviewOnly) {
+                        void banLightboxReviewSuggestion();
+                    } else {
+                        banImage(lightboxImg.path);
+                        closeLightbox();
+                    }
+                }
                 return;
             case 'o':
                 if (lightboxImg) openWallhavenUrl(lightboxImg.name);
@@ -447,14 +472,12 @@ function handleGlobalKeydown(e) {
             break;
         case '[':
             if (appState.mode === 'trash') {
-                appState.blocklistTab = 'recoverable';
-                renderBlocklistView();
+                selectBlocklistTab('recoverable');
             }
             break;
         case ']':
             if (appState.mode === 'trash') {
-                appState.blocklistTab = 'blocked';
-                renderBlocklistView();
+                selectBlocklistTab('blocked');
             }
             break;
         case 'Enter':
@@ -743,6 +766,37 @@ async function fetchTagSuggestions({ render = false, requestId = null } = {}) {
         return true;
     } catch (e) {
         console.error('Failed to fetch tag suggestions:', e);
+        return false;
+    }
+}
+
+async function fetchPreferenceSuggestions({ orient = appState.currentOrient, requestId = null } = {}) {
+    const preferenceRequestId = ++appState.preferenceSuggestionRequestId;
+    const purities = [...appState.purity];
+    try {
+        const data = await WayperApi.preferenceSuggestions(
+            purities,
+            orient,
+            PREFERENCE_REVIEW_LIMIT,
+        );
+        if (
+            preferenceRequestId !== appState.preferenceSuggestionRequestId
+            || appState.mode !== 'trash'
+            || (requestId !== null && requestId !== appState.imageRequestId)
+        ) {
+            return false;
+        }
+        appState.preferenceSuggestions = data;
+        return true;
+    } catch (e) {
+        if (
+            preferenceRequestId === appState.preferenceSuggestionRequestId
+            && appState.mode === 'trash'
+            && (requestId === null || requestId === appState.imageRequestId)
+        ) {
+            appState.preferenceSuggestions = null;
+        }
+        console.error('Failed to fetch model review suggestions:', e);
         return false;
     }
 }
@@ -1160,9 +1214,9 @@ async function toggleFavoriteImage(path) {
     }
 }
 
-async function banImage(path) {
+async function banImage(path, { preserveView = false } = {}) {
     invalidateBlocklistSuggestions();
-    removeImageFromState(path);
+    removeImageFromState(path, { renderEmpty: !preserveView });
     // Update local counts so fetchStatus won't detect a "change" and trigger full refresh
     if (appState.status) {
         if (appState.mode === 'favorites') appState.status.favorites_count--;
@@ -1180,9 +1234,11 @@ async function banImage(path) {
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         applyMonitorCurrentImages(data.replacement_images);
+        return true;
     } catch (e) {
         console.error("Ban failed", e);
         refreshImages();
+        return false;
     }
 }
 
@@ -1201,6 +1257,7 @@ async function undoBan() {
 let searchDebounceTimer = null;
 let searchHighlightIndex = -1;
 let searchAbortController = null;
+const pendingUnblocks = new Set();
 
 function onSearchInput() {
     const query = els.searchInput.value.trim();
@@ -1491,9 +1548,24 @@ function updateDropdownHighlight(items) {
 }
 
 async function fetchBlocklist() {
+    const previousEntries = appState.blocklistData?.entries;
+    const preservePager = appState.blocklistPager.tab === 'blocked'
+        && appState.blocklistPager.sourceEntries === previousEntries
+        && appState.blocklistPager.searchMatches === appState.searchMatches
+        && appState.blocklistTab === 'blocked';
     try {
         const res = await fetch(`${API_URL}/api/blocklist`);
-        appState.blocklistData = await res.json();
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        data.entries = Array.isArray(data.entries) ? data.entries : [];
+        appState.blocklistData = data;
+        if (preservePager) {
+            WayperBlocklistPager.replaceSource(
+                appState.blocklistPager,
+                data.entries,
+                data.entries.length,
+            );
+        }
         return appState.blocklistData;
     } catch (e) {
         console.error("Failed to fetch blocklist", e);
@@ -1503,25 +1575,46 @@ async function fetchBlocklist() {
 }
 
 async function unblockImage(filename) {
-    invalidateBlocklistSuggestions();
+    if (pendingUnblocks.has(filename)) return;
+    pendingUnblocks.add(filename);
     try {
-        await fetch(`${API_URL}/api/blocklist/remove`, {
+        const res = await fetch(`${API_URL}/api/blocklist/remove`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ filename })
         });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const result = await res.json();
+        if (!result.removed) return;
+
+        invalidateBlocklistSuggestions();
         // Remove from local state
         if (appState.blocklistData) {
-            appState.blocklistData.entries = appState.blocklistData.entries.filter(e => e.filename !== filename);
-            appState.blocklistData.total--;
+            const previousEntries = appState.blocklistData.entries;
+            const entries = previousEntries.filter(e => e.filename !== filename);
+            appState.blocklistData.entries = entries;
+            appState.blocklistData.total = entries.length;
+            // Keep the user's place in a paged All Blocked list and let the next
+            // hidden entry fill the removed row.
+            if (appState.blocklistPager.sourceEntries === previousEntries) {
+                WayperBlocklistPager.replaceSource(
+                    appState.blocklistPager,
+                    entries,
+                    entries.length,
+                );
+            }
         }
         renderBlocklistView();
-        if (appState.status) {
-            appState.status.blocklist_count--;
+        if (appState.searchMatches) updateSearchCount();
+        if (appState.status?.blocklist_count !== undefined) {
+            appState.status.blocklist_count = appState.blocklistData?.total
+                ?? Math.max(0, appState.status.blocklist_count - 1);
             updateStatusUI();
         }
     } catch (e) {
         console.error("Unblock failed", e);
+    } finally {
+        pendingUnblocks.delete(filename);
     }
 }
 
@@ -1546,7 +1639,7 @@ async function restoreImage(path) {
     }
 }
 
-function removeImageFromState(path) {
+function removeImageFromState(path, { renderEmpty = true } = {}) {
     // Also remove from allImages (unfiltered list)
     const allIdx = appState.allImages.findIndex(img => img.path === path);
     if (allIdx !== -1) appState.allImages.splice(allIdx, 1);
@@ -1577,7 +1670,7 @@ function removeImageFromState(path) {
         card.remove();
     }
 
-    if (appState.images.length === 0) {
+    if (renderEmpty && appState.images.length === 0) {
         renderImages(); // Show empty state
     }
 }
@@ -1842,7 +1935,12 @@ async function refreshImages(preserveFocus = false) {
     console.log('[refresh] start', appState.mode, orient);
 
     if (appState.mode === 'trash') {
+        // Never leave candidates from a previous monitor/purity filter actionable while
+        // the matching model-review request is in flight.
+        appState.preferenceSuggestions = null;
+        els.wallpaperGrid.querySelector('.model-review-panel')?.remove();
         const suggestionsPromise = fetchTagSuggestions({ render: true, requestId });
+        const preferenceSuggestionsPromise = fetchPreferenceSuggestions({ orient, requestId });
         try {
             resetImagePaging();
             const [statusData, blocklistData, pageData] = await Promise.all([
@@ -1861,6 +1959,11 @@ async function refreshImages(preserveFocus = false) {
                 await applySearchFilter(preserveFocus);
                 renderBlocklistSuggestionsBar();
                 suggestionsPromise.catch(() => {});
+                preferenceSuggestionsPromise.then(updated => {
+                    if (updated && requestId === appState.imageRequestId && appState.mode === 'trash') {
+                        renderBlocklistView();
+                    }
+                });
             }
         } catch (e) { console.error(e); }
     } else {
@@ -2043,6 +2146,28 @@ function setupInfiniteScroll() {
     });
 }
 
+function setupBlocklistInfiniteScroll() {
+    blocklistSentinel = document.createElement('div');
+    blocklistSentinel.className = 'blocklist-scroll-sentinel';
+    blocklistSentinel.setAttribute('aria-hidden', 'true');
+
+    blocklistObserver = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+            loadMoreBlockedEntries();
+        }
+    }, {
+        root: null,
+        rootMargin: '600px',
+        threshold: 0.01,
+    });
+}
+
+function removeBlocklistSentinel() {
+    if (!blocklistSentinel) return;
+    blocklistObserver?.unobserve(blocklistSentinel);
+    blocklistSentinel.remove();
+}
+
 function renderMonitors() {
     els.monitorsList.innerHTML = '';
 
@@ -2082,6 +2207,7 @@ function renderImages() {
         return;
     }
 
+    removeBlocklistSentinel();
     els.wallpaperGrid.innerHTML = '';
     appState.currentBatchIndex = 0;
     _trashBannerShown = false;
@@ -2111,6 +2237,53 @@ function suggestionEvidence(item) {
     return `${banned}/${kept}/${favorites}`;
 }
 
+function createSuggestionChip({ type, label, title, onClick, evidence }) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = `suggestion-chip${type === 'combo' ? ' combo-chip' : ''}`;
+    chip.title = title;
+    chip.setAttribute('aria-label', title);
+    chip.onclick = onClick;
+    chip.appendChild(createTypeBadge(type));
+
+    const name = document.createElement('span');
+    name.className = 'suggestion-chip-name';
+    name.textContent = label;
+    chip.appendChild(name);
+
+    const count = document.createElement('span');
+    count.className = 'suggestion-chip-count';
+    count.textContent = evidence;
+    count.title = 'Banned / kept / favorites';
+    chip.appendChild(count);
+    return chip;
+}
+
+function createSuggestionGroup({ type, label, items, createChip }) {
+    if (!items.length) return null;
+
+    const group = document.createElement('section');
+    group.className = `suggestion-group suggestion-group-${type}`;
+
+    const heading = document.createElement('div');
+    heading.className = 'suggestion-group-heading';
+    const groupLabel = document.createElement('span');
+    groupLabel.className = 'suggestion-group-label';
+    groupLabel.textContent = label;
+    heading.appendChild(groupLabel);
+    const groupCount = document.createElement('span');
+    groupCount.className = 'suggestion-group-count';
+    groupCount.textContent = `${items.length} ${type}${items.length === 1 ? '' : 's'}`;
+    heading.appendChild(groupCount);
+    group.appendChild(heading);
+
+    const grid = document.createElement('div');
+    grid.className = 'suggestion-chip-grid';
+    for (const item of items) grid.appendChild(createChip(item));
+    group.appendChild(grid);
+    return group;
+}
+
 function createBlocklistSuggestionsBar() {
     const tagSuggestions = appState.tagSuggestions || [];
     const comboSuggestions = appState.comboSuggestions || [];
@@ -2129,18 +2302,30 @@ function createBlocklistSuggestionsBar() {
     bar.className = 'tag-suggestions-bar blocklist-suggestions';
     const header = document.createElement('div');
     header.className = 'suggestion-bar-header';
+    const title = document.createElement('div');
+    title.className = 'suggestion-bar-title';
     const label = document.createElement('span');
     label.className = 'suggestion-bar-label';
     label.textContent = 'Suggested exclusions';
-    header.appendChild(label);
+    title.appendChild(label);
+    const subtitle = document.createElement('span');
+    subtitle.className = 'suggestion-bar-subtitle';
+    subtitle.textContent = 'Click a signal to review matching wallpapers';
+    title.appendChild(subtitle);
+    header.appendChild(title);
+
+    const meta = document.createElement('div');
+    meta.className = 'suggestion-bar-meta';
     const legend = document.createElement('span');
     legend.className = 'suggestion-evidence-legend';
     legend.textContent = 'B/K/F';
     legend.title = 'Counts are Banned / Kept / Favorites';
-    header.appendChild(legend);
+    meta.appendChild(legend);
 
     const aiBtn = document.createElement('button');
     aiBtn.className = 'agent-analyze-btn';
+    aiBtn.type = 'button';
+    aiBtn.setAttribute('aria-label', 'Analyze exclusions with Codex');
     aiBtn.onclick = () => { if (!appState.aiLoading) fetchAISuggestions(); };
     if (appState.aiLoading) {
         aiBtn.disabled = true;
@@ -2170,44 +2355,40 @@ function createBlocklistSuggestionsBar() {
             aiBtn.appendChild(kbd);
         }
     }
-    header.appendChild(aiBtn);
+    meta.appendChild(aiBtn);
+    header.appendChild(meta);
     bar.appendChild(header);
 
-    for (const s of tagSuggestions) {
-        const chip = document.createElement('span');
-        chip.className = 'suggestion-chip';
-        chip.title = `Review "${s.tag}" in blocklist — banned / kept / favorites`;
-        chip.onclick = () => enterTagReview(s.tag);
-        chip.appendChild(createTypeBadge('tag'));
-        const tagLabel = document.createElement('span');
-        tagLabel.className = 'suggestion-chip-name';
-        tagLabel.textContent = s.tag;
-        const count = document.createElement('span');
-        count.className = 'suggestion-chip-count';
-        count.textContent = suggestionEvidence(s);
-        count.title = 'Banned / kept / favorites';
-        chip.appendChild(tagLabel);
-        chip.appendChild(count);
-        bar.appendChild(chip);
-    }
+    const tagGroup = createSuggestionGroup({
+        type: 'tag',
+        label: 'Tags',
+        items: tagSuggestions,
+        createChip: suggestion => createSuggestionChip({
+            type: 'tag',
+            label: suggestion.tag,
+            title: `Review "${suggestion.tag}" in blocklist — banned / kept / favorites`,
+            onClick: () => enterTagReview(suggestion.tag),
+            evidence: suggestionEvidence(suggestion),
+        }),
+    });
+    if (tagGroup) bar.appendChild(tagGroup);
 
-    for (const c of comboSuggestions) {
-        const chip = document.createElement('span');
-        chip.className = 'suggestion-chip combo-chip';
-        chip.title = `Review combo "${c.tags.join(' + ')}" — ${Math.round(c.precision * 100)}% precision — banned / kept / favorites`;
-        chip.onclick = () => enterTagReview([...c.tags]);
-        chip.appendChild(createTypeBadge('combo'));
-        const tagLabel = document.createElement('span');
-        tagLabel.className = 'suggestion-chip-name';
-        tagLabel.textContent = c.tags.join(' + ');
-        const count = document.createElement('span');
-        count.className = 'suggestion-chip-count';
-        count.textContent = suggestionEvidence(c);
-        count.title = 'Banned / kept / favorites';
-        chip.appendChild(tagLabel);
-        chip.appendChild(count);
-        bar.appendChild(chip);
-    }
+    const comboGroup = createSuggestionGroup({
+        type: 'combo',
+        label: 'Combos',
+        items: comboSuggestions,
+        createChip: suggestion => {
+            const label = suggestion.tags.join(' + ');
+            return createSuggestionChip({
+                type: 'combo',
+                label,
+                title: `Review combo "${label}" — ${Math.round(suggestion.precision * 100)}% precision — banned / kept / favorites`,
+                onClick: () => enterTagReview([...suggestion.tags]),
+                evidence: suggestionEvidence(suggestion),
+            });
+        },
+    });
+    if (comboGroup) bar.appendChild(comboGroup);
 
     return bar;
 }
@@ -2224,20 +2405,442 @@ function renderBlocklistSuggestionsBar() {
     if (bar) tabs.after(bar);
 }
 
+function preferenceReviewItems() {
+    const items = appState.preferenceSuggestions?.items;
+    if (!Array.isArray(items)) return [];
+    return items.filter(item => item && typeof item.path === 'string' && item.path);
+}
+
+function positivePreferenceContributions(contributions) {
+    if (!Array.isArray(contributions)) return [];
+    const features = [];
+    const seen = new Set();
+    for (const contribution of contributions) {
+        const feature = typeof contribution === 'string'
+            ? contribution
+            : String(contribution?.feature || '');
+        const weight = Number(contribution?.weight);
+        const isPositive = contribution?.direction === 'dislike'
+            || (Number.isFinite(weight) && weight > 0);
+        if (!isPositive || !feature || seen.has(feature)) continue;
+        seen.add(feature);
+        features.push(feature);
+    }
+    return features;
+}
+
+function formatPreferenceProbability(probability) {
+    const value = Number(probability);
+    if (!Number.isFinite(value)) return '—';
+    return `${Math.round(Math.min(1, Math.max(0, value)) * 100)}%`;
+}
+
+function preferenceLearningText(learning) {
+    if (!learning || typeof learning !== 'object') return '';
+    const pending = Number(learning.pending_feedback);
+    const minimum = Number(learning.minimum_feedback);
+    const messages = [];
+    if (Number.isFinite(pending) && pending > 0) {
+        if (Number.isFinite(minimum) && minimum > 0) {
+            messages.push(`${pending}/${minimum} feedback pending`);
+        } else {
+            messages.push(`${pending} feedback pending`);
+        }
+    }
+    if (learning.stale) {
+        messages.push('model update pending');
+    } else if (learning.due) {
+        messages.push('model refresh due');
+    }
+    return messages.join(' · ');
+}
+
+function removePreferenceSuggestion(path) {
+    const data = appState.preferenceSuggestions;
+    if (!data || !Array.isArray(data.items)) return;
+    appState.preferenceSuggestions = {
+        ...data,
+        items: data.items.filter(item => item?.path !== path),
+    };
+}
+
+function preferenceReviewRow(path) {
+    return [...document.querySelectorAll('.model-review-row')]
+        .find(row => row.dataset.path === path) || null;
+}
+
+function preferenceReviewCountText(count) {
+    return `${count} candidate${count === 1 ? '' : 's'}`;
+}
+
+function refreshPreferenceSuggestionDiagnostics() {
+    const data = appState.preferenceSuggestions;
+    if (!data || typeof data !== 'object') return;
+    const items = preferenceReviewItems();
+    const diagnostics = data.diagnostics && typeof data.diagnostics === 'object'
+        ? data.diagnostics
+        : {};
+    const bestProbability = items.reduce((best, item) => {
+        const probability = Number(item?.probability);
+        return Number.isFinite(probability) ? Math.max(best, probability) : best;
+    }, 0);
+    appState.preferenceSuggestions = {
+        ...data,
+        diagnostics: {
+            ...diagnostics,
+            candidate_count: items.length,
+            best_probability: items.length ? bestProbability : null,
+        },
+    };
+}
+
+function preferenceReviewEmptyText(data) {
+    const reviewThreshold = Number(data?.review_threshold);
+    const thresholdLabel = Number.isFinite(reviewThreshold)
+        ? formatPreferenceProbability(reviewThreshold)
+        : null;
+    const diagnostics = data?.diagnostics || {};
+    const bestProbability = Number(diagnostics.best_probability);
+    const bestLabel = Number.isFinite(bestProbability)
+        ? formatPreferenceProbability(bestProbability)
+        : null;
+    if (data?.status === 'untrained') {
+        return 'Train a local preference model to start reviewing candidates.';
+    }
+    if (thresholdLabel && bestLabel) {
+        return `No candidates above ${thresholdLabel}; closest score ${bestLabel}.`;
+    }
+    if (thresholdLabel) {
+        return `No candidates above ${thresholdLabel} for this monitor and purity.`;
+    }
+    return 'No likely-dislike candidates for this monitor and purity.';
+}
+
+function updatePreferenceReviewPanelAfterRemoval(path) {
+    const row = preferenceReviewRow(path);
+    const panel = row?.closest('.model-review-panel');
+    if (!row || !panel) return;
+
+    row.remove();
+    const remaining = preferenceReviewItems().length;
+    const count = panel.querySelector('.model-review-count');
+    if (count) count.textContent = preferenceReviewCountText(remaining);
+
+    if (remaining > 0) return;
+    panel.querySelector('.model-review-list')?.remove();
+    panel.querySelector('.model-review-empty')?.remove();
+    const empty = document.createElement('p');
+    empty.className = 'model-review-empty';
+    empty.textContent = preferenceReviewEmptyText(appState.preferenceSuggestions || {});
+    panel.appendChild(empty);
+}
+
+function updateBlocklistTabCounts() {
+    const tabs = els.wallpaperGrid.querySelector('.blocklist-tabs');
+    if (!tabs) return;
+    const counts = tabs.querySelectorAll('.tab-count');
+    if (counts.length < 2) return;
+
+    const matchesSearch = filename => (
+        !appState.searchMatches || appState.searchMatches.has(filename)
+    );
+    const blocklist = appState.blocklistData || {};
+    const recoverableCount = appState.searchMatches
+        ? appState.images.length
+        : Number.isFinite(Number(blocklist.recoverable_count))
+            ? Number(blocklist.recoverable_count)
+            : appState.images.length;
+    const blockedCount = (Array.isArray(blocklist.entries) ? blocklist.entries : [])
+        .filter(entry => matchesSearch(entry.filename)).length;
+    counts[0].textContent = recoverableCount;
+    counts[1].textContent = blockedCount;
+}
+
+function updateBlocklistStateAfterBan(item) {
+    const filename = String(item?.name || item?.path || '').split('/').pop();
+    if (!filename || !appState.blocklistData) return;
+
+    const entries = Array.isArray(appState.blocklistData.entries)
+        ? appState.blocklistData.entries
+        : [];
+    if (!entries.some(entry => entry.filename === filename)) {
+        appState.blocklistData.entries = [
+            {
+                filename,
+                timestamp: Math.floor(Date.now() / 1000),
+                recoverable: true,
+            },
+            ...entries,
+        ];
+        appState.blocklistData.total = appState.blocklistData.entries.length;
+        appState.blocklistData.recoverable_count = (
+            Number(appState.blocklistData.recoverable_count) || 0
+        ) + 1;
+    }
+    updateBlocklistTabCounts();
+    updateSearchCount();
+}
+
+function setPreferenceReviewActionBusy(row, busy) {
+    if (!row) return;
+    row.classList.toggle('is-busy', busy);
+    for (const button of row.querySelectorAll('button')) {
+        button.disabled = busy;
+    }
+}
+
+function previewPreferenceSuggestion(item, event) {
+    event?.preventDefault();
+    event?.stopPropagation();
+    // Model candidates are live pool images even while the surrounding view is Trash.
+    // Review mode exposes only the deliberate Ban/X action plus the Wallhaven link;
+    // it never exposes Set, Favorite, Restore, or gallery navigation.
+    showLightbox({ ...item, isTrash: false, reviewOnly: true });
+}
+
+function preserveModelReviewButtonKeyboard(event) {
+    if (event.key === 'Enter' || event.key === ' ') {
+        // The gallery's global shortcuts must not consume native button activation.
+        event.stopPropagation();
+    }
+}
+
+async function keepPreferenceSuggestion(item, row) {
+    setPreferenceReviewActionBusy(row, true);
+    try {
+        const result = await WayperApi.preferenceFeedback(item.path, 'keep');
+        if (result?.learning && appState.preferenceSuggestions) {
+            appState.preferenceSuggestions.learning = result.learning;
+        }
+        removePreferenceSuggestion(item.path);
+        renderBlocklistView();
+        await refreshImages();
+    } catch (e) {
+        console.error('Failed to record model review feedback:', e);
+        alert(`Could not keep ${item.name || 'this wallpaper'}: ${e.message}`);
+    } finally {
+        setPreferenceReviewActionBusy(row, false);
+    }
+}
+
+const preferenceBanInFlight = new Set();
+
+async function banPreferenceSuggestion(item, row) {
+    if (!item?.path || preferenceBanInFlight.has(item.path)) return false;
+    preferenceBanInFlight.add(item.path);
+    setPreferenceReviewActionBusy(row, true);
+    try {
+        // Keep all ban behavior (including trash and replacement wallpaper handling) in one path.
+        // Suppress the empty-grid fallback here: the review panel is a separate live
+        // surface and should lose one row, not rebuild the entire Blocklist view.
+        const banned = await banImage(item.path, { preserveView: true });
+        if (!banned) return false;
+        removePreferenceSuggestion(item.path);
+        refreshPreferenceSuggestionDiagnostics();
+        updateBlocklistStateAfterBan(item);
+        updatePreferenceReviewPanelAfterRemoval(item.path);
+        return true;
+    } catch (e) {
+        console.error('Failed to ban model review suggestion:', e);
+        return false;
+    } finally {
+        setPreferenceReviewActionBusy(row, false);
+        preferenceBanInFlight.delete(item.path);
+    }
+}
+
+async function banLightboxReviewSuggestion() {
+    const image = lightboxImg;
+    if (!image?.reviewOnly || preferenceBanInFlight.has(image.path)) return false;
+    const item = preferenceReviewItems().find(candidate => candidate.path === image.path) || image;
+    const row = preferenceReviewRow(item.path);
+    const banned = await banPreferenceSuggestion(item, row);
+    if (banned && lightboxImg === image) closeLightbox();
+    return banned;
+}
+
+function createPreferenceReviewPanel() {
+    const data = appState.preferenceSuggestions;
+    if (!data || typeof data !== 'object') return null;
+
+    const panel = document.createElement('section');
+    panel.className = 'model-review-panel';
+    panel.setAttribute('aria-label', 'Model review');
+
+    const header = document.createElement('div');
+    header.className = 'model-review-header';
+    const heading = document.createElement('div');
+    heading.className = 'model-review-heading';
+    const title = document.createElement('span');
+    title.className = 'model-review-title';
+    title.textContent = 'Model review';
+    heading.appendChild(title);
+    const subtitle = document.createElement('span');
+    subtitle.className = 'model-review-subtitle';
+    const reviewThreshold = Number(data.review_threshold);
+    const thresholdLabel = Number.isFinite(reviewThreshold)
+        ? formatPreferenceProbability(reviewThreshold)
+        : null;
+    subtitle.textContent = thresholdLabel
+        ? `Likely dislikes · ${thresholdLabel}+`
+        : 'Likely dislikes to review';
+    heading.appendChild(subtitle);
+    const count = document.createElement('span');
+    count.className = 'model-review-count';
+    count.textContent = preferenceReviewCountText(preferenceReviewItems().length);
+    heading.appendChild(count);
+    header.appendChild(heading);
+
+    const learningText = preferenceLearningText(data.learning);
+    if (learningText) {
+        const learning = document.createElement('span');
+        learning.className = 'model-review-learning';
+        learning.textContent = learningText;
+        header.appendChild(learning);
+    }
+    panel.appendChild(header);
+
+    const items = preferenceReviewItems();
+    if (!items.length) {
+        const empty = document.createElement('p');
+        empty.className = 'model-review-empty';
+        empty.textContent = preferenceReviewEmptyText(data);
+        panel.appendChild(empty);
+        return panel;
+    }
+
+    const list = document.createElement('div');
+    list.className = 'model-review-list';
+    for (const item of items) {
+        const row = document.createElement('article');
+        row.className = 'model-review-row';
+        row.dataset.path = item.path;
+
+        const thumbnailButton = document.createElement('button');
+        thumbnailButton.className = 'model-review-thumbnail-button';
+        thumbnailButton.type = 'button';
+        thumbnailButton.title = `Preview ${item.name || 'wallpaper'}`;
+        thumbnailButton.setAttribute(
+            'aria-label',
+            `Preview ${item.name || 'wallpaper'} full image`,
+        );
+        thumbnailButton.onclick = event => previewPreferenceSuggestion(item, event);
+        thumbnailButton.onkeydown = preserveModelReviewButtonKeyboard;
+
+        const thumbnail = document.createElement('img');
+        thumbnail.className = 'model-review-thumbnail';
+        thumbnail.src = thumbnailUrl(item.path);
+        thumbnail.loading = 'lazy';
+        thumbnail.decoding = 'async';
+        thumbnail.alt = '';
+        thumbnail.onerror = () => thumbnail.classList.add('missing');
+        thumbnailButton.appendChild(thumbnail);
+        row.appendChild(thumbnailButton);
+
+        const body = document.createElement('div');
+        body.className = 'model-review-body';
+        const itemHeader = document.createElement('div');
+        itemHeader.className = 'model-review-item-header';
+        const name = document.createElement('span');
+        name.className = 'model-review-name';
+        name.textContent = item.name || item.path;
+        name.title = item.path;
+        itemHeader.appendChild(name);
+        const probability = document.createElement('span');
+        probability.className = 'model-review-probability';
+        probability.textContent = `${formatPreferenceProbability(item.probability)} dislike`;
+        itemHeader.appendChild(probability);
+        body.appendChild(itemHeader);
+
+        const explanation = document.createElement('div');
+        explanation.className = 'model-review-explanation';
+        const evidence = positivePreferenceContributions(item.contributions);
+        if (evidence.length) {
+            const prefix = document.createElement('span');
+            prefix.className = 'model-review-explanation-label';
+            prefix.textContent = 'Matches';
+            explanation.appendChild(prefix);
+            for (const feature of evidence.slice(0, 3)) {
+                const chip = document.createElement('span');
+                chip.className = `model-review-feature${feature.includes(' + ') ? ' combo' : ''}`;
+                chip.textContent = feature;
+                explanation.appendChild(chip);
+            }
+        } else {
+            explanation.textContent = 'High score from the model’s overall history';
+        }
+        body.appendChild(explanation);
+
+        const actions = document.createElement('div');
+        actions.className = 'model-review-actions';
+        const preview = document.createElement('button');
+        preview.className = 'model-review-preview';
+        preview.type = 'button';
+        preview.textContent = 'Preview';
+        preview.setAttribute('aria-label', `Preview ${item.name || 'wallpaper'} full image`);
+        preview.onclick = event => previewPreferenceSuggestion(item, event);
+        preview.onkeydown = preserveModelReviewButtonKeyboard;
+        actions.appendChild(preview);
+        const keep = document.createElement('button');
+        keep.className = 'model-review-keep';
+        keep.type = 'button';
+        keep.textContent = 'Keep';
+        keep.onclick = event => {
+            event.stopPropagation();
+            keepPreferenceSuggestion(item, row);
+        };
+        keep.onkeydown = preserveModelReviewButtonKeyboard;
+        actions.appendChild(keep);
+        const ban = document.createElement('button');
+        ban.className = 'model-review-ban';
+        ban.type = 'button';
+        ban.textContent = 'Ban';
+        ban.onclick = event => {
+            event.stopPropagation();
+            banPreferenceSuggestion(item, row);
+        };
+        ban.onkeydown = preserveModelReviewButtonKeyboard;
+        actions.appendChild(ban);
+        body.appendChild(actions);
+
+        row.appendChild(body);
+        list.appendChild(row);
+    }
+    panel.appendChild(list);
+    return panel;
+}
+
+function selectBlocklistTab(tab) {
+    if (appState.blocklistTab === tab) return;
+    appState.blocklistTab = tab;
+    renderBlocklistView();
+}
+
+function filteredBlocklistEntries() {
+    const entries = appState.blocklistData?.entries || [];
+    return appState.searchMatches
+        ? entries.filter(entry => appState.searchMatches.has(entry.filename))
+        : entries;
+}
+
 function renderBlocklistView() {
     if (appState.mode !== 'trash') return;
 
     syncAISuggestionAppliedState();
+    removeBlocklistSentinel();
     if (sentinel.parentNode) sentinel.remove();
     observer?.unobserve(sentinel);
     els.wallpaperGrid.innerHTML = '';
     appState.currentBatchIndex = 0;
 
     const bl = appState.blocklistData || { entries: [], total: 0, recoverable_count: 0, images: [] };
-    const filteredEntries = appState.searchMatches
-        ? bl.entries.filter(e => appState.searchMatches.has(e.filename))
-        : bl.entries;
-    const recoverableCount = appState.images.length;
+    const sourceEntries = bl.entries || [];
+    const filteredEntries = filteredBlocklistEntries();
+    const recoverableCount = appState.searchMatches
+        ? appState.images.length
+        : Number.isFinite(Number(bl.recoverable_count))
+            ? Number(bl.recoverable_count)
+            : appState.images.length;
     const blockedCount = filteredEntries.length;
 
     // Auto-switch tab when search has results only in the other tab.
@@ -2251,6 +2854,12 @@ function renderBlocklistView() {
         }
     }
 
+    WayperBlocklistPager.sync(appState.blocklistPager, {
+        sourceEntries,
+        searchMatches: appState.searchMatches,
+        tab: appState.blocklistTab,
+    });
+
     // Tabs
     const tabs = document.createElement('div');
     tabs.className = 'blocklist-tabs';
@@ -2258,12 +2867,12 @@ function renderBlocklistView() {
     const tabRecoverable = document.createElement('button');
     tabRecoverable.className = `blocklist-tab ${appState.blocklistTab === 'recoverable' ? 'active' : ''}`;
     tabRecoverable.innerHTML = `Recoverable <span class="tab-count">${recoverableCount}</span><kbd>[</kbd>`;
-    tabRecoverable.onclick = () => { appState.blocklistTab = 'recoverable'; renderBlocklistView(); };
+    tabRecoverable.onclick = () => selectBlocklistTab('recoverable');
 
     const tabBlocked = document.createElement('button');
     tabBlocked.className = `blocklist-tab ${appState.blocklistTab === 'blocked' ? 'active' : ''}`;
     tabBlocked.innerHTML = `All Blocked <span class="tab-count">${blockedCount}</span><kbd>]</kbd>`;
-    tabBlocked.onclick = () => { appState.blocklistTab = 'blocked'; renderBlocklistView(); };
+    tabBlocked.onclick = () => selectBlocklistTab('blocked');
 
     tabs.appendChild(tabRecoverable);
     tabs.appendChild(tabBlocked);
@@ -2438,6 +3047,11 @@ function renderBlocklistView() {
         if (suggestionsBar) els.wallpaperGrid.appendChild(suggestionsBar);
     }
 
+    if (!appState.reviewingTag && !appState.reviewingUploader && !appState.searchQuery) {
+        const modelReview = createPreferenceReviewPanel();
+        if (modelReview) els.wallpaperGrid.appendChild(modelReview);
+    }
+
     // AI analysis results panel
     if (appState.aiSuggestions && !appState.aiSuggestions.error
         && !appState.reviewingTag && !appState.reviewingUploader && !appState.searchQuery) {
@@ -2581,13 +3195,36 @@ function renderBlockedList(entries) {
 
     const list = document.createElement('div');
     list.className = 'blocklist-list';
+    list.onclick = event => {
+        const button = event.target.closest('.entry-action');
+        if (!button || !list.contains(button)) return;
+        event.stopPropagation();
+        button.disabled = true;
+        unblockImage(button.dataset.filename).finally(() => {
+            if (button.isConnected) button.disabled = false;
+        });
+    };
 
-    entries.forEach(entry => {
+    const visibleCount = WayperBlocklistPager.visibleCount(
+        appState.blocklistPager,
+        entries.length,
+        BLOCKLIST_PAGE_SIZE,
+    );
+    appendBlockedListEntries(list, entries.slice(0, visibleCount));
+
+    els.wallpaperGrid.appendChild(list);
+    updateBlockedListSentinel(entries);
+}
+
+function appendBlockedListEntries(list, entries) {
+    const fragment = document.createDocumentFragment();
+
+    for (const entry of entries) {
         const row = document.createElement('div');
         row.className = 'blocklist-entry';
 
         const date = new Date(entry.timestamp * 1000);
-        const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const dateStr = `${blocklistDateFormatter.format(date)} ${blocklistTimeFormatter.format(date)}`;
 
         const statusClass = entry.recoverable ? 'recoverable' : 'permanent';
         const statusText = entry.recoverable ? 'In Trash' : 'Deleted';
@@ -2596,18 +3233,50 @@ function renderBlockedList(entries) {
             <span class="entry-name" title="${esc(entry.filename)}">${esc(entry.filename)}</span>
             <span class="entry-status ${statusClass}">${statusText}</span>
             <span class="entry-date">${esc(dateStr)}</span>
-            <button class="entry-action">Unblock</button>
+            <button class="entry-action" type="button">Unblock</button>
         `;
+        row.querySelector('.entry-action').dataset.filename = entry.filename;
+        fragment.appendChild(row);
+    }
 
-        row.querySelector('.entry-action').onclick = (e) => {
-            e.stopPropagation();
-            unblockImage(entry.filename);
-        };
+    list.appendChild(fragment);
+}
 
-        list.appendChild(row);
-    });
+function updateBlockedListSentinel(entries) {
+    removeBlocklistSentinel();
+    const visibleCount = Math.min(appState.blocklistPager.visibleCount, entries.length);
+    if (visibleCount >= entries.length) return;
 
-    els.wallpaperGrid.appendChild(list);
+    if (!blocklistObserver) setupBlocklistInfiniteScroll();
+    els.wallpaperGrid.appendChild(blocklistSentinel);
+    blocklistObserver.observe(blocklistSentinel);
+}
+
+function loadMoreBlockedEntries() {
+    if (appState.mode !== 'trash' || appState.blocklistTab !== 'blocked') return;
+
+    const list = els.wallpaperGrid.querySelector('.blocklist-list');
+    const entries = filteredBlocklistEntries();
+    const sourceEntries = appState.blocklistData?.entries;
+    if (
+        !list
+        || appState.blocklistPager.sourceEntries !== sourceEntries
+        || appState.blocklistPager.searchMatches !== appState.searchMatches
+        || appState.blocklistPager.tab !== appState.blocklistTab
+    ) {
+        renderBlocklistView();
+        return;
+    }
+
+    const { start, end } = WayperBlocklistPager.loadMore(
+        appState.blocklistPager,
+        entries.length,
+        BLOCKLIST_PAGE_SIZE,
+    );
+    if (end <= start) return;
+
+    appendBlockedListEntries(list, entries.slice(start, end));
+    updateBlockedListSentinel(entries);
 }
 
 function renderNextBatch() {
@@ -2887,7 +3556,8 @@ function syncGalleryToLightbox(path) {
 function showLightbox(img) {
     lightboxImg = img;
     syncGalleryToLightbox(img.path);
-    const isTrash = appState.mode === 'trash';
+    const reviewOnly = img.reviewOnly === true;
+    const isTrash = img.isTrash ?? appState.mode === 'trash';
 
     // If lightbox already exists, just swap the image (avoids DOM thrashing)
     if (lightboxEl) {
@@ -2904,7 +3574,11 @@ function showLightbox(img) {
             <img class="lightbox-image" src="${imageUrl(img.path)}" alt="">
         </div>
         <div class="lightbox-toolbar">
-            ${isTrash ? `
+            ${reviewOnly ? `
+                <button class="lb-btn" data-action="ban" title="Ban (X)">
+                    ${ICONS.ban(18)}<span>Ban</span><kbd>X</kbd>
+                </button>
+            ` : isTrash ? `
                 <button class="lb-btn" data-action="restore" title="Restore to Pool">
                     ${ICONS.restore(18)}<span>Restore</span>
                 </button>
@@ -2925,8 +3599,10 @@ function showLightbox(img) {
             </button>
         </div>
         <button class="lightbox-close" title="Close (Esc)">${ICONS.ban(20)}</button>
-        <button class="lightbox-nav prev" title="Previous image">${ICONS.chevronLeft()}</button>
-        <button class="lightbox-nav next" title="Next image">${ICONS.chevronRight()}</button>
+        ${reviewOnly ? '' : `
+            <button class="lightbox-nav prev" title="Previous image">${ICONS.chevronLeft()}</button>
+            <button class="lightbox-nav next" title="Next image">${ICONS.chevronRight()}</button>
+        `}
     `;
 
     document.body.appendChild(lightboxEl);
@@ -2945,8 +3621,10 @@ function showLightbox(img) {
     // All button actions read from lightboxImg (not closure) to stay current after navigation
     lightboxEl.querySelector('.lightbox-backdrop').onclick = closeLightbox;
     lightboxEl.querySelector('.lightbox-close').onclick = closeLightbox;
-    lightboxEl.querySelector('.lightbox-nav.prev').onclick = () => navigateLightbox(-1);
-    lightboxEl.querySelector('.lightbox-nav.next').onclick = () => navigateLightbox(1);
+    if (!reviewOnly) {
+        lightboxEl.querySelector('.lightbox-nav.prev').onclick = () => navigateLightbox(-1);
+        lightboxEl.querySelector('.lightbox-nav.next').onclick = () => navigateLightbox(1);
+    }
 
     lightboxEl.querySelectorAll('.lb-btn').forEach(btn => {
         btn.onclick = (e) => {
@@ -2955,7 +3633,14 @@ function showLightbox(img) {
             const action = btn.dataset.action;
             if (action === 'set') { setWallpaper(lightboxImg.path); closeLightbox(); }
             else if (action === 'fav') { toggleFavoriteImage(lightboxImg.path); closeLightbox(); }
-            else if (action === 'ban') { banImage(lightboxImg.path); closeLightbox(); }
+            else if (action === 'ban') {
+                if (lightboxImg.reviewOnly) {
+                    void banLightboxReviewSuggestion();
+                } else {
+                    banImage(lightboxImg.path);
+                    closeLightbox();
+                }
+            }
             else if (action === 'restore') { restoreImage(lightboxImg.path); closeLightbox(); }
             else if (action === 'url') { openWallhavenUrl(lightboxImg.name); }
         };

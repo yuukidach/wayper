@@ -8,10 +8,20 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
+from fastapi import HTTPException
 
 from wayper.config import MonitorConfig, WallhavenConfig, WayperConfig, load_config
 from wayper.pool import load_metadata, save_metadata
-from wayper.server.api import app, get_config_route, update_config_route
+from wayper.server.api import (
+    PreferenceFeedbackRequest,
+    UnblockRequest,
+    app,
+    get_config_route,
+    preference_suggestion_feedback,
+    preference_suggestions,
+    remove_blocklist_entry,
+    update_config_route,
+)
 from wayper.wallhaven import WallhavenClient
 
 
@@ -160,6 +170,121 @@ class RegressionTest(unittest.TestCase):
             self.assertEqual(seconds_until_next_rotation(config, now=1175.0), 125.0)
             self.assertEqual(seconds_until_next_rotation(config, now=1400.0), 0.0)
             self.assertEqual(seconds_until_next_rotation(config, now=900.0), 300.0)
+
+    def test_preference_suggestion_routes_are_review_only_and_record_keep_feedback(self) -> None:
+        from wayper.preference_model import load_preference_feedback
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            image = config.download_dir / "sfw" / "landscape" / "candidate.jpg"
+            image.parent.mkdir(parents=True)
+            image.touch()
+
+            with patch("wayper.server.api.get_config", return_value=config):
+                untrained = preference_suggestions(purity="sfw", orient="landscape")
+                with patch(
+                    "wayper.preference_model.preference_deletion_suggestions",
+                    return_value={"items": [{"path": "sfw/landscape/candidate.jpg"}]},
+                ):
+                    response = preference_suggestion_feedback(
+                        PreferenceFeedbackRequest(path="sfw/landscape/candidate.jpg", action="keep")
+                    )
+
+            feedback = load_preference_feedback(config)
+
+        self.assertEqual(untrained["status"], "untrained")
+        self.assertEqual(untrained["items"], [])
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(feedback["revision"], 1)
+        self.assertEqual(feedback["events"][0]["action"], "keep")
+
+    def test_preference_keep_feedback_rejects_non_candidates_and_unblock_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            image = config.download_dir / "sfw" / "landscape" / "candidate.jpg"
+            image.parent.mkdir(parents=True)
+            image.touch()
+            config.blacklist_file.write_text("100 candidate.jpg\n")
+
+            with patch("wayper.server.api.get_config", return_value=config):
+                with self.assertRaises(HTTPException) as candidate_error:
+                    preference_suggestion_feedback(
+                        PreferenceFeedbackRequest(path="sfw/landscape/candidate.jpg", action="keep")
+                    )
+                with self.assertRaises(HTTPException) as traversal_error:
+                    remove_blocklist_entry(UnblockRequest(filename="../candidate.jpg"))
+                unchanged = remove_blocklist_entry(UnblockRequest(filename="missing.jpg"))
+
+            from wayper.preference_model import load_preference_feedback
+
+            feedback = load_preference_feedback(config)
+
+        self.assertEqual(candidate_error.exception.status_code, 409)
+        self.assertEqual(traversal_error.exception.status_code, 400)
+        self.assertFalse(unchanged["removed"])
+        self.assertEqual(feedback["events"], [])
+
+    def test_preference_keep_feedback_reports_a_ledger_write_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            image = config.download_dir / "sfw" / "landscape" / "candidate.jpg"
+            image.parent.mkdir(parents=True)
+            image.touch()
+
+            with (
+                patch("wayper.server.api.get_config", return_value=config),
+                patch(
+                    "wayper.preference_model.preference_deletion_suggestions",
+                    return_value={"items": [{"path": "sfw/landscape/candidate.jpg"}]},
+                ),
+                patch(
+                    "wayper.preference_model.record_preference_feedback",
+                    side_effect=OSError("disk full"),
+                ),
+            ):
+                with self.assertLogs("wayper.api", level="WARNING"):
+                    with self.assertRaises(HTTPException) as error:
+                        preference_suggestion_feedback(
+                            PreferenceFeedbackRequest(
+                                path="sfw/landscape/candidate.jpg", action="keep"
+                            )
+                        )
+
+        self.assertEqual(error.exception.status_code, 500)
+
+    def test_mcp_delete_records_ban_feedback_only_when_blacklisted(self) -> None:
+        from wayper.core import CoreResult
+        from wayper.mcp_server import delete_wallpaper
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            ordinary = config.download_dir / "sfw" / "landscape" / "ordinary.jpg"
+            blacklisted = config.download_dir / "sfw" / "landscape" / "blacklisted.jpg"
+            ordinary.parent.mkdir(parents=True)
+            ordinary.touch()
+            blacklisted.touch()
+
+            with (
+                patch("wayper.mcp_server._config", return_value=config),
+                patch(
+                    "wayper.mcp_server.do_ban",
+                    return_value=CoreResult(action="ban", image=blacklisted),
+                ) as do_ban,
+            ):
+                ordinary_result = delete_wallpaper(str(ordinary))
+                blacklisted_result = delete_wallpaper(str(blacklisted), add_to_blacklist_flag=True)
+                directory_result = delete_wallpaper(
+                    str(ordinary.parent), add_to_blacklist_flag=True
+                )
+                ordinary_deleted = not ordinary.exists()
+                blacklisted_still_present = blacklisted.exists()
+
+        self.assertFalse(ordinary_result["blacklisted"])
+        self.assertTrue(blacklisted_result["blacklisted"])
+        self.assertTrue(ordinary_deleted)
+        self.assertTrue(blacklisted_still_present)
+        self.assertIn("error", directory_result)
+        do_ban.assert_called_once_with(config, image=blacklisted, wait_remote=False)
 
 
 if __name__ == "__main__":

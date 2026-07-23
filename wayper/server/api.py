@@ -36,6 +36,7 @@ from wayper.daemon import (
     request_stop,
     start_daemon_process,
 )
+from wayper.lock import FileLock
 from wayper.pool import (
     ensure_directories,
     favorites_dir,
@@ -303,6 +304,11 @@ class ActionRequest(BaseModel):
     monitor: str | None = None
 
 
+class PreferenceFeedbackRequest(BaseModel):
+    path: str
+    action: str
+
+
 class WallhavenConfigModel(BaseModel):
     categories: str
     top_range: str
@@ -352,9 +358,27 @@ def _resolve_image(config: WayperConfig, image_path: str) -> Path:
     img_full = (download_dir / image_path).resolve()
     if not img_full.is_relative_to(download_dir):
         raise HTTPException(403, "Path traversal not allowed")
-    if not img_full.exists():
+    if not img_full.is_file():
         raise HTTPException(404, "Image not found")
     return img_full
+
+
+def _pool_image_location(config: WayperConfig, image: Path) -> tuple[str, str] | None:
+    """Return a live pool image's purity/orientation, excluding favorites and files."""
+    for purity in ALL_PURITIES:
+        for orientation in ("landscape", "portrait"):
+            if image.parent == pool_dir(config, purity, orientation).resolve():
+                return purity, orientation
+    return None
+
+
+def _blocklist_filename(value: str) -> str:
+    """Accept only the exact basename format used by blacklist entries."""
+    if not value or value in {".", ".."} or "/" in value or "\\" in value:
+        raise HTTPException(400, "filename must be a single image filename")
+    if Path(value).name != value:
+        raise HTTPException(400, "filename must be a single image filename")
+    return value
 
 
 def _resolve_download_dir(raw_path: object) -> Path:
@@ -368,6 +392,54 @@ def _resolve_download_dir(raw_path: object) -> Path:
     if not path.is_absolute():
         raise HTTPException(400, "download_dir must be an absolute path or start with ~")
     return path
+
+
+def _record_preference_feedback(
+    config: WayperConfig,
+    action: str,
+    filename: str,
+    source: str,
+    *,
+    strict: bool = False,
+    already_locked: bool = False,
+) -> None:
+    """Persist feedback for routes that do not go through ``core``."""
+    try:
+        from wayper.preference_model import (
+            record_preference_feedback,
+        )
+
+        record_preference_feedback(
+            config,
+            action,
+            filename,
+            source=source,
+            already_locked=already_locked,
+        )
+    except Exception as e:
+        # The filesystem action has already succeeded. Feedback must not turn
+        # a successful restore/unblock into an HTTP error if its ledger is full
+        # or temporarily locked.
+        log.warning("Could not record preference feedback for %s", filename, exc_info=True)
+        if strict:
+            raise HTTPException(500, "Could not save preference feedback") from e
+        return
+
+    if already_locked:
+        return
+    _schedule_preference_model_retrain(config)
+
+
+def _schedule_preference_model_retrain(config: WayperConfig) -> None:
+    """Queue a model refresh after completing a state transaction."""
+    try:
+        from wayper.preference_model import schedule_preference_model_retrain
+
+        schedule_preference_model_retrain(config)
+    except Exception:
+        # The label is already durable. A later GUI/API request can queue the
+        # refresh again, so scheduling itself must not discard user feedback.
+        log.warning("Could not schedule preference model refresh", exc_info=True)
 
 
 @app.get("/api/config", response_model=ConfigResponse)
@@ -772,30 +844,38 @@ def restore_image(req: ActionRequest):
     config = get_config()
     filename = Path(req.image_path).name
 
-    trashed = find_in_trash(config, filename)
-    if not trashed:
-        raise HTTPException(404, "Image not found in trash")
+    with FileLock():
+        trashed = find_in_trash(config, filename)
+        if not trashed:
+            raise HTTPException(404, "Image not found in trash")
 
-    remove_from_blacklist(config, filename)
+        try:
+            with Image.open(trashed) as img:
+                width, height = img.size
+                orientation = "landscape" if width >= height else "portrait"
+        except Exception:
+            orientation = "landscape"
 
-    try:
-        with Image.open(trashed) as img:
-            width, height = img.size
-            orientation = "landscape" if width >= height else "portrait"
-    except Exception:
-        orientation = "landscape"
+        meta = _get_metadata()
+        img_meta = meta.get(filename, {})
+        purity = img_meta.get("purity", "sfw")
+        if purity not in ALL_PURITIES:
+            purity = "sfw"
 
-    meta = _get_metadata()
-    img_meta = meta.get(filename, {})
-    purity = img_meta.get("purity", "sfw")
-    if purity not in ALL_PURITIES:
-        purity = "sfw"
+        dest_dir = pool_dir(config, purity, orientation)
+        dest = restore_from_trash(config, filename, dest_dir)
+        if not dest:
+            raise HTTPException(500, "Failed to restore image")
+        remove_from_blacklist(config, filename)
+        _record_preference_feedback(
+            config,
+            "unban",
+            filename,
+            "api_restore",
+            already_locked=True,
+        )
 
-    dest_dir = pool_dir(config, purity, orientation)
-    dest = restore_from_trash(config, filename, dest_dir)
-    if not dest:
-        raise HTTPException(500, "Failed to restore image")
-
+    _schedule_preference_model_retrain(config)
     return {"status": "ok", "new_path": str(dest.relative_to(config.download_dir))}
 
 
@@ -812,8 +892,21 @@ class UnblockRequest(BaseModel):
 @app.post("/api/blocklist/remove")
 def remove_blocklist_entry(req: UnblockRequest):
     config = get_config()
-    remove_from_blacklist(config, req.filename)
-    return {"status": "ok"}
+    filename = _blocklist_filename(req.filename)
+    with FileLock():
+        exists = any(entry_filename == filename for _, entry_filename in list_blacklist(config))
+        if exists:
+            remove_from_blacklist(config, filename)
+            _record_preference_feedback(
+                config,
+                "unban",
+                filename,
+                "api_blocklist_remove",
+                already_locked=True,
+            )
+    if exists:
+        _schedule_preference_model_retrain(config)
+    return {"status": "ok", "removed": exists}
 
 
 @app.post("/api/wallpaper/set")
@@ -873,6 +966,71 @@ def ban_image_route(req: ActionRequest):
             config, result.extra.get("replacement_images", {})
         ),
     }
+
+
+@app.get("/api/preference-suggestions")
+def preference_suggestions(purity: str = "", orient: str = "", limit: int = 24):
+    """Return local model candidates for human review; never delete automatically."""
+    from wayper.preference_model import (
+        preference_deletion_suggestions,
+        schedule_preference_model_retrain,
+    )
+
+    config = get_config()
+    purities = _parse_purities(purity) if purity else sorted(read_mode(config))
+    result = preference_deletion_suggestions(
+        config,
+        purities=purities,
+        orientation=orient,
+        limit=min(60, max(1, limit)),
+    )
+    learning = result.get("learning")
+    if isinstance(learning, dict) and learning.get("due"):
+        # A CLI/MCP action may have recorded feedback in another process. Queue
+        # the non-blocking refresh when the long-lived API process next observes it.
+        schedule_preference_model_retrain(config, force=True)
+    return result
+
+
+@app.post("/api/preference-suggestions/feedback")
+def preference_suggestion_feedback(req: PreferenceFeedbackRequest):
+    """Record an explicit positive correction for a reviewed candidate."""
+    if req.action != "keep":
+        raise HTTPException(400, "Only the keep feedback action is supported")
+    config = get_config()
+    with FileLock():
+        image = _resolve_image(config, req.path)
+        location = _pool_image_location(config, image)
+        if location is None:
+            raise HTTPException(400, "Keep feedback is only available for live pool images")
+
+        from wayper.preference_model import preference_deletion_suggestions
+
+        purity, orientation = location
+        current_candidates = preference_deletion_suggestions(
+            config,
+            purities=(purity,),
+            orientation=orientation,
+            limit=60,
+        )
+        candidate_paths = {
+            (config.download_dir / path).resolve()
+            for item in current_candidates.get("items", [])
+            if isinstance(item, dict) and isinstance((path := item.get("path")), str)
+        }
+        if image not in candidate_paths:
+            raise HTTPException(409, "Image is no longer a model review candidate")
+        _record_preference_feedback(
+            config,
+            "keep",
+            image.name,
+            "model_suggestion",
+            strict=True,
+            already_locked=True,
+        )
+
+    _schedule_preference_model_retrain(config)
+    return {"status": "ok"}
 
 
 @app.post("/api/daemon/{action}")

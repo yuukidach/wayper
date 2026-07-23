@@ -101,6 +101,14 @@ class WayperConfig:
         return self.download_dir / ".ai_history.json"
 
     @property
+    def preference_model_file(self) -> Path:
+        return self.download_dir / ".preference_model.json"
+
+    @property
+    def preference_feedback_file(self) -> Path:
+        return self.download_dir / ".preference_feedback.json"
+
+    @property
     def pid_file(self) -> Path:
         return CONFIG_DIR / "wayper.pid"
 

@@ -466,6 +466,249 @@ def suggest(ctx, use_ai):
                 click.echo("No suggestions at this time.")
 
 
+@cli.group("model")
+@click.pass_context
+def preference_model(ctx):
+    """Train and inspect the local metadata preference model."""
+
+
+@preference_model.command("train")
+@click.option(
+    "--combo-min-support",
+    type=click.IntRange(2),
+    default=5,
+    show_default=True,
+    help="Minimum labelled images containing a tag pair.",
+)
+@click.option(
+    "--max-combos",
+    type=click.IntRange(0),
+    default=30_000,
+    show_default=True,
+    help="Cap retained pair features to keep the model compact.",
+)
+@click.option(
+    "--validation-days",
+    type=click.IntRange(0),
+    default=14,
+    show_default=True,
+    help="Reserve this recent time window for a report-only validation pass.",
+)
+@click.option("--epochs", type=click.IntRange(1), default=6, show_default=True)
+@click.pass_context
+def train_preference_model_cmd(ctx, combo_min_support, max_combos, validation_days, epochs):
+    """Train a local tag and controlled-combo preference model."""
+    from .preference_model import (
+        model_report,
+        preference_learning_status,
+        preference_model_path,
+        train_and_save_local_preference_model,
+    )
+
+    config = ctx.obj["config"]
+    try:
+        model, snapshot = train_and_save_local_preference_model(
+            config,
+            combo_min_support=combo_min_support,
+            max_combo_features=max_combos,
+            validation_days=validation_days,
+            epochs=epochs,
+        )
+        path = preference_model_path(config)
+        report = model_report(
+            model,
+            path,
+            learning=preference_learning_status(config, model, snapshot),
+        )
+    except (OSError, ValueError) as e:
+        if ctx.obj["json"]:
+            click.echo(json_mod.dumps({"error": str(e)}))
+        else:
+            click.echo(f"Could not train preference model: {e}", err=True)
+        raise SystemExit(1) from e
+
+    if ctx.obj["json"]:
+        click.echo(json_mod.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        training = report["training"]
+        assert isinstance(training, dict)
+        click.echo(f"Saved preference model: {path}")
+        click.echo(
+            "Training: "
+            f"{training['banned']} banned, {training['retained']} retained, "
+            f"{training['favorites']} / {training['favorite_files']} favorites with usable metadata"
+        )
+        click.echo(
+            f"Features: {report['tag_features']} tags, {report['combo_features']} controlled combos"
+        )
+        validation = report["validation"]
+        if isinstance(validation, dict) and validation.get("available"):
+            click.echo(
+                "Recent validation: "
+                f"precision {validation.get('precision_at_threshold')}, "
+                f"recall {validation.get('recall_at_threshold')} at threshold {model.threshold:.0%}"
+            )
+            click.echo(
+                "Automatic filtering safety gate: "
+                f"{'ready' if report['auto_skip_ready'] else 'not ready'}"
+            )
+        else:
+            click.echo("Recent validation: insufficient labelled data")
+
+
+@preference_model.command("refresh", hidden=True)
+@click.option(
+    "--download-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    required=True,
+)
+@click.option("--lease-token", required=True)
+def refresh_preference_model_worker(download_dir: Path, lease_token: str):
+    """Run the detached local preference-model refresh worker."""
+    from .config import WayperConfig
+    from .preference_model import run_scheduled_preference_model_retrain
+
+    run_scheduled_preference_model_retrain(
+        WayperConfig(download_dir=download_dir),
+        lease_token,
+    )
+
+
+@preference_model.command("status")
+@click.pass_context
+def preference_model_status(ctx):
+    """Show the local preference model's training and validation summary."""
+    from .preference_model import (
+        collect_preference_training_snapshot,
+        load_preference_model,
+        model_report,
+        preference_learning_status,
+        preference_model_path,
+    )
+
+    config = ctx.obj["config"]
+    path = preference_model_path(config)
+    model = load_preference_model(path)
+    if not model:
+        result = {"status": "untrained", "path": str(path)}
+        if ctx.obj["json"]:
+            click.echo(json_mod.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            click.echo("No preference model trained yet. Run: wayper model train")
+        return
+
+    snapshot = collect_preference_training_snapshot(config)
+    learning = preference_learning_status(config, model, snapshot)
+    report = model_report(model, path, learning=learning)
+    if ctx.obj["json"]:
+        click.echo(json_mod.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        click.echo(f"Preference model: {path}")
+        training = report["training"]
+        if isinstance(training, dict):
+            banned = training.get("banned")
+            retained = training.get("retained")
+            favorites = training.get("favorites")
+            favorite_files = training.get("favorite_files", favorites)
+            if all(
+                isinstance(value, int) for value in (banned, retained, favorites, favorite_files)
+            ):
+                click.echo(
+                    "Training: "
+                    f"{banned} banned, {retained} retained, "
+                    f"{favorites} / {favorite_files} favorites with usable metadata"
+                )
+        click.echo(
+            f"Features: {report['tag_features']} tags, {report['combo_features']} controlled combos"
+        )
+        click.echo(f"Auto-skip threshold (not enabled by default): {model.threshold:.0%}")
+        validation = report["validation"]
+        if isinstance(validation, dict) and validation.get("available"):
+            click.echo(
+                "Recent validation: "
+                f"precision {validation.get('precision_at_threshold')}, "
+                f"recall {validation.get('recall_at_threshold')} at threshold {model.threshold:.0%}"
+            )
+        else:
+            click.echo("Recent validation: insufficient labelled data")
+        click.echo(
+            "Automatic filtering safety gate: "
+            f"{'ready' if report['auto_skip_ready'] else 'not ready'}"
+        )
+        if learning["stale"]:
+            click.echo(
+                "Online refresh: "
+                f"{learning['pending_feedback']} new feedback events, "
+                f"{learning['changed_examples']} changed examples "
+                f"(automatic refresh at {learning['minimum_feedback']} feedback events)"
+            )
+
+
+@preference_model.command("score")
+@click.argument("filename", required=False)
+@click.option("--tags", default="", help="Comma-separated tags to score without a saved image.")
+@click.pass_context
+def preference_model_score(ctx, filename, tags):
+    """Score a metadata record or ad-hoc comma-separated tags."""
+    from .preference_model import load_preference_model, preference_model_path
+
+    config = ctx.obj["config"]
+    model = load_preference_model(preference_model_path(config))
+    if not model:
+        message = "No preference model trained yet. Run: wayper model train"
+        if ctx.obj["json"]:
+            click.echo(json_mod.dumps({"error": message}))
+        else:
+            click.echo(message, err=True)
+        raise SystemExit(1)
+
+    if tags:
+        input_tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
+        label = None
+    elif filename:
+        from .pool import load_metadata
+
+        meta = load_metadata(config).get(filename)
+        if not meta:
+            message = f"No metadata found for {filename}"
+            if ctx.obj["json"]:
+                click.echo(json_mod.dumps({"error": message}))
+            else:
+                click.echo(message, err=True)
+            raise SystemExit(1)
+        input_tags = meta.get("tags", [])
+        label = filename
+    else:
+        message = "Provide FILENAME or --tags tag1,tag2"
+        if ctx.obj["json"]:
+            click.echo(json_mod.dumps({"error": message}))
+            raise SystemExit(2)
+        raise click.UsageError(message)
+
+    prediction = model.predict(input_tags)
+    result = {
+        "filename": label,
+        "probability": prediction.probability,
+        "threshold": model.threshold,
+        "would_skip": prediction.probability >= model.threshold,
+        "contributions": list(prediction.contributions),
+    }
+    if ctx.obj["json"]:
+        click.echo(json_mod.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        click.echo(f"Dislike probability: {prediction.probability:.1%}")
+        click.echo(
+            f"Would skip at {model.threshold:.0%}: {'yes' if result['would_skip'] else 'no'}"
+        )
+        if prediction.contributions:
+            click.echo("Top evidence:")
+            for contribution in prediction.contributions:
+                click.echo(
+                    f"  {contribution['direction']}: {contribution['feature']} "
+                    f"({contribution['weight']:+.3f})"
+                )
+
+
 @cli.command("update-check")
 @click.option("--force", is_flag=True, help="Bypass cached update check.")
 @click.pass_context

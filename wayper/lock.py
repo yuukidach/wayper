@@ -19,12 +19,14 @@ LOCK_PATH = Path(tempfile.gettempdir()) / "wayper.lock"
 class FileLock:
     """Simple cross-platform exclusive file lock."""
 
-    def __init__(self, *, blocking: bool = True) -> None:
+    def __init__(self, *, blocking: bool = True, path: Path | None = None) -> None:
         self._fd: int | None = None
         self._blocking = blocking
+        self._path = path or LOCK_PATH
 
     def __enter__(self) -> FileLock:
-        self._fd = os.open(str(LOCK_PATH), os.O_WRONLY | os.O_CREAT)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._fd = os.open(str(self._path), os.O_WRONLY | os.O_CREAT)
         if sys.platform == "win32":
             self._lock_windows()
             return self
@@ -55,7 +57,7 @@ class FileLock:
         if self._fd is None:
             return
         try:
-            if os.path.getsize(LOCK_PATH) == 0:
+            if os.path.getsize(self._path) == 0:
                 os.write(self._fd, b"0")
             while True:
                 try:

@@ -124,11 +124,22 @@ wayper mode sketchy         # 开关 sketchy
 wayper mode sfw,sketchy     # 设置精确组合
 wayper suggest             # 基于频率的标签排除建议
 wayper suggest --ai        # 通过 Codex CLI 进行 AI 分析
+wayper model train         # 训练本地 tag + 受控 combo 偏好模型
+wayper model score --tags "tag1,tag2"  # 解释本地“不喜欢”评分
+wayper model status        # 查看已保存模型和近期验证结果
 wayper status               # 查看当前状态
 wayper-gui                  # GUI 应用（浏览、操作、daemon、设置）
 wayper setup                # 安装 .desktop（Linux）
 wayper --json status        # JSON 格式输出
 ```
+
+`wayper model train` 只使用本地元数据：近期拉黑的权重更高，收藏是强正反馈，
+并限制 tag-pair 特征数量以保持模型紧凑。评分绝不会自动修改黑名单或跳过下载。
+GUI 的「拉黑」页面新增 **Model review**：只展示带 tag/combo 证据的高置信候选图；
+「Ban」仍走普通的拉黑＋系统回收站流程，「Keep」会记录明确的正反馈。可先点「Preview」
+放大查看原图再决定。每累计 10 条新反馈，Wayper 会排队做一次本地全量小批重训，
+以安全吸收新 combo、取消拉黑和收藏变化；
+`wayper model status` 会显示待处理的反馈数量。
 
 ### 快捷键示例
 

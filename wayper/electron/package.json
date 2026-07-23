@@ -8,7 +8,7 @@
     "start": "electron .",
     "build:backend": "cd ../.. && uv run pyinstaller --clean wayper.spec",
     "dist": "npm run build:backend && ./node_modules/.bin/electron-builder",
-    "test": "node tests/exclusion-rules.test.js"
+    "test": "node tests/exclusion-rules.test.js && node tests/blocklist-pager.test.js"
   },
   "build": {
     "appId": "com.wayper.app",

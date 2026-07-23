@@ -10,8 +10,9 @@ from .backend import get_context, notify, query_current
 from .config import load_config
 from .core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
 from .daemon import is_daemon_running, request_mode_reload
+from .lock import FileLock
 from .pool import (
-    add_to_blacklist,
+    IMAGE_EXTENSIONS,
     count_images,
     disk_usage_mb,
     favorites_dir,
@@ -28,6 +29,19 @@ mcp = FastMCP("wayper")
 
 def _config():
     return load_config()
+
+
+def _is_managed_wallpaper(config, path: Path) -> bool:
+    """Return whether a path is a regular wallpaper in a managed live directory."""
+    if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
+        return False
+    for purity in ALL_PURITIES:
+        for orientation in ("landscape", "portrait"):
+            if path.parent == pool_dir(config, purity, orientation).resolve():
+                return True
+            if path.parent == favorites_dir(config, purity, orientation).resolve():
+                return True
+    return False
 
 
 @mcp.tool()
@@ -181,19 +195,31 @@ def delete_wallpaper(image_path: str, add_to_blacklist_flag: bool = False) -> di
     except ValueError:
         return {"error": f"Path is not within wallpaper directory: {image_path}"}
 
-    if not path.exists():
-        return {"error": f"File not found: {image_path}"}
-
-    filename = path.name
-    path.unlink()
+    if not _is_managed_wallpaper(config, path):
+        return {"error": f"Path is not a managed wallpaper image: {image_path}"}
 
     if add_to_blacklist_flag:
-        add_to_blacklist(config, filename)
+        # A blacklisted image is an explicit dislike, so it must follow the
+        # normal Ban path: system trash + undo + feedback, rather than a
+        # permanent unlink that bypasses core state.
+        result = do_ban(config, image=path, wait_remote=False)
+        if not result.ok:
+            return {"error": result.error}
+        return {
+            "action": "delete",
+            "image": image_path,
+            "blacklisted": True,
+        }
+
+    with FileLock():
+        if not path.is_file():
+            return {"error": f"File not found: {image_path}"}
+        path.unlink()
 
     return {
         "action": "delete",
         "image": image_path,
-        "blacklisted": add_to_blacklist_flag,
+        "blacklisted": False,
     }
 
 

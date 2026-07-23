@@ -124,11 +124,25 @@ wayper mode sketchy         # toggle sketchy on/off
 wayper mode sfw,sketchy     # set exact purity combination
 wayper suggest             # frequency-based tag exclusion suggestions
 wayper suggest --ai        # AI-powered analysis via Codex CLI
+wayper model train         # train a local tag + controlled-combo preference model
+wayper model score --tags "tag1,tag2"  # explain a local dislike score
+wayper model status        # inspect the saved model and recent validation
 wayper status               # show current state
 wayper-gui                  # GUI app (browse, actions, daemon, settings)
 wayper setup                # install .desktop entry (Linux)
 wayper --json status        # machine-readable output
 ```
+
+`wayper model train` uses only local metadata. It weights recent bans, treats
+favorites as strong positive feedback, and limits tag-pair features to keep the
+saved model compact. Scoring never automatically changes your blacklist or
+skips downloads. In the GUI's Blocklist view, **Model review** shows only
+high-confidence pool candidates with their tag/combo evidence: **Ban** uses the
+normal blacklist + system-trash flow, while **Keep** records explicit positive
+feedback. Use **Preview** to zoom the full image before deciding. After 10 new
+feedback events, Wayper queues a local full-batch refresh so new combos and
+undo/favorite changes are learned safely; `wayper
+model status` shows the pending feedback count.
 
 ### Keybindings
 

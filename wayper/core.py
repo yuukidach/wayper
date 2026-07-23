@@ -49,6 +49,32 @@ class CoreResult:
     extra: dict = field(default_factory=dict)
 
 
+def _record_preference_feedback(
+    config: WayperConfig, action: str, filename: str, *, already_locked: bool = False
+) -> None:
+    """Persist local feedback without making a wallpaper action fail on telemetry."""
+    try:
+        from .preference_model import record_preference_feedback
+
+        record_preference_feedback(
+            config, action, filename, source="core", already_locked=already_locked
+        )
+        if not already_locked:
+            _schedule_preference_model_retrain(config)
+    except Exception:
+        log.warning("Could not record preference feedback for %s", filename, exc_info=True)
+
+
+def _schedule_preference_model_retrain(config: WayperConfig) -> None:
+    """Request a non-blocking refresh after the state lock has been released."""
+    try:
+        from .preference_model import schedule_preference_model_retrain
+
+        schedule_preference_model_retrain(config)
+    except Exception:
+        log.warning("Could not schedule preference model refresh", exc_info=True)
+
+
 def _resolve_monitor(
     config: WayperConfig,
     monitor: str | None,
@@ -200,6 +226,10 @@ def do_fav(
         else:
             set_wallpaper(monitor, dest, NO_TRANSITION)
 
+        _record_preference_feedback(config, "favorite", dest.name, already_locked=True)
+
+    _schedule_preference_model_retrain(config)
+
     from .wallhaven_web import wallhaven_web_fav
 
     remote_sync = wallhaven_web_fav(config, dest.name, wait=wait_remote)
@@ -254,6 +284,10 @@ def do_unfav(
         else:
             set_wallpaper(monitor, dest, NO_TRANSITION)
 
+        _record_preference_feedback(config, "unfavorite", dest.name, already_locked=True)
+
+    _schedule_preference_model_retrain(config)
+
     from .wallhaven_web import wallhaven_web_unfav
 
     remote_sync = wallhaven_web_unfav(config, dest.name, wait=wait_remote)
@@ -289,6 +323,9 @@ def do_ban(
             monitor, mon_cfg, img = _resolve_monitor(config, monitor)
             if not img or not mon_cfg:
                 return CoreResult(action="ban", ok=False, error="No current wallpaper")
+
+        if not img.is_file():
+            return CoreResult(action="ban", ok=False, error="Image is no longer available")
 
         shown_img = img
 
@@ -326,6 +363,10 @@ def do_ban(
             except ValueError:
                 pass
 
+        _record_preference_feedback(config, "ban", img.name, already_locked=True)
+
+    _schedule_preference_model_retrain(config)
+
     from .wallhaven_web import wallhaven_web_unfav
 
     remote_sync = wallhaven_web_unfav(config, img.name, wait=wait_remote)
@@ -356,11 +397,16 @@ def do_unban(config: WayperConfig, monitor: str | None = None) -> CoreResult:
             if monitor:
                 set_wallpaper(monitor, restored, config.transition)
                 record_wallpaper_change(config)
-            return CoreResult(action="unban", monitor=monitor, image=restored)
+            result = CoreResult(action="unban", monitor=monitor, image=restored)
+        else:
+            result = CoreResult(
+                action="unban",
+                ok=True,
+                status="file_missing",
+                extra={"note": "blacklist entry removed but file not found in trash"},
+            )
 
-        return CoreResult(
-            action="unban",
-            ok=True,
-            status="file_missing",
-            extra={"note": "blacklist entry removed but file not found in trash"},
-        )
+        _record_preference_feedback(config, "unban", filename, already_locked=True)
+
+    _schedule_preference_model_retrain(config)
+    return result
