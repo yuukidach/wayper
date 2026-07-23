@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 import httpx
 
-from wayper.config import MonitorConfig, WallhavenConfig, WayperConfig
+from wayper.config import MonitorConfig, WallhavenConfig, WayperConfig, load_config
 from wayper.pool import load_metadata, save_metadata
-from wayper.server.api import app
+from wayper.server.api import app, get_config_route, update_config_route
 from wayper.wallhaven import WallhavenClient
 
 
@@ -46,6 +46,32 @@ class _FakeAsyncClient:
 
 
 class RegressionTest(unittest.TestCase):
+    def test_config_route_exposes_and_updates_wallhaven_batch_size(self) -> None:
+        config = WayperConfig(wallhaven=WallhavenConfig(batch_size=7))
+
+        with (
+            patch("wayper.server.api.get_config", return_value=config),
+            patch("wayper.server.api.save_config") as save_config,
+            patch("wayper.server.api.request_config_reload"),
+            patch("wayper.server.api._cached_config", None),
+            patch("wayper.server.api._cached_mtime", 0),
+        ):
+            response = get_config_route()
+            update_config_route({"wallhaven": {"batch_size": 9}})
+
+        self.assertEqual(response["wallhaven"]["batch_size"], 7)
+        self.assertEqual(config.wallhaven.batch_size, 9)
+        save_config.assert_called_once_with(config)
+
+    def test_config_load_clamps_wallhaven_batch_size_to_one(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "config.toml"
+            path.write_text("[wallhaven]\nbatch_size = -2\n")
+
+            config = load_config(path)
+
+        self.assertEqual(config.wallhaven.batch_size, 1)
+
     def test_wallhaven_max_favorites_treats_failed_deep_pages_as_upper_bound(self) -> None:
         config = WayperConfig(
             api_key="test",

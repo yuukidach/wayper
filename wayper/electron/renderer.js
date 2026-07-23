@@ -588,6 +588,7 @@ function populateSettingsForm() {
     document.getElementById('input-top-range').value = w.top_range;
     document.getElementById('input-sorting').value = w.sorting;
     document.getElementById('input-ai-art').value = w.ai_art_filter;
+    document.getElementById('input-batch-size').value = w.batch_size ?? 5;
     document.getElementById('input-min-favorites').value = w.min_favorites ?? 0;
 
     // Exclude tags & combos
@@ -964,6 +965,7 @@ async function saveSettings() {
         top_range: document.getElementById('input-top-range').value,
         sorting: document.getElementById('input-sorting').value,
         ai_art_filter: parseInt(document.getElementById('input-ai-art').value),
+        batch_size: Math.max(1, parseInt(document.getElementById('input-batch-size').value) || 5),
         min_favorites: Math.max(0, parseInt(document.getElementById('input-min-favorites').value) || 0),
         exclude_tags: getExcludeTags(),
         exclude_combos: getExcludeCombos(),
