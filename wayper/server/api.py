@@ -10,7 +10,6 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from PIL import Image
-from pydantic import BaseModel
 
 from wayper.ai_suggestions import (
     AISuggestionError,
@@ -19,6 +18,7 @@ from wayper.ai_suggestions import (
     update_ai_history_feedback,
 )
 from wayper.backend import query_current
+from wayper.catalog import ImageCatalog
 from wayper.config import WayperConfig, load_config, save_config
 from wayper.core import (
     do_ban,
@@ -39,11 +39,29 @@ from wayper.daemon import (
 from wayper.lock import FileLock
 from wayper.pool import (
     ensure_directories,
+    favorite_filenames,
     favorites_dir,
     list_blacklist,
     list_images,
     pool_dir,
     remove_from_blacklist,
+)
+from wayper.server.config_service import apply_config_updates, config_payload
+from wayper.server.schemas import (
+    ActionRequest,
+    BlocklistEntry,
+    BlocklistResponse,
+    ConfigResponse,
+    ImageItem,
+    ImagePage,
+    MonitorInfo,
+    PreferenceFeedbackRequest,
+    SetModeRequest,
+    SetWallpaperRequest,
+    StatusResponse,
+    UnblockRequest,
+    UpdateCheckResponse,
+    WallhavenConfigModel,
 )
 from wayper.state import (
     ALL_PURITIES,
@@ -55,10 +73,68 @@ from wayper.state import (
     trash_state_token,
     write_mode,
 )
-from wayper.suggestions import normalize_tag, suggest_combo_patterns, suggest_tags_to_exclude
+from wayper.status import library_counts
+from wayper.suggestions import suggest_combo_patterns, suggest_tags_to_exclude
+from wayper.tags import normalize_tag
 from wayper.update import check_for_updates
 
 log = logging.getLogger("wayper.api")
+
+# Keep the HTTP schemas and route callables importable from this historical
+# module while their definitions live in focused modules.
+__all__ = [
+    "app",
+    "get_config",
+    "ActionRequest",
+    "BlocklistEntry",
+    "BlocklistResponse",
+    "ConfigResponse",
+    "ImageItem",
+    "ImagePage",
+    "MonitorInfo",
+    "PreferenceFeedbackRequest",
+    "SetModeRequest",
+    "SetWallpaperRequest",
+    "StatusResponse",
+    "UnblockRequest",
+    "UpdateCheckResponse",
+    "WallhavenConfigModel",
+    "get_config_route",
+    "update_check_route",
+    "update_config_route",
+    "set_mode_route",
+    "sse_events",
+    "get_disk_usage",
+    "control_action",
+    "get_status",
+    "get_monitors",
+    "get_images",
+    "get_images_page",
+    "restore_image",
+    "get_blocklist",
+    "remove_blocklist_entry",
+    "set_wallpaper_route",
+    "favorite_image",
+    "ban_image_route",
+    "preference_suggestions",
+    "preference_suggestion_feedback",
+    "daemon_action",
+    "search_images",
+    "tag_suggestions",
+    "uploader_suggestions",
+    "tag_stats",
+    "ai_suggestions_status",
+    "ai_suggestions_route",
+    "ai_suggestions_feedback",
+    "serve_trash_image",
+    "serve_trash_thumbnail",
+    "serve_thumbnail_query",
+    "serve_thumbnail",
+    "serve_image_query",
+    "serve_image",
+    "port_file",
+    "run",
+]
 
 app = FastAPI()
 
@@ -119,15 +195,26 @@ def _get_metadata() -> dict:
     return _cached_metadata
 
 
+def _active_suggestion_data(
+    config: WayperConfig,
+) -> tuple[dict, set[str], set[str]]:
+    """Return metadata and labels restricted to the active purity modes."""
+    favorites = _build_favs_set(config)
+    catalog = ImageCatalog(
+        _get_metadata(),
+        (filename for _, filename in list_blacklist(config)),
+        favorites,
+        purities=read_mode(config),
+    )
+    return catalog.metadata, set(catalog.banned_filenames), favorites
+
+
 def _build_favs_set(config) -> set[str]:
-    """Collect favorite filenames from all purity/orientation subdirs."""
-    fav_base = config.download_dir / "favorites"
-    favs: set[str] = set()
-    if fav_base.is_dir():
-        for f in fav_base.rglob("*"):
-            if f.is_file() and not f.name.startswith("."):
-                favs.add(f.name)
-    return favs
+    """Compatibility wrapper for callers that use the API helper."""
+    # The legacy API ignored dotfiles in favorite directories.  Keep that
+    # presentation rule while the shared pool helper handles directory
+    # traversal and extension filtering.
+    return {name for name in favorite_filenames(config) if not name.startswith(".")}
 
 
 def _relative_image(config: WayperConfig, image: Path | None) -> str | None:
@@ -252,110 +339,6 @@ def _trash_image_page(config: WayperConfig, offset: int, limit: int):
     return ImagePage(items=items, total=len(recoverable_entries), next_offset=next_offset)
 
 
-# Pydantic models
-class StatusResponse(BaseModel):
-    running: bool
-    pid: int | None = None
-    pool_count: int = 0
-    favorites_count: int = 0
-    blocklist_count: int = 0
-    recoverable_count: int = 0
-    mode: list[str] = ["sfw"]
-
-
-class ImageItem(BaseModel):
-    path: str
-    name: str
-    is_favorite: bool = False
-
-
-class ImagePage(BaseModel):
-    items: list[ImageItem]
-    total: int
-    next_offset: int | None = None
-
-
-class BlocklistEntry(BaseModel):
-    filename: str
-    timestamp: int
-    recoverable: bool
-
-
-class BlocklistResponse(BaseModel):
-    entries: list[BlocklistEntry]
-    total: int
-    recoverable_count: int
-    images: list[ImageItem] = []
-
-
-class MonitorInfo(BaseModel):
-    name: str
-    orientation: str
-    current_image: str | None = None
-
-
-class SetWallpaperRequest(BaseModel):
-    monitor: str
-    image_path: str
-
-
-class ActionRequest(BaseModel):
-    image_path: str
-    monitor: str | None = None
-    # Set only for a deliberate action from the local Model review queue.  The
-    # server still recomputes the candidate metadata before recording it; this
-    # flag is a context label, not a client-supplied training target.
-    preference_context: str | None = None
-
-
-class PreferenceFeedbackRequest(BaseModel):
-    path: str
-    action: str
-
-
-class WallhavenConfigModel(BaseModel):
-    categories: str
-    top_range: str
-    sorting: str
-    ai_art_filter: int
-    batch_size: int = 5
-    min_favorites: int = 0
-    exclude_tags: list[str]
-    exclude_combos: list[list[str]] = []
-    exclude_uploaders: list[str] = []
-
-
-class UpdateCheckResponse(BaseModel):
-    current_version: str
-    latest_version: str | None
-    update_available: bool
-    release_url: str
-    release_name: str | None = None
-    published_at: str | None = None
-    checked_at: str | None = None
-    error: str | None = None
-
-
-class ConfigResponse(BaseModel):
-    download_dir: str
-    interval_min: int
-    mode: list[str]
-    quota_mb: int
-    proxy: str
-    pause_on_lock: bool
-    safe_mode: bool
-    has_api_key: bool
-    has_wh_password: bool
-    wallhaven_username: str
-    blacklist_ttl_days: int
-    wallhaven: WallhavenConfigModel
-
-
-class SetModeRequest(BaseModel):
-    mode: str | None = None
-    purities: list[str] | None = None
-
-
 def _resolve_image(config: WayperConfig, image_path: str) -> Path:
     """Resolve and validate an image path stays within download_dir."""
     download_dir = config.download_dir.resolve()
@@ -408,6 +391,28 @@ def _model_review_item_details(
     return details or None
 
 
+def _find_review_item(
+    config: WayperConfig,
+    result: object,
+    image: Path,
+) -> dict | None:
+    """Find a review item only when its path resolves inside the library."""
+    if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+        return None
+    root = config.download_dir.resolve()
+    target = image.resolve()
+    for item in result["items"]:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            continue
+        try:
+            candidate = (config.download_dir / item["path"]).resolve()
+        except (OSError, RuntimeError):
+            continue
+        if candidate.is_relative_to(root) and candidate == target:
+            return item
+    return None
+
+
 def _model_review_feedback(config: WayperConfig, image: Path) -> dict[str, object] | None:
     """Return server-observed ranking details for one review candidate.
 
@@ -433,28 +438,8 @@ def _model_review_feedback(config: WayperConfig, image: Path) -> dict[str, objec
         log.debug("Could not refresh model-review context for %s", image, exc_info=True)
         return None
 
-    if not isinstance(result, dict):
-        return None
-    items = result.get("items")
-    if not isinstance(items, list):
-        return None
-    image = image.resolve()
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        raw_path = item.get("path")
-        if not isinstance(raw_path, str):
-            continue
-        try:
-            candidate_path = (config.download_dir / raw_path).resolve()
-        except (OSError, RuntimeError):
-            continue
-        if not candidate_path.is_relative_to(config.download_dir.resolve()):
-            continue
-        if candidate_path != image:
-            continue
-        return _model_review_item_details(result, item)
-    return None
+    item = _find_review_item(config, result, image)
+    return _model_review_item_details(result, item) if item else None
 
 
 def _blocklist_filename(value: str) -> str:
@@ -534,30 +519,7 @@ def _schedule_preference_model_retrain(config: WayperConfig) -> None:
 @app.get("/api/config", response_model=ConfigResponse)
 def get_config_route():
     config = get_config()
-    return {
-        "download_dir": str(config.download_dir),
-        "interval_min": config.interval // 60,
-        "mode": sorted(read_mode(config)),
-        "quota_mb": config.quota_mb,
-        "proxy": config.proxy or "",
-        "pause_on_lock": config.pause_on_lock,
-        "safe_mode": config.safe_mode,
-        "has_api_key": bool(config.api_key),
-        "has_wh_password": bool(config.wallhaven_password),
-        "wallhaven_username": config.wallhaven_username,
-        "blacklist_ttl_days": config.blacklist_ttl_days,
-        "wallhaven": {
-            "categories": config.wallhaven.categories,
-            "top_range": config.wallhaven.top_range,
-            "sorting": config.wallhaven.sorting,
-            "ai_art_filter": config.wallhaven.ai_art_filter,
-            "batch_size": config.wallhaven.batch_size,
-            "min_favorites": config.wallhaven.min_favorites,
-            "exclude_tags": config.wallhaven.exclude_tags,
-            "exclude_combos": config.wallhaven.exclude_combos,
-            "exclude_uploaders": config.wallhaven.exclude_uploaders,
-        },
-    }
+    return config_payload(config, read_mode(config))
 
 
 @app.get("/api/update-check", response_model=UpdateCheckResponse)
@@ -567,85 +529,37 @@ def update_check_route(force: bool = False):
 
 
 def _dedup_by(items: list, key) -> list:
-    """Dedup a list, preserving first occurrence per `key(item)`."""
-    seen = set()
-    out = []
-    for item in items:
-        k = key(item)
-        if k in seen:
-            continue
-        seen.add(k)
-        out.append(item)
-    return out
+    """Compatibility wrapper for the old API helper.
+
+    Configuration writes now live in ``config_service``; keeping this tiny
+    adapter avoids breaking scripts that imported the helper while making the
+    route itself use the shared implementation.
+    """
+    from wayper.server.config_service import _deduplicate
+
+    return _deduplicate(items, key)
 
 
 @app.patch("/api/config")
 def update_config_route(updates: dict = Body(...)):
     config = get_config()
-    old_download_dir = config.download_dir
-
-    if "interval_min" in updates:
-        config.interval = updates["interval_min"] * 60
-    elif "interval" in updates:
-        config.interval = updates["interval"]
-
-    if "quota_mb" in updates:
-        config.quota_mb = updates["quota_mb"]
+    changes = apply_config_updates(
+        config,
+        updates,
+        resolve_download_dir=_resolve_download_dir,
+    )
     if "download_dir" in updates:
-        config.download_dir = _resolve_download_dir(updates["download_dir"])
         try:
             ensure_directories(config)
         except OSError as e:
             raise HTTPException(400, f"Cannot create download directory: {e}") from e
-    if "proxy" in updates:
-        config.proxy = updates["proxy"].strip() or None
-    if "pause_on_lock" in updates:
-        config.pause_on_lock = bool(updates["pause_on_lock"])
-    if "safe_mode" in updates:
-        config.safe_mode = bool(updates["safe_mode"])
-    if "api_key" in updates:
-        config.api_key = updates["api_key"].strip()
-    if "wallhaven_username" in updates:
-        config.wallhaven_username = updates["wallhaven_username"].strip()
-    if "wallhaven_password" in updates:
-        config.wallhaven_password = updates["wallhaven_password"]
-    if "blacklist_ttl_days" in updates:
-        val = int(updates["blacklist_ttl_days"])
-        config.blacklist_ttl_days = val if val > 0 else 0
-
-    if "wallhaven" in updates:
-        wh = updates["wallhaven"]
-        old_exclude_tags = config.wallhaven.exclude_tags.copy() if "exclude_tags" in wh else None
-        old_exclude_uploaders = (
-            config.wallhaven.exclude_uploaders.copy() if "exclude_uploaders" in wh else None
-        )
-        if "categories" in wh:
-            config.wallhaven.categories = wh["categories"]
-        if "top_range" in wh:
-            config.wallhaven.top_range = wh["top_range"]
-        if "sorting" in wh:
-            config.wallhaven.sorting = wh["sorting"]
-        if "ai_art_filter" in wh:
-            config.wallhaven.ai_art_filter = wh["ai_art_filter"]
-        if "batch_size" in wh:
-            config.wallhaven.batch_size = max(1, int(wh["batch_size"]))
-        if "min_favorites" in wh:
-            config.wallhaven.min_favorites = max(0, int(wh["min_favorites"]))
-        if "exclude_tags" in wh:
-            config.wallhaven.exclude_tags = _dedup_by(wh["exclude_tags"], str.lower)
-        if "exclude_combos" in wh:
-            config.wallhaven.exclude_combos = _dedup_by(
-                wh["exclude_combos"], lambda c: frozenset(t.lower() for t in c)
-            )
-        if "exclude_uploaders" in wh:
-            config.wallhaven.exclude_uploaders = _dedup_by(wh["exclude_uploaders"], str.lower)
 
     save_config(config)
     request_config_reload(config)
     global _cached_config, _cached_mtime
     _cached_config = config
     _cached_mtime = 0  # force reload on next get_config if file changes again
-    if config.download_dir != old_download_dir:
+    if changes.download_dir_changed:
         _image_dir_cache.clear()
         global _cached_metadata, _cached_meta_mtime, _blocklist_cache, _trash_image_cache
         _cached_metadata = None
@@ -654,18 +568,16 @@ def update_config_route(updates: dict = Body(...)):
         _trash_image_cache = None
 
     # Sync exclude_tags to Wallhaven cloud tag_blacklist (fire-and-forget)
-    if "wallhaven" in updates and "exclude_tags" in updates["wallhaven"]:
-        if old_exclude_tags != config.wallhaven.exclude_tags:
-            from ..wallhaven_web import sync_cloud_tag_blacklist
+    if changes.exclude_tags_changed:
+        from ..wallhaven_web import sync_cloud_tag_blacklist
 
-            sync_cloud_tag_blacklist(config, config.wallhaven.exclude_tags)
+        sync_cloud_tag_blacklist(config, config.wallhaven.exclude_tags)
 
     # Sync exclude_uploaders to Wallhaven cloud user blacklist (fire-and-forget)
-    if "wallhaven" in updates and "exclude_uploaders" in updates["wallhaven"]:
-        if old_exclude_uploaders != config.wallhaven.exclude_uploaders:
-            from ..wallhaven_web import sync_cloud_user_blacklist
+    if changes.exclude_uploaders_changed:
+        from ..wallhaven_web import sync_cloud_user_blacklist
 
-            sync_cloud_user_blacklist(config, config.wallhaven.exclude_uploaders)
+        sync_cloud_user_blacklist(config, config.wallhaven.exclude_uploaders)
 
     return {"status": "ok"}
 
@@ -774,18 +686,17 @@ def control_action(action: str, monitor_name: str | None = Body(None, embed=True
 
         monitor, _, _ = get_context(config)
 
-    if action == "next":
-        result = do_next(config, monitor)
-    elif action == "prev":
-        result = do_prev(config, monitor)
-    elif action == "fav":
-        result = do_fav(config, monitor)
-    elif action == "unfav":
-        result = do_unfav(config, monitor)
-    elif action == "ban":
+    handlers = {
+        "next": do_next,
+        "prev": do_prev,
+        "fav": do_fav,
+        "unfav": do_unfav,
+        "unban": do_unban,
+    }
+    if action == "ban":
         result = do_ban(config, monitor, clear_thumbnail=lambda p: _remove_thumbnail(config, p))
-    elif action == "unban":
-        result = do_unban(config, monitor)
+    elif handler := handlers.get(action):
+        result = handler(config, monitor)
     else:
         raise HTTPException(400, f"Unknown action: {action}")
 
@@ -818,12 +729,12 @@ def get_status(orient: str = "", include_recoverable: bool = True):
     purities = read_mode(config)
 
     orientations = [orient] if orient in ("landscape", "portrait") else ["landscape", "portrait"]
-    pool_c = 0
-    fav_c = 0
-    for purity in purities:
-        for o in orientations:
-            pool_c += _count_images_cached(pool_dir(config, purity, o))
-            fav_c += _count_images_cached(favorites_dir(config, purity, o))
+    pool_c, fav_c = library_counts(
+        config,
+        purities,
+        orientations,
+        count=_count_images_cached,
+    )
 
     entries = list_blacklist(config)
     blocklist_c = len(entries)
@@ -974,10 +885,6 @@ def get_blocklist():
     return _blocklist_payload(config)
 
 
-class UnblockRequest(BaseModel):
-    filename: str
-
-
 @app.post("/api/blocklist/remove")
 def remove_blocklist_entry(req: UnblockRequest):
     config = get_config()
@@ -1110,36 +1017,10 @@ def preference_suggestion_feedback(req: PreferenceFeedbackRequest):
         )
         if not isinstance(current_candidates, dict):
             raise HTTPException(409, "Image is no longer a model review candidate")
-        candidate_items = current_candidates.get("items", [])
-        if not isinstance(candidate_items, list):
+        candidate_item = _find_review_item(config, current_candidates, image)
+        if candidate_item is None:
             raise HTTPException(409, "Image is no longer a model review candidate")
-        candidate_paths: set[Path] = set()
-        for item in candidate_items:
-            if not isinstance(item, dict):
-                continue
-            path = item.get("path")
-            if not isinstance(path, str):
-                continue
-            try:
-                candidate_path = (config.download_dir / path).resolve()
-            except (OSError, RuntimeError):
-                continue
-            if candidate_path.is_relative_to(config.download_dir.resolve()):
-                candidate_paths.add(candidate_path)
-        if image not in candidate_paths:
-            raise HTTPException(409, "Image is no longer a model review candidate")
-        candidate_model: dict[str, object] | None = None
-        for item in candidate_items:
-            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
-                continue
-            try:
-                candidate_path = (config.download_dir / item["path"]).resolve()
-            except (OSError, RuntimeError):
-                continue
-            if candidate_path != image:
-                continue
-            candidate_model = _model_review_item_details(current_candidates, item)
-            break
+        candidate_model = _model_review_item_details(current_candidates, candidate_item)
 
         _record_preference_feedback(
             config,
@@ -1189,56 +1070,17 @@ def search_images(q: str = "", tags: str = "", uploader: str = ""):
     if not q and not tags and not uploader:
         return {"matches": [], "suggestions": []}
 
-    metadata = _get_metadata()
-    matches: list[str] = []
-    tag_counts: dict[str, int] = {}
-
-    if tags:
-        # Exact tag intersection: image must have ALL specified tags
-        required = {normalize_tag(t) for t in tags.split(",") if normalize_tag(t)}
-        for filename, meta in metadata.items():
-            img_tags = {normalize_tag(t) for t in meta.get("tags", []) if normalize_tag(t)}
-            if required.issubset(img_tags):
-                matches.append(filename)
-        return {"matches": matches, "suggestions": []}
-
-    if uploader:
-        # Exact uploader match (case-insensitive)
-        uploader_lower = uploader.lower()
-        for filename, meta in metadata.items():
-            if meta.get("uploader", "").lower() == uploader_lower:
-                matches.append(filename)
-        return {"matches": matches, "suggestions": []}
-
-    query = q.lower()
-    uploader_counts: dict[str, int] = {}
-    for filename, meta in metadata.items():
-        img_tags = [t.lower() for t in meta.get("tags", [])]
-        category = meta.get("category", "").lower()
-        meta_uploader = meta.get("uploader", "").lower()
-        fname = filename.lower()
-
-        hit = (
-            any(query in tag for tag in img_tags)
-            or query in category
-            or query in meta_uploader
-            or query in fname
-        )
-        if hit:
-            matches.append(filename)
-            for tag in meta.get("tags", []):
-                if tag.lower().startswith(query):
-                    tag_counts[tag] = tag_counts.get(tag, 0) + 1
-            raw_uploader = meta.get("uploader", "")
-            if raw_uploader and query in meta_uploader:
-                uploader_counts[raw_uploader] = uploader_counts.get(raw_uploader, 0) + 1
-
-    suggestions = sorted(tag_counts.keys(), key=lambda t: -tag_counts[t])[:8]
-    upl_suggestions = sorted(uploader_counts.keys(), key=lambda u: -uploader_counts[u])[:4]
+    result = ImageCatalog(_get_metadata()).search(
+        query=q,
+        tags=tags.split(",") if tags else (),
+        uploader=uploader,
+    )
+    if tags or uploader:
+        return {"matches": list(result.matches), "suggestions": []}
     return {
-        "matches": matches,
-        "suggestions": suggestions,
-        "uploader_suggestions": upl_suggestions,
+        "matches": list(result.matches),
+        "suggestions": list(result.tag_suggestions),
+        "uploader_suggestions": list(result.uploader_suggestions),
     }
 
 
@@ -1249,18 +1091,7 @@ def tag_suggestions(context: str = ""):
     With ?context=tag1,tag2, returns refinement suggestions for combo drill-down.
     """
     config = get_config()
-    metadata = _get_metadata()
-
-    # Filter to current purity mode — stale data from inactive modes hurts suggestions
-    from wayper.state import read_mode
-
-    active_purities = read_mode(config)
-    metadata = {
-        fn: meta for fn, meta in metadata.items() if meta.get("purity", "sfw") in active_purities
-    }
-
-    blacklisted = {fn for _, fn in list_blacklist(config) if fn in metadata}
-    favs = _build_favs_set(config)
+    metadata, blacklisted, favs = _active_suggestion_data(config)
     if context:
         from wayper.suggestions import suggest_combo_refinements
 
@@ -1288,17 +1119,7 @@ def tag_suggestions(context: str = ""):
 def uploader_suggestions():
     """Suggest uploaders to exclude based on dislike history."""
     config = get_config()
-    metadata = _get_metadata()
-
-    from wayper.state import read_mode
-
-    active_purities = read_mode(config)
-    metadata = {
-        fn: meta for fn, meta in metadata.items() if meta.get("purity", "sfw") in active_purities
-    }
-
-    blacklisted = {fn for _, fn in list_blacklist(config) if fn in metadata}
-    favs = _build_favs_set(config)
+    metadata, blacklisted, favs = _active_suggestion_data(config)
 
     from wayper.suggestions import suggest_uploaders_to_exclude
 
@@ -1324,56 +1145,14 @@ def tag_stats(
       ?combo=tag1,tag2  — counts for images matching ALL tags simultaneously
     """
     config = get_config()
-    metadata = _get_metadata()
-    blacklisted = {fn for _, fn in list_blacklist(config)}
-    favs = _build_favs_set(config)
-
-    # Parse purity filter
-    purity_set: set[str] | None = None
-    if purity:
-        purity_set = {p.strip().lower() for p in purity.split(",") if p.strip()}
-
-    # Build per-tag counters in a single pass
-    tag_banned: dict[str, int] = {}
-    tag_kept: dict[str, int] = {}
-    tag_fav: dict[str, int] = {}
-    tag_display: dict[str, str] = {}
-    total_banned = 0
-    total_kept = 0
-    total_fav = 0
-
-    for filename, meta in metadata.items():
-        if purity_set and meta.get("purity", "sfw") not in purity_set:
-            continue
-        file_tags = meta.get("tags", [])
-        normalized_tags: list[str] = []
-        seen_tags: set[str] = set()
-        for raw_tag in file_tags:
-            key = normalize_tag(raw_tag)
-            if not key or key in seen_tags:
-                continue
-            seen_tags.add(key)
-            normalized_tags.append(key)
-            tag_display.setdefault(key, str(raw_tag).strip())
-        if filename in blacklisted:
-            total_banned += 1
-            for t in normalized_tags:
-                tag_banned[t] = tag_banned.get(t, 0) + 1
-        else:
-            total_kept += 1
-            is_fav = filename in favs
-            if is_fav:
-                total_fav += 1
-            for t in normalized_tags:
-                tag_kept[t] = tag_kept.get(t, 0) + 1
-                if is_fav:
-                    tag_fav[t] = tag_fav.get(t, 0) + 1
-
-    summary = {
-        "total_banned": total_banned,
-        "total_kept": total_kept,
-        "total_favorites": total_fav,
-    }
+    purities = [value.strip() for value in purity.split(",") if value.strip()] or None
+    catalog = ImageCatalog(
+        _get_metadata(),
+        (filename for _, filename in list_blacklist(config)),
+        _build_favs_set(config),
+        purities=purities,
+    )
+    tag_banned, tag_kept, tag_fav = catalog.tag_counts()
 
     # Mode: specific tag lookup
     if tags:
@@ -1382,47 +1161,28 @@ def tag_stats(
         results = []
         for qt in query_tags:
             key = normalize_tag(qt)
-            canonical = tag_display.get(key, qt.strip())
             results.append(
                 {
-                    "tag": canonical,
+                    "tag": catalog.display_tag(qt),
                     "banned": tag_banned.get(key, 0),
                     "kept": tag_kept.get(key, 0),
                     "favorites": tag_fav.get(key, 0),
                 }
             )
-        return {"tags": results, "summary": summary}
+        return {"tags": results, "summary": catalog.summary}
 
     # Mode: combo lookup
     if combo:
         combo_tags = [t.strip() for t in combo.split(",") if t.strip()]
-        canonical_combo = [tag_display.get(normalize_tag(t), t.strip()) for t in combo_tags]
-        combo_lower = {normalize_tag(t) for t in canonical_combo if normalize_tag(t)}
-
-        combo_banned = 0
-        combo_kept = 0
-        combo_fav = 0
-        for filename, meta in metadata.items():
-            file_tags_lower = {normalize_tag(t) for t in meta.get("tags", []) if normalize_tag(t)}
-            if combo_lower.issubset(file_tags_lower):
-                if filename in blacklisted:
-                    combo_banned += 1
-                else:
-                    combo_kept += 1
-                    if filename in favs:
-                        combo_fav += 1
-        precision = (
-            combo_banned / (combo_banned + combo_kept + 3 * combo_fav)
-            if (combo_banned + combo_kept + combo_fav) > 0
-            else 0
-        )
+        canonical_combo = [catalog.display_tag(tag) for tag in combo_tags]
+        stats = catalog.combo_stats(combo_tags)
         return {
             "combo": canonical_combo,
-            "banned": combo_banned,
-            "kept": combo_kept,
-            "favorites": combo_fav,
-            "precision": round(precision, 3),
-            "summary": summary,
+            "banned": stats.banned,
+            "kept": stats.kept,
+            "favorites": stats.favorites,
+            "precision": round(stats.precision, 3),
+            "summary": catalog.summary,
         }
 
     # Mode: top N tags by group
@@ -1438,14 +1198,14 @@ def tag_stats(
     for t, count in sorted_tags:
         results_top.append(
             {
-                "tag": tag_display.get(t, t),
+                "tag": catalog.display_tag(t),
                 "banned": tag_banned.get(t, 0),
                 "kept": tag_kept.get(t, 0),
                 "favorites": tag_fav.get(t, 0),
                 group + "_count": count,
             }
         )
-    return {"top": results_top, "group": group, "summary": summary}
+    return {"top": results_top, "group": group, "summary": catalog.summary}
 
 
 @app.get("/api/ai-suggestions/status")

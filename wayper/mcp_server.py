@@ -6,23 +6,23 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .backend import get_context, notify, query_current
+from .backend import get_context, notify
+from .catalog import ImageCatalog
 from .config import load_config
 from .core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
-from .daemon import is_daemon_running, request_mode_reload
+from .daemon import request_mode_reload
 from .lock import FileLock
 from .pool import (
     IMAGE_EXTENSIONS,
-    count_images,
-    disk_usage_mb,
+    favorite_filenames,
     favorites_dir,
     list_blacklist,
-    list_images,
     load_metadata,
     pool_dir,
 )
 from .state import ALL_PURITIES, read_mode, write_mode
-from .suggestions import normalize_tag
+from .status import status_snapshot
+from .tags import normalize_tag
 
 mcp = FastMCP("wayper")
 
@@ -47,34 +47,7 @@ def _is_managed_wallpaper(config, path: Path) -> bool:
 @mcp.tool()
 def status() -> dict:
     """Get current wallpaper status: mode, daemon state, disk usage, and per-monitor info."""
-    config = _config()
-    current_mode = read_mode(config)
-    current = query_current()
-
-    monitors_info = []
-    for mon in config.monitors:
-        img = current.get(mon.name)
-        pc = sum(count_images(pool_dir(config, p, mon.orientation)) for p in current_mode)
-        fc = sum(count_images(favorites_dir(config, p, mon.orientation)) for p in current_mode)
-        monitors_info.append(
-            {
-                "name": mon.name,
-                "orientation": mon.orientation,
-                "image": str(img) if img else None,
-                "pool_count": pc,
-                "favorites_count": fc,
-            }
-        )
-
-    daemon_running, _ = is_daemon_running(config)
-
-    return {
-        "mode": current_mode,
-        "daemon": daemon_running,
-        "disk_mb": round(disk_usage_mb(config), 1),
-        "quota_mb": config.quota_mb,
-        "monitors": monitors_info,
-    }
+    return status_snapshot(_config())
 
 
 @mcp.tool()
@@ -246,15 +219,20 @@ def wallpaper_info(image_path: str | None = None) -> dict:
     return {"filename": filename, "metadata": meta}
 
 
-def _collect_favorites() -> set[str]:
+def _collect_favorites(config=None) -> set[str]:
     """Collect favorite filenames across all purities and orientations."""
+    return favorite_filenames(config or _config())
+
+
+def _build_catalog(purity: str | None = None) -> ImageCatalog:
     config = _config()
-    fav_files: set[str] = set()
-    for purity in ALL_PURITIES:
-        for orient in ("landscape", "portrait"):
-            for img in list_images(favorites_dir(config, purity, orient)):
-                fav_files.add(img.name)
-    return fav_files
+    purities = [value.strip() for value in purity.split(",") if value.strip()] if purity else None
+    return ImageCatalog(
+        load_metadata(config),
+        (filename for _, filename in list_blacklist(config)),
+        _collect_favorites(config),
+        purities=purities,
+    )
 
 
 def _build_tag_counts(
@@ -266,53 +244,9 @@ def _build_tag_counts(
         purity: Comma-separated purity filter (e.g. "nsfw" or "sfw, sketchy").
                 If None, includes all purities.
     """
-    config = _config()
-    metadata = load_metadata(config)
-    blacklisted = {fn for _, fn in list_blacklist(config)}
-    fav_files = _collect_favorites()
-
-    # Parse purity filter
-    purity_set: set[str] | None = None
-    if purity:
-        purity_set = {p.strip().lower() for p in purity.split(",") if p.strip()}
-
-    tag_banned: dict[str, int] = {}
-    tag_kept: dict[str, int] = {}
-    tag_fav: dict[str, int] = {}
-    total_banned = total_kept = total_fav = 0
-
-    for filename, meta in metadata.items():
-        if purity_set and meta.get("purity", "sfw") not in purity_set:
-            continue
-        file_tags = meta.get("tags", [])
-        normalized_tags: list[str] = []
-        seen_tags: set[str] = set()
-        for raw_tag in file_tags:
-            key = normalize_tag(raw_tag)
-            if not key or key in seen_tags:
-                continue
-            seen_tags.add(key)
-            normalized_tags.append(key)
-        if filename in blacklisted:
-            total_banned += 1
-            for t in normalized_tags:
-                tag_banned[t] = tag_banned.get(t, 0) + 1
-        else:
-            total_kept += 1
-            is_fav = filename in fav_files
-            if is_fav:
-                total_fav += 1
-            for t in normalized_tags:
-                tag_kept[t] = tag_kept.get(t, 0) + 1
-                if is_fav:
-                    tag_fav[t] = tag_fav.get(t, 0) + 1
-
-    summary = {
-        "total_banned": total_banned,
-        "total_kept": total_kept,
-        "total_favorites": total_fav,
-    }
-    return tag_banned, tag_kept, tag_fav, summary
+    catalog = _build_catalog(purity)
+    banned, kept, favorites = catalog.tag_counts()
+    return dict(banned), dict(kept), dict(favorites), catalog.summary
 
 
 @mcp.tool()
@@ -381,40 +315,16 @@ def tag_stats_combo(combo: str, purity: str | None = None) -> dict:
         combo: Comma-separated tags (e.g. "nude,MetArt"). Returns precision score.
         purity: Comma-separated purity filter (e.g. "nsfw"). All if omitted.
     """
-    config = _config()
-    metadata = load_metadata(config)
-    blacklisted = {fn for _, fn in list_blacklist(config)}
-    fav_files = _collect_favorites()
-
-    purity_set: set[str] | None = None
-    if purity:
-        purity_set = {p.strip().lower() for p in purity.split(",") if p.strip()}
-
+    catalog = _build_catalog(purity)
     combo_tags = [t.strip() for t in combo.split(",") if t.strip()]
-    combo_lower = {normalize_tag(t) for t in combo_tags if normalize_tag(t)}
-
-    combo_banned = combo_kept = combo_fav = 0
-    for filename, meta in metadata.items():
-        if purity_set and meta.get("purity", "sfw") not in purity_set:
-            continue
-        file_tags_lower = {normalize_tag(t) for t in meta.get("tags", []) if normalize_tag(t)}
-        if combo_lower.issubset(file_tags_lower):
-            if filename in blacklisted:
-                combo_banned += 1
-            else:
-                combo_kept += 1
-                if filename in fav_files:
-                    combo_fav += 1
-
-    total = combo_banned + combo_kept + 3 * combo_fav
-    precision = combo_banned / total if total > 0 else 0
+    stats = catalog.combo_stats(combo_tags)
 
     return {
         "combo": combo_tags,
-        "banned": combo_banned,
-        "kept": combo_kept,
-        "favorites": combo_fav,
-        "precision": round(precision, 3),
+        "banned": stats.banned,
+        "kept": stats.kept,
+        "favorites": stats.favorites,
+        "precision": round(stats.precision, 3),
     }
 
 
@@ -426,45 +336,20 @@ def uploader_stats_lookup(uploaders: str, purity: str | None = None) -> dict:
         uploaders: Comma-separated uploader names to look up.
         purity: Comma-separated purity filter (e.g. "nsfw"). All if omitted.
     """
-    config = _config()
-    metadata = load_metadata(config)
-    blacklisted = {fn for _, fn in list_blacklist(config)}
-    fav_files = _collect_favorites()
-
-    purity_set: set[str] | None = None
-    if purity:
-        purity_set = {p.strip().lower() for p in purity.split(",") if p.strip()}
-
-    counts: dict[str, dict[str, int | str]] = {}
-    lower_map: dict[str, str] = {}
-    for filename, meta in metadata.items():
-        if purity_set and meta.get("purity", "sfw") not in purity_set:
-            continue
-        uploader = str(meta.get("uploader", "")).strip()
-        if not uploader:
-            continue
-        canonical = lower_map.setdefault(uploader.casefold(), uploader)
-        row = counts.setdefault(
-            canonical,
-            {"uploader": canonical, "banned": 0, "kept": 0, "favorites": 0},
-        )
-        if filename in blacklisted:
-            row["banned"] += 1
-        else:
-            row["kept"] += 1
-            if filename in fav_files:
-                row["favorites"] += 1
-
+    catalog = _build_catalog(purity)
     query_uploaders = [u.strip() for u in uploaders.split(",") if u.strip()]
     results = []
     for uploader in query_uploaders:
-        canonical = lower_map.get(uploader.casefold(), uploader)
-        row = counts.get(
-            canonical,
-            {"uploader": canonical, "banned": 0, "kept": 0, "favorites": 0},
+        stats = catalog.uploader_stats(uploader)
+        results.append(
+            {
+                "uploader": catalog.display_uploader(uploader),
+                "banned": stats.banned,
+                "kept": stats.kept,
+                "favorites": stats.favorites,
+                "precision": round(stats.precision, 3),
+            }
         )
-        total = row["banned"] + row["kept"] + 3 * row["favorites"]
-        results.append({**row, "precision": round(row["banned"] / total, 3) if total else 0})
 
     return {"uploaders": results}
 

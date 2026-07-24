@@ -9,11 +9,23 @@ from pathlib import Path
 
 import click
 
-from .backend import notify, query_current
+from .backend import notify
 from .config import load_config
 from .core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
-from .pool import count_images, favorites_dir, list_images, pool_dir, should_download
+from .pool import favorite_filenames, should_download
 from .state import ALL_PURITIES, read_mode, toggle_base, toggle_purity, write_mode
+from .status import status_snapshot
+
+
+def _require_success(result, use_json: bool) -> None:
+    """Render a consistent machine-/human-readable core error and stop."""
+    if result.ok:
+        return
+    if use_json:
+        click.echo(json_mod.dumps({"error": result.error}))
+    else:
+        click.echo(result.error, err=True)
+    raise SystemExit(1)
 
 
 @click.group()
@@ -111,12 +123,7 @@ def next_cmd(ctx):
     use_json = ctx.obj["json"]
 
     result = do_next(config)
-    if not result.ok:
-        if use_json:
-            click.echo(json_mod.dumps({"error": result.error}))
-        else:
-            click.echo(result.error, err=True)
-        raise SystemExit(1)
+    _require_success(result, use_json)
 
     if use_json:
         data = {"action": "next", "monitor": result.monitor, "image": str(result.image)}
@@ -153,12 +160,7 @@ def prev_cmd(ctx):
     use_json = ctx.obj["json"]
 
     result = do_prev(config)
-    if not result.ok:
-        if use_json:
-            click.echo(json_mod.dumps({"error": result.error}))
-        else:
-            click.echo(result.error, err=True)
-        raise SystemExit(1)
+    _require_success(result, use_json)
 
     if result.status == "at_oldest":
         if use_json:
@@ -185,12 +187,7 @@ def fav(ctx, open_url):
     use_json = ctx.obj["json"]
 
     result = do_fav(config, open_url=open_url)
-    if not result.ok:
-        if use_json:
-            click.echo(json_mod.dumps({"error": result.error}))
-        else:
-            click.echo(result.error, err=True)
-        raise SystemExit(1)
+    _require_success(result, use_json)
 
     if result.status == "already_favorite":
         if use_json:
@@ -216,12 +213,7 @@ def unfav(ctx):
     use_json = ctx.obj["json"]
 
     result = do_unfav(config)
-    if not result.ok:
-        if use_json:
-            click.echo(json_mod.dumps({"error": result.error}))
-        else:
-            click.echo(result.error, err=True)
-        raise SystemExit(1)
+    _require_success(result, use_json)
 
     if result.status == "not_favorite":
         if use_json:
@@ -244,12 +236,7 @@ def ban(ctx):
     use_json = ctx.obj["json"]
 
     result = do_ban(config)
-    if not result.ok:
-        if use_json:
-            click.echo(json_mod.dumps({"error": result.error}))
-        else:
-            click.echo(result.error, err=True)
-        raise SystemExit(1)
+    _require_success(result, use_json)
 
     if result.status == "is_favorite":
         if use_json:
@@ -272,6 +259,7 @@ def unban(ctx):
     use_json = ctx.obj["json"]
 
     result = do_unban(config)
+    _require_success(result, use_json)
 
     if result.status == "nothing_to_undo":
         if use_json:
@@ -344,49 +332,16 @@ def mode(ctx, new_mode):
 def status(ctx):
     """Show current wallpapers, mode, and pool counts."""
     config = ctx.obj["config"]
-    current_purities = read_mode(config)
-    current = query_current()
-
-    monitors_info = []
-    for mon in config.monitors:
-        img = current.get(mon.name)
-        pc = sum(count_images(pool_dir(config, p, mon.orientation)) for p in current_purities)
-        fc = sum(count_images(favorites_dir(config, p, mon.orientation)) for p in current_purities)
-        monitors_info.append(
-            {
-                "name": mon.name,
-                "orientation": mon.orientation,
-                "image": str(img) if img else None,
-                "pool_count": pc,
-                "favorites_count": fc,
-            }
-        )
-
-    from .daemon import is_daemon_running
-    from .pool import disk_usage_mb
-
-    disk_mb = disk_usage_mb(config)
-    daemon_running, _ = is_daemon_running(config)
+    snapshot = status_snapshot(config)
 
     if ctx.obj["json"]:
-        click.echo(
-            json_mod.dumps(
-                {
-                    "mode": sorted(current_purities),
-                    "daemon": daemon_running,
-                    "disk_mb": round(disk_mb, 1),
-                    "quota_mb": config.quota_mb,
-                    "monitors": monitors_info,
-                },
-                indent=2,
-            )
-        )
+        click.echo(json_mod.dumps(snapshot, indent=2))
     else:
-        mode_label = ", ".join(p for p in ALL_PURITIES if p in current_purities)
+        mode_label = ", ".join(p for p in ALL_PURITIES if p in snapshot["mode"])
         click.echo(f"Mode: {mode_label}")
-        click.echo(f"Daemon: {'running' if daemon_running else 'stopped'}")
-        click.echo(f"Disk: {disk_mb:.0f} MB / {config.quota_mb} MB")
-        for m in monitors_info:
+        click.echo(f"Daemon: {'running' if snapshot['daemon'] else 'stopped'}")
+        click.echo(f"Disk: {snapshot['disk_mb']:.0f} MB / {snapshot['quota_mb']} MB")
+        for m in snapshot["monitors"]:
             click.echo(f"  {m['name']} ({m['orientation']}): {m['image'] or 'none'}")
             click.echo(f"    Pool: {m['pool_count']}, Favorites: {m['favorites_count']}")
 
@@ -439,12 +394,7 @@ def suggest(ctx, use_ai):
 
         metadata = load_metadata(config)
         blacklisted = {fn for _, fn in list_blacklist(config)}
-        favorites = {
-            image.name
-            for purity in ALL_PURITIES
-            for orientation in ("landscape", "portrait")
-            for image in list_images(favorites_dir(config, purity, orientation))
-        }
+        favorites = favorite_filenames(config)
         results = suggest_tags_to_exclude(
             metadata,
             blacklisted,

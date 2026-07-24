@@ -13,11 +13,11 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .catalog import ImageCatalog, net_benefit
 from .config import WayperConfig
 from .pool import (
-    favorites_dir,
+    favorite_filenames,
     list_blacklist,
-    list_images,
     load_metadata,
 )
 from .state import read_mode
@@ -272,73 +272,16 @@ def _suggestion_type(suggestion: dict, tags: list[str]) -> str:
     return "combo" if len(tags) > 1 else "tag"
 
 
-def _meta_tag_lowers(meta: dict) -> set[str]:
-    return {normalize_tag(t) for t in meta.get("tags", []) if normalize_tag(t)}
+def _stats_for_tag(catalog: ImageCatalog, tag: str) -> dict:
+    return catalog.tag_stats(tag).to_dict(include_files=True)
 
 
-def _weighted_precision(banned: int, kept: int, favorites: int) -> float:
-    total = banned + kept + FAV_WEIGHT * favorites
-    return banned / total if total else 0.0
+def _stats_for_combo(catalog: ImageCatalog, tags: list[str]) -> dict:
+    return catalog.combo_stats(tags).to_dict(include_files=True)
 
 
-def _net_benefit(banned: int, kept: int, favorites: int) -> float:
-    return banned - KEPT_WEIGHT * kept - FAV_WEIGHT * favorites
-
-
-def _stats_for_match(metadata: dict, blacklisted: set[str], favorites: set[str], matcher) -> dict:
-    stats = {"banned": 0, "kept": 0, "favorites": 0, "banned_files": set()}
-    for filename, meta in metadata.items():
-        if not matcher(meta):
-            continue
-        if filename in blacklisted:
-            stats["banned"] += 1
-            stats["banned_files"].add(filename)
-        else:
-            stats["kept"] += 1
-            if filename in favorites:
-                stats["favorites"] += 1
-
-    stats["precision"] = round(
-        _weighted_precision(stats["banned"], stats["kept"], stats["favorites"]), 3
-    )
-    stats["net_benefit"] = round(
-        _net_benefit(stats["banned"], stats["kept"], stats["favorites"]), 1
-    )
-    return stats
-
-
-def _stats_for_tag(metadata: dict, blacklisted: set[str], favorites: set[str], tag: str) -> dict:
-    tag_lower = normalize_tag(tag)
-    return _stats_for_match(
-        metadata,
-        blacklisted,
-        favorites,
-        lambda meta: tag_lower in _meta_tag_lowers(meta),
-    )
-
-
-def _stats_for_combo(
-    metadata: dict, blacklisted: set[str], favorites: set[str], tags: list[str]
-) -> dict:
-    combo_lower = _lower_values(tags)
-    return _stats_for_match(
-        metadata,
-        blacklisted,
-        favorites,
-        lambda meta: combo_lower.issubset(_meta_tag_lowers(meta)),
-    )
-
-
-def _stats_for_uploader(
-    metadata: dict, blacklisted: set[str], favorites: set[str], uploader: str
-) -> dict:
-    uploader_lower = str(uploader).strip().casefold()
-    return _stats_for_match(
-        metadata,
-        blacklisted,
-        favorites,
-        lambda meta: str(meta.get("uploader", "")).strip().casefold() == uploader_lower,
-    )
+def _stats_for_uploader(catalog: ImageCatalog, uploader: str) -> dict:
+    return catalog.uploader_stats(uploader).to_dict(include_files=True)
 
 
 def _public_stats(stats: dict) -> dict:
@@ -395,24 +338,26 @@ def _has_covering_combo(combos: list[list[str]], tags: list[str]) -> bool:
 
 
 def _all_banned_files_from_uploaders(
-    stats: dict, metadata: dict, uploader_lowers: set[str]
+    stats: dict, catalog: ImageCatalog, uploader_lowers: set[str]
 ) -> bool:
     banned_files = stats.get("banned_files", set())
     if not banned_files or not uploader_lowers:
         return False
     for filename in banned_files:
-        uploader = str(metadata.get(filename, {}).get("uploader", "")).strip().casefold()
-        if uploader not in uploader_lowers:
+        record = catalog.get(filename)
+        if record is None or record.uploader not in uploader_lowers:
             return False
     return True
 
 
-def _remove_is_supported(stats: dict, metadata: dict, excluded_uploaders_lower: set[str]) -> bool:
+def _remove_is_supported(
+    stats: dict, catalog: ImageCatalog, excluded_uploaders_lower: set[str]
+) -> bool:
     return (
         stats["favorites"] > 0
         or stats["kept"] > 0
         or stats["banned"] == 0
-        or _all_banned_files_from_uploaders(stats, metadata, excluded_uploaders_lower)
+        or _all_banned_files_from_uploaders(stats, catalog, excluded_uploaders_lower)
     )
 
 
@@ -420,9 +365,7 @@ def _validate_add_suggestion(
     raw: dict,
     s_type: str,
     tags: list[str],
-    metadata: dict,
-    blacklisted: set[str],
-    favorites: set[str],
+    catalog: ImageCatalog,
     config: WayperConfig,
 ) -> dict | None:
     excluded_tags_lower = _lower_values(config.wallhaven.exclude_tags)
@@ -435,7 +378,7 @@ def _validate_add_suggestion(
             or is_non_preference_tag(tags[0])
         ):
             return None
-        stats = _stats_for_tag(metadata, blacklisted, favorites, tags[0])
+        stats = _stats_for_tag(catalog, tags[0])
     elif s_type == "combo":
         if len(tags) < 2 or _has_covering_combo(config.wallhaven.exclude_combos, tags):
             return None
@@ -443,18 +386,18 @@ def _validate_add_suggestion(
             return None
         if any(is_non_preference_tag(tag) for tag in tags):
             return None
-        stats = _stats_for_combo(metadata, blacklisted, favorites, tags)
+        stats = _stats_for_combo(catalog, tags)
         # A high-degree positive tag can still be useful in a very specific
         # combo, but only when that exact combo has no positive examples.
         if stats["kept"] > 0 or stats["favorites"] > 0:
             for tag in tags:
-                tag_stats = _stats_for_tag(metadata, blacklisted, favorites, tag)
+                tag_stats = _stats_for_tag(catalog, tag)
                 if is_broad_positive_tag(
                     tag_stats["banned"], tag_stats["kept"], tag_stats["favorites"]
                 ):
                     return None
         for tag in tags:
-            tag_stats = _stats_for_tag(metadata, blacklisted, favorites, tag)
+            tag_stats = _stats_for_tag(catalog, tag)
             if is_subject_tag(tag) and is_broad_positive_tag(
                 tag_stats["banned"], tag_stats["kept"], tag_stats["favorites"]
             ):
@@ -462,7 +405,7 @@ def _validate_add_suggestion(
     elif s_type == "uploader":
         if len(tags) != 1 or tags[0].strip().casefold() in excluded_uploaders_lower:
             return None
-        stats = _stats_for_uploader(metadata, blacklisted, favorites, tags[0])
+        stats = _stats_for_uploader(catalog, tags[0])
     else:
         return None
 
@@ -478,7 +421,7 @@ def _validate_add_suggestion(
         or stats["net_benefit"] <= 0
     ):
         return None
-    if _all_banned_files_from_uploaders(stats, metadata, excluded_uploaders_lower):
+    if _all_banned_files_from_uploaders(stats, catalog, excluded_uploaders_lower):
         return None
     return _annotate_suggestion(raw, s_type, tags, stats)
 
@@ -487,9 +430,7 @@ def _validate_remove_suggestion(
     raw: dict,
     s_type: str,
     tags: list[str],
-    metadata: dict,
-    blacklisted: set[str],
-    favorites: set[str],
+    catalog: ImageCatalog,
     config: WayperConfig,
 ) -> dict | None:
     excluded_tags_lower = _lower_values(config.wallhaven.exclude_tags)
@@ -498,22 +439,22 @@ def _validate_remove_suggestion(
     if s_type == "tag":
         if len(tags) != 1 or normalize_tag(tags[0]) not in excluded_tags_lower:
             return None
-        stats = _stats_for_tag(metadata, blacklisted, favorites, tags[0])
+        stats = _stats_for_tag(catalog, tags[0])
     elif s_type == "combo":
         if len(tags) < 2 or not _has_exact_combo(config.wallhaven.exclude_combos, tags):
             return None
-        stats = _stats_for_combo(metadata, blacklisted, favorites, tags)
+        stats = _stats_for_combo(catalog, tags)
     elif s_type == "uploader":
         if len(tags) != 1 or tags[0].strip().casefold() not in excluded_uploaders_lower:
             return None
-        stats = _stats_for_uploader(metadata, blacklisted, favorites, tags[0])
+        stats = _stats_for_uploader(catalog, tags[0])
         if not (stats["favorites"] > 0 or stats["kept"] > 0 or stats["banned"] == 0):
             return None
         return _annotate_suggestion(raw, s_type, tags, stats)
     else:
         return None
 
-    if not _remove_is_supported(stats, metadata, excluded_uploaders_lower):
+    if not _remove_is_supported(stats, catalog, excluded_uploaders_lower):
         return None
     return _annotate_suggestion(raw, s_type, tags, stats)
 
@@ -526,6 +467,7 @@ def _filter_ai_suggestions(
     config: WayperConfig,
 ) -> dict:
     """Validate Codex suggestions against local stats before showing them."""
+    catalog = ImageCatalog(metadata, blacklisted, favorites)
     parsed = {
         "analysis": str(result.get("analysis", "")),
         "add_suggestions": [],
@@ -544,7 +486,7 @@ def _filter_ai_suggestions(
                 continue
             tags = _clean_values(raw.get("tags", []))
             s_type = _suggestion_type(raw, tags)
-            validated = validator(raw, s_type, tags, metadata, blacklisted, favorites, config)
+            validated = validator(raw, s_type, tags, catalog, config)
             if not validated:
                 dropped += 1
                 continue
@@ -569,21 +511,22 @@ def _build_rule_health(
     max_results: int = 15,
 ) -> list[dict]:
     """Summarize existing exclusions that have collateral or no current support."""
+    catalog = ImageCatalog(metadata, blacklisted, favorites)
     excluded_uploaders_lower = _lower_values(config.wallhaven.exclude_uploaders)
     items = []
 
     for tag in config.wallhaven.exclude_tags:
-        stats = _stats_for_tag(metadata, blacklisted, favorites, tag)
-        if _remove_is_supported(stats, metadata, excluded_uploaders_lower):
+        stats = _stats_for_tag(catalog, tag)
+        if _remove_is_supported(stats, catalog, excluded_uploaders_lower):
             items.append({"type": "tag", "tags": [tag], **_public_stats(stats)})
 
     for combo in config.wallhaven.exclude_combos:
-        stats = _stats_for_combo(metadata, blacklisted, favorites, combo)
-        if _remove_is_supported(stats, metadata, excluded_uploaders_lower):
+        stats = _stats_for_combo(catalog, combo)
+        if _remove_is_supported(stats, catalog, excluded_uploaders_lower):
             items.append({"type": "combo", "tags": combo, **_public_stats(stats)})
 
     for uploader in config.wallhaven.exclude_uploaders:
-        stats = _stats_for_uploader(metadata, blacklisted, favorites, uploader)
+        stats = _stats_for_uploader(catalog, uploader)
         if stats["favorites"] > 0 or stats["kept"] > 0 or stats["banned"] == 0:
             items.append({"type": "uploader", "tags": [uploader], **_public_stats(stats)})
 
@@ -966,11 +909,7 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
     }
 
     blacklisted = {fn for _, fn in blacklist_entries if fn in metadata}
-    fav_files_set: set[str] = set()
-    for purity in active_purities:
-        for orient in ("landscape", "portrait"):
-            for img in list_images(favorites_dir(config, purity, orient)):
-                fav_files_set.add(img.name)
+    fav_files_set = favorite_filenames(config, active_purities)
 
     _ai_status["phase"] = "preparing"
     _ai_status["detail"] = "Collecting tags"
@@ -1048,7 +987,7 @@ async def _generate_ai_suggestions_impl(config: WayperConfig) -> dict:
             uploader_fav_count.get(u, 0),
             min_precision=MIN_AI_PRECISION,
         )
-        and _net_benefit(c, uploader_kept_count.get(u, 0), 0) > 0
+        and net_benefit(c, uploader_kept_count.get(u, 0), 0) > 0
         and u.strip().casefold() not in _lower_values(config.wallhaven.exclude_uploaders)
     ][:10]
 

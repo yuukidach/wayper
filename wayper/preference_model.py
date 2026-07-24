@@ -9,327 +9,175 @@ does not pull in an embedding model or a heavyweight ML runtime.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import math
 import os
-import random
 import secrets
 import subprocess
 import sys
 import time
-from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass
-from dataclasses import field as dataclass_field
-from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import WayperConfig
 from .lock import FileLock
+from .preference.model import (
+    _CONTEXT_FIELDS,
+    _NON_PREFERENCE_FEATURE_TAGS,
+    _PAIR_SEPARATOR,
+    DEFAULT_COMBO_MIN_SUPPORT,
+    DEFAULT_EPOCHS,
+    DEFAULT_FAVORITE_WEIGHT,
+    DEFAULT_FEATURE_NORMALIZATION,
+    DEFAULT_MAX_COMBO_FEATURES,
+    DEFAULT_RECENCY_HALF_LIFE_DAYS,
+    DEFAULT_THRESHOLD,
+    DEFAULT_UPLOADER_MIN_SUPPORT,
+    LEGACY_MODEL_SCHEMA_VERSION,
+    MIN_TRAINING_PER_CLASS,
+    MIN_VALIDATION_PER_CLASS,
+    MODEL_SCHEMA_VERSION,
+    FeatureSpace,
+    PreferenceExample,
+    PreferenceModel,
+    PreferencePrediction,
+    PreferenceTrainingSnapshot,
+    _active_feature_values,
+    _active_features,
+    _combo_feature,
+    _context_min_support,
+    _contribution_direction,
+    _display_context_feature,
+    _format_pair,
+    _ftrl_weight,
+    _is_eligible_tag,
+    _model_context_features,
+    _model_tags,
+    _normalize_context_features,
+    _pair_is_eligible,
+    _pair_keys,
+    _sigmoid,
+    _storage_feature_key,
+)
+from .preference.training import (
+    _build_feature_space,
+    _evaluate,
+    _fit,
+    _fit_ftrl,
+    _has_both_classes,
+    _metadata_timestamp,
+    _recency_weight,
+    _roc_auc,
+    _sample_weights,
+    _temporal_split,
+    _training_data_signature,
+    _training_example_ids,
+    _training_example_payload,
+    _validate_training_examples,
+    _wilson_lower_bound,
+    train_preference_model,
+)
 from .process import windows_no_window_kwargs
-from .suggestions import normalize_tag
+from .tags import normalize_tag
 from .util import atomic_write
 
-MODEL_SCHEMA_VERSION = 2
-LEGACY_MODEL_SCHEMA_VERSION = 1
-DEFAULT_COMBO_MIN_SUPPORT = 20
-DEFAULT_MAX_COMBO_FEATURES = 0
-DEFAULT_UPLOADER_MIN_SUPPORT = 10
-DEFAULT_EPOCHS = 6
-DEFAULT_THRESHOLD = 0.98
-DEFAULT_FAVORITE_WEIGHT = 4.0
-DEFAULT_RECENCY_HALF_LIFE_DAYS = 90
-DEFAULT_FEATURE_NORMALIZATION = "field_l2"
+# Preserve the original module's import surface while implementation details
+# live in focused model and training modules.
+__all__ = [
+    "MODEL_SCHEMA_VERSION",
+    "LEGACY_MODEL_SCHEMA_VERSION",
+    "DEFAULT_COMBO_MIN_SUPPORT",
+    "DEFAULT_MAX_COMBO_FEATURES",
+    "DEFAULT_UPLOADER_MIN_SUPPORT",
+    "DEFAULT_EPOCHS",
+    "DEFAULT_THRESHOLD",
+    "DEFAULT_FAVORITE_WEIGHT",
+    "DEFAULT_RECENCY_HALF_LIFE_DAYS",
+    "DEFAULT_FEATURE_NORMALIZATION",
+    "MIN_TRAINING_PER_CLASS",
+    "MIN_VALIDATION_PER_CLASS",
+    "AUTO_SKIP_MIN_PRECISION",
+    "AUTO_SKIP_MIN_PREDICTIONS",
+    "AUTO_SKIP_MIN_PRECISION_LOWER_BOUND",
+    "DEFAULT_REVIEW_MIN_FEATURE_SCORE",
+    "DEFAULT_REVIEW_THRESHOLD",
+    "DEFAULT_REVIEW_LIMIT",
+    "AUTO_RETRAIN_MIN_FEEDBACK",
+    "AUTO_RETRAIN_MIN_CHANGED_EXAMPLES",
+    "AUTO_RETRAIN_DELAY_SECONDS",
+    "AUTO_RETRAIN_WORKER_STALE_SECONDS",
+    "normalize_tag",
+    "FeatureSpace",
+    "PreferenceExample",
+    "PreferenceModel",
+    "PreferencePrediction",
+    "PreferenceTrainingSnapshot",
+    "_CONTEXT_FIELDS",
+    "_NON_PREFERENCE_FEATURE_TAGS",
+    "_PAIR_SEPARATOR",
+    "_active_feature_values",
+    "_active_features",
+    "_build_feature_space",
+    "_combo_feature",
+    "_context_min_support",
+    "_contribution_direction",
+    "_display_context_feature",
+    "_evaluate",
+    "_fit",
+    "_fit_ftrl",
+    "_format_pair",
+    "_ftrl_weight",
+    "_has_both_classes",
+    "_is_eligible_tag",
+    "_normalize_context_features",
+    "_pair_is_eligible",
+    "_pair_keys",
+    "_roc_auc",
+    "_sample_weights",
+    "_sigmoid",
+    "_storage_feature_key",
+    "_temporal_split",
+    "_training_example_payload",
+    "_validate_training_examples",
+    "_wilson_lower_bound",
+    "train_preference_model",
+    "preference_model_path",
+    "preference_feedback_path",
+    "preference_historical_bans_path",
+    "load_preference_historical_bans",
+    "save_preference_model",
+    "load_preference_model",
+    "load_preference_feedback",
+    "record_preference_feedback",
+    "build_training_examples",
+    "collect_preference_training_snapshot",
+    "train_local_preference_model",
+    "train_and_save_local_preference_model",
+    "model_report",
+    "auto_skip_ready",
+    "preference_learning_status",
+    "preference_deletion_suggestions",
+    "schedule_preference_model_retrain",
+    "run_scheduled_preference_model_retrain",
+]
+
 AUTO_SKIP_MIN_PRECISION = 0.95
 AUTO_SKIP_MIN_PREDICTIONS = 20
 AUTO_SKIP_MIN_PRECISION_LOWER_BOUND = 0.80
-# Review is a relative ranking over the current pool.  An item must have net
-# learned dislike evidence; uncalibrated sigmoid output is never used as a
-# probability gate.
 DEFAULT_REVIEW_MIN_FEATURE_SCORE = 0.0
-# Kept as a read-time compatibility constant for integrations that imported
-# the v1 setting.  v2 never uses a fixed probability threshold for review.
 DEFAULT_REVIEW_THRESHOLD = 0.82
 DEFAULT_REVIEW_LIMIT = 24
 AUTO_RETRAIN_MIN_FEEDBACK = 10
 AUTO_RETRAIN_MIN_CHANGED_EXAMPLES = 12
 AUTO_RETRAIN_DELAY_SECONDS = 5
 AUTO_RETRAIN_WORKER_STALE_SECONDS = 30 * 60
-MIN_TRAINING_PER_CLASS = 10
-MIN_VALIDATION_PER_CLASS = 5
-_PAIR_SEPARATOR = "\x1f"
 _FEEDBACK_SCHEMA_VERSION = 2
 _LEGACY_FEEDBACK_SCHEMA_VERSION = 1
 _HISTORICAL_BAN_SCHEMA_VERSION = 1
 _FEEDBACK_ACTIONS = frozenset({"ban", "unban", "favorite", "unfavorite", "keep"})
 
 log = logging.getLogger("wayper.preference_model")
-
-# Display geometry is already selected before suggestions are scored, so using
-# it as a model feature only teaches the current monitor shape.  Subject tags,
-# on the other hand, are useful signals in a local, user-owned wallpaper model
-# and must remain available for explicit personal preferences.
-_NON_PREFERENCE_FEATURE_TAGS = frozenset(
-    {
-        "portrait",
-        "landscape",
-        "portrait display",
-        "landscape display",
-        "vertical",
-        "horizontal",
-    }
-)
-
-
-@dataclass(frozen=True)
-class PreferenceExample:
-    """One labelled metadata record used during fitting."""
-
-    filename: str
-    tags: tuple[str, ...]
-    label: int
-    base_weight: float
-    timestamp: int
-    is_favorite: bool = False
-    is_explicit_keep: bool = False
-    temporal_label_known: bool = True
-    # New fields are kept after the v1 positional fields so integrations that
-    # construct examples directly remain source-compatible.
-    context_features: tuple[str, ...] = ()
-    is_control: bool = False
-
-
-@dataclass(frozen=True)
-class PreferenceTrainingSnapshot:
-    """A stable local view of labels used to fit or refresh a model."""
-
-    examples: tuple[PreferenceExample, ...]
-    feedback_revision: int
-    data_signature: str
-    favorite_files: int
-
-
-@dataclass(frozen=True)
-class FeatureSpace:
-    """Controlled vocabulary shared by training and prediction."""
-
-    tags: frozenset[str]
-    combos: frozenset[str]
-    context: frozenset[str] = frozenset()
-
-
-@dataclass(frozen=True)
-class PreferencePrediction:
-    """A score and its strongest explainable feature contributions."""
-
-    probability: float
-    score: float
-    contributions: tuple[dict[str, object], ...]
-    positive_evidence_count: int = 0
-    feature_score: float = 0.0
-    calibrated: bool = False
-
-    def to_dict(self) -> dict[str, object]:
-        dislike_evidence = [
-            item for item in self.contributions if _contribution_direction(item) == "dislike"
-        ]
-        keep_evidence = [
-            item for item in self.contributions if _contribution_direction(item) == "keep"
-        ]
-        return {
-            "probability": round(self.probability, 4),
-            "score": round(self.score, 4),
-            "feature_score": round(self.feature_score, 4),
-            "contributions": list(self.contributions),
-            "dislike_evidence": dislike_evidence,
-            "keep_evidence": keep_evidence,
-            "positive_evidence_count": self.positive_evidence_count,
-            "calibrated": self.calibrated,
-        }
-
-
-def _contribution_direction(value: object) -> str | None:
-    """Read an explanation direction while tolerating legacy string items."""
-    if isinstance(value, dict):
-        direction = value.get("direction")
-        return direction if direction in {"dislike", "keep"} else None
-    return "dislike" if isinstance(value, str) else None
-
-
-@dataclass
-class PreferenceModel:
-    """Persisted sparse logistic model.
-
-    The fitted margin is useful for local ranking.  ``probability`` is retained
-    for API compatibility, but should only be described as a probability after
-    an explicit calibration pass has been recorded in ``validation``.
-    """
-
-    bias: float
-    prior_log_odds: float
-    tag_weights: dict[str, float]
-    combo_weights: dict[str, float]
-    threshold: float
-    trained_at: str
-    training_summary: dict[str, object]
-    validation: dict[str, object]
-    combo_min_support: int
-    max_combo_features: int
-    # Keep v1's positional constructor intact; v2 additions are optional for
-    # callers that build an in-memory model rather than loading JSON.
-    context_weights: dict[str, float] = dataclass_field(default_factory=dict)
-    schema_version: int = MODEL_SCHEMA_VERSION
-    feature_normalization: str = DEFAULT_FEATURE_NORMALIZATION
-
-    @property
-    def feature_space(self) -> FeatureSpace:
-        return FeatureSpace(
-            frozenset(self.tag_weights),
-            frozenset(self.combo_weights),
-            frozenset(self.context_weights),
-        )
-
-    def predict(
-        self,
-        tags: Iterable[object],
-        *,
-        metadata: dict[str, object] | None = None,
-        context_features: Iterable[object] | None = None,
-        top_n: int = 8,
-    ) -> PreferencePrediction:
-        """Return a local dislike margin and feature-level explanation.
-
-        ``probability`` remains available for CLI/API compatibility, but it is
-        uncalibrated unless the validation report explicitly says otherwise.
-        Model review ranks by ``feature_score`` instead.
-        """
-        normalized = _model_tags(tags)
-        normalized_context = (
-            _normalize_context_features(context_features)
-            if context_features is not None
-            else _model_context_features(metadata)
-        )
-        score = self.bias + self.prior_log_odds
-        feature_score = 0.0
-        contributions: list[tuple[str, str, float, float]] = []
-        for namespace, name, value in _active_feature_values(
-            normalized,
-            normalized_context,
-            self.feature_space,
-            self.feature_normalization,
-        ):
-            if namespace == "tag":
-                weight = self.tag_weights[name]
-                feature_type = "tag"
-                display_name = name
-            elif namespace == "combo":
-                weight = self.combo_weights[name]
-                feature_type = "combo"
-                display_name = _format_pair(name)
-            else:
-                weight = self.context_weights[name]
-                feature_type, display_name = _display_context_feature(name)
-            contribution = weight * value
-            score += contribution
-            feature_score += contribution
-            contributions.append((feature_type, display_name, contribution, weight))
-
-        ordered = sorted(
-            contributions,
-            key=lambda item: (-abs(item[2]), item[0], item[1]),
-        )[:top_n]
-        explanation = tuple(
-            {
-                "type": feature_type,
-                "feature": name,
-                "weight": round(contribution, 4),
-                "coefficient": round(coefficient, 4),
-                "direction": "dislike" if contribution > 0 else "keep",
-            }
-            for feature_type, name, contribution, coefficient in ordered
-        )
-        return PreferencePrediction(
-            probability=_sigmoid(score),
-            score=score,
-            feature_score=feature_score,
-            contributions=explanation,
-            positive_evidence_count=sum(item[2] > 0 for item in contributions),
-            calibrated=self.validation.get("calibrated") is True,
-        )
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "schema_version": self.schema_version,
-            "trained_at": self.trained_at,
-            "threshold": self.threshold,
-            "bias": self.bias,
-            "prior_log_odds": self.prior_log_odds,
-            "tag_weights": self.tag_weights,
-            "combo_weights": self.combo_weights,
-            "context_weights": self.context_weights,
-            "combo_min_support": self.combo_min_support,
-            "max_combo_features": self.max_combo_features,
-            "feature_normalization": self.feature_normalization,
-            "training_summary": self.training_summary,
-            "validation": self.validation,
-        }
-
-    @classmethod
-    def from_dict(cls, raw: object) -> PreferenceModel:
-        """Deserialize a saved model, rejecting incompatible data."""
-        if not isinstance(raw, dict):
-            raise ValueError("Unsupported preference model file")
-        raw_schema_version = raw.get("schema_version")
-        if isinstance(raw_schema_version, bool) or raw_schema_version not in {
-            LEGACY_MODEL_SCHEMA_VERSION,
-            MODEL_SCHEMA_VERSION,
-        }:
-            raise ValueError("Unsupported preference model file")
-        schema_version = int(raw_schema_version)
-
-        def weights(key: str) -> dict[str, float]:
-            values = raw.get(key, {})
-            if not isinstance(values, dict):
-                raise ValueError(f"Invalid preference model {key}")
-            return {str(name): float(weight) for name, weight in values.items()}
-
-        summary = raw.get("training_summary", {})
-        validation = raw.get("validation", {})
-        if not isinstance(summary, dict) or not isinstance(validation, dict):
-            raise ValueError("Invalid preference model summary")
-        return cls(
-            bias=float(raw["bias"]),
-            prior_log_odds=float(raw["prior_log_odds"]),
-            tag_weights=weights("tag_weights"),
-            combo_weights=weights("combo_weights"),
-            context_weights=weights("context_weights"),
-            threshold=float(raw.get("threshold", DEFAULT_THRESHOLD)),
-            trained_at=str(raw.get("trained_at", "")),
-            training_summary=summary,
-            validation=validation,
-            combo_min_support=int(
-                raw.get(
-                    "combo_min_support",
-                    (
-                        5
-                        if schema_version == LEGACY_MODEL_SCHEMA_VERSION
-                        else DEFAULT_COMBO_MIN_SUPPORT
-                    ),
-                )
-            ),
-            max_combo_features=int(raw.get("max_combo_features", DEFAULT_MAX_COMBO_FEATURES)),
-            schema_version=schema_version,
-            feature_normalization=str(
-                raw.get(
-                    "feature_normalization",
-                    "none"
-                    if schema_version == LEGACY_MODEL_SCHEMA_VERSION
-                    else DEFAULT_FEATURE_NORMALIZATION,
-                )
-            ),
-        )
 
 
 def preference_model_path(config: WayperConfig) -> Path:
@@ -794,92 +642,6 @@ def train_and_save_local_preference_model(
         if _save_manual_preference_model(config, model, snapshot):
             return model, snapshot
     raise OSError("Wallpaper labels changed while training; please run model train again")
-
-
-def train_preference_model(
-    examples: list[PreferenceExample],
-    *,
-    combo_min_support: int = DEFAULT_COMBO_MIN_SUPPORT,
-    max_combo_features: int = DEFAULT_MAX_COMBO_FEATURES,
-    threshold: float = DEFAULT_THRESHOLD,
-    epochs: int = DEFAULT_EPOCHS,
-    validation_days: int = 14,
-    feedback_revision: int = 0,
-    retrain_mode: str = "manual",
-) -> PreferenceModel:
-    """Fit the lightweight explainable preference ranking model."""
-    examples = sorted(
-        examples,
-        key=lambda example: (
-            example.timestamp,
-            example.filename,
-            example.label,
-            example.tags,
-            example.context_features,
-            example.is_favorite,
-            example.is_explicit_keep,
-            example.is_control,
-            example.temporal_label_known,
-        ),
-    )
-    _validate_training_examples(examples)
-    if combo_min_support < 2:
-        raise ValueError("combo_min_support must be at least 2")
-    if max_combo_features < 0:
-        raise ValueError("max_combo_features cannot be negative")
-    if not 0 < threshold < 1:
-        raise ValueError("threshold must be between 0 and 1")
-    if epochs < 1:
-        raise ValueError("epochs must be positive")
-
-    implicit_retained_excluded = sum(
-        example.label == 0 and (example.is_control or not example.temporal_label_known)
-        for example in examples
-    )
-    training, holdout = _temporal_split(examples, validation_days)
-    validation: dict[str, object] = {
-        "available": False,
-        "calibrated": False,
-        "reason": "not enough temporally observed labelled data",
-        "excluded_implicit_retained": implicit_retained_excluded,
-        "excluded_controls": implicit_retained_excluded,
-    }
-    if _has_both_classes(training, MIN_VALIDATION_PER_CLASS) and _has_both_classes(
-        holdout, MIN_VALIDATION_PER_CLASS
-    ):
-        validation_model = _fit(
-            training,
-            combo_min_support=combo_min_support,
-            max_combo_features=max_combo_features,
-            threshold=threshold,
-            epochs=epochs,
-        )
-        validation = _evaluate(validation_model, holdout, threshold)
-        validation["available"] = True
-        validation["holdout_days"] = validation_days
-        validation["excluded_implicit_retained"] = implicit_retained_excluded
-        validation["excluded_controls"] = implicit_retained_excluded
-
-    model = _fit(
-        examples,
-        combo_min_support=combo_min_support,
-        max_combo_features=max_combo_features,
-        threshold=threshold,
-        epochs=epochs,
-    )
-    model.validation = validation
-    model.training_summary.update(
-        {
-            "feedback_revision": feedback_revision,
-            "training_data_signature": _training_data_signature(examples),
-            "example_ids": _training_example_ids(examples),
-            "validation_days": validation_days,
-            "retrain_mode": retrain_mode,
-            "explicit_keeps": sum(example.is_explicit_keep for example in examples),
-            "controls": sum(example.is_control for example in examples),
-        }
-    )
-    return model
 
 
 def model_report(
@@ -1506,506 +1268,3 @@ def _positive_label_timestamp(meta: dict, event: dict[str, object] | None, fallb
         except (KeyError, TypeError, ValueError):
             pass
     return _metadata_timestamp(meta, fallback)
-
-
-def _training_example_payload(example: PreferenceExample, *, include_weight: bool) -> str:
-    """Serialize one example for stable data or label identity fingerprints."""
-    values: list[object] = [
-        example.filename,
-        list(example.tags),
-        example.label,
-        example.timestamp,
-        example.is_favorite,
-        example.is_explicit_keep,
-        example.is_control,
-        example.temporal_label_known,
-        list(example.context_features),
-    ]
-    if include_weight:
-        # The snapshot is day-stable. Rounding avoids insignificant platform
-        # floating-point noise while still noticing deliberate recency decay.
-        values.append(round(example.base_weight, 10))
-    return json.dumps(
-        values,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def _training_example_ids(examples: Iterable[PreferenceExample]) -> list[str]:
-    return sorted(
-        hashlib.blake2b(
-            _training_example_payload(example, include_weight=False).encode(), digest_size=8
-        ).hexdigest()
-        for example in examples
-    )
-
-
-def _training_data_signature(examples: Iterable[PreferenceExample]) -> str:
-    digest = hashlib.sha256()
-    for payload in sorted(
-        _training_example_payload(example, include_weight=True) for example in examples
-    ):
-        digest.update(payload.encode())
-        digest.update(b"\n")
-    return digest.hexdigest()
-
-
-def _fit(
-    examples: list[PreferenceExample],
-    *,
-    combo_min_support: int,
-    max_combo_features: int,
-    threshold: float,
-    epochs: int,
-) -> PreferenceModel:
-    feature_space = _build_feature_space(examples, combo_min_support, max_combo_features)
-    sample_weights, _historical_prior = _sample_weights(examples)
-    bias, weights = _fit_ftrl(
-        examples,
-        feature_space,
-        sample_weights,
-        epochs,
-        normalization=DEFAULT_FEATURE_NORMALIZATION,
-    )
-    tag_weights = {tag: weight for tag in feature_space.tags if (weight := weights.get(tag, 0.0))}
-    combo_weights = {
-        pair: weight
-        for pair in feature_space.combos
-        if (weight := weights.get(_storage_feature_key("combo", pair), 0.0))
-    }
-    context_weights = {
-        token: weight
-        for token in feature_space.context
-        if (weight := weights.get(_storage_feature_key("context", token), 0.0))
-    }
-    summary = {
-        "examples": len(examples),
-        "banned": sum(example.label == 1 for example in examples),
-        "retained": sum(example.label == 0 for example in examples),
-        "controls": sum(example.is_control for example in examples),
-        "favorites": sum(example.is_favorite for example in examples),
-        "tag_features": len(tag_weights),
-        "combo_features": len(combo_weights),
-        "context_features": len(context_weights),
-        "combo_min_support": combo_min_support,
-        "max_combo_features": max_combo_features,
-        "feature_normalization": DEFAULT_FEATURE_NORMALIZATION,
-        "epochs": epochs,
-    }
-    return PreferenceModel(
-        bias=bias,
-        # The ban/control ratio is a sampling artifact: bans accumulate while
-        # the live pool is quota-limited. Keep the ranking intercept neutral.
-        prior_log_odds=0.0,
-        tag_weights=tag_weights,
-        combo_weights=combo_weights,
-        context_weights=context_weights,
-        threshold=threshold,
-        trained_at=datetime.now(UTC).isoformat(),
-        training_summary=summary,
-        validation={},
-        combo_min_support=combo_min_support,
-        max_combo_features=max_combo_features,
-        schema_version=MODEL_SCHEMA_VERSION,
-        feature_normalization=DEFAULT_FEATURE_NORMALIZATION,
-    )
-
-
-def _build_feature_space(
-    examples: Iterable[PreferenceExample], combo_min_support: int, max_combo_features: int
-) -> FeatureSpace:
-    tag_counts: Counter[str] = Counter()
-    pair_counts: Counter[str] = Counter()
-    context_counts: Counter[str] = Counter()
-    for example in examples:
-        tags = _model_tags(example.tags)
-        tag_counts.update(tags)
-        # Pair extraction is quadratic in tag count.  The recommended v2
-        # model disables pairs, so do not pay that cost merely to discard the
-        # resulting vocabulary afterward.
-        if max_combo_features:
-            pair_counts.update(_pair_keys(tags))
-        context_counts.update(_normalize_context_features(example.context_features))
-
-    tags = frozenset(tag for tag, count in tag_counts.items() if count >= 2)
-    ordered_pairs = sorted(
-        (
-            pair
-            for pair, count in pair_counts.items()
-            if count >= combo_min_support and _pair_is_eligible(pair)
-        ),
-        key=lambda pair: (-pair_counts[pair], pair),
-    )
-    if max_combo_features:
-        ordered_pairs = ordered_pairs[:max_combo_features]
-    else:
-        ordered_pairs = []
-    context = frozenset(
-        token for token, count in context_counts.items() if count >= _context_min_support(token)
-    )
-    return FeatureSpace(tags, frozenset(ordered_pairs), context)
-
-
-def _fit_ftrl(
-    examples: list[PreferenceExample],
-    feature_space: FeatureSpace,
-    sample_weights: list[float],
-    epochs: int,
-    *,
-    normalization: str = DEFAULT_FEATURE_NORMALIZATION,
-) -> tuple[float, dict[str, float]]:
-    """Fit sparse logistic weights with deterministic FTRL-Proximal updates."""
-    alpha = 0.12
-    beta = 1.0
-    l1 = 0.08
-    l2 = 0.15
-    z: dict[str, float] = {}
-    n: dict[str, float] = {}
-    bias_z = 0.0
-    bias_n = 0.0
-    order = list(range(len(examples)))
-    random.Random(0).shuffle(order)
-
-    for _ in range(epochs):
-        for index in order:
-            example = examples[index]
-            feature_values = _active_feature_values(
-                example.tags,
-                example.context_features,
-                feature_space,
-                normalization,
-            )
-            bias = _ftrl_weight(bias_z, bias_n, alpha, beta, 0.0, l2)
-            score = bias + sum(
-                _ftrl_weight(
-                    z.get(_storage_feature_key(namespace, name), 0.0),
-                    n.get(_storage_feature_key(namespace, name), 0.0),
-                    alpha,
-                    beta,
-                    l1,
-                    l2,
-                )
-                * value
-                for namespace, name, value in feature_values
-            )
-            gradient = (_sigmoid(score) - example.label) * sample_weights[index]
-
-            sigma = (math.sqrt(bias_n + gradient * gradient) - math.sqrt(bias_n)) / alpha
-            bias_z += gradient - sigma * bias
-            bias_n += gradient * gradient
-            for namespace, name, value in feature_values:
-                storage_name = _storage_feature_key(namespace, name)
-                old_n = n.get(storage_name, 0.0)
-                old_z = z.get(storage_name, 0.0)
-                weight = _ftrl_weight(old_z, old_n, alpha, beta, l1, l2)
-                feature_gradient = gradient * value
-                sigma = (
-                    math.sqrt(old_n + feature_gradient * feature_gradient) - math.sqrt(old_n)
-                ) / alpha
-                z[storage_name] = old_z + feature_gradient - sigma * weight
-                n[storage_name] = old_n + feature_gradient * feature_gradient
-
-    weights = {
-        name: weight
-        for name, z_value in z.items()
-        if (weight := _ftrl_weight(z_value, n[name], alpha, beta, l1, l2)) != 0.0
-    }
-    return _ftrl_weight(bias_z, bias_n, alpha, beta, 0.0, l2), weights
-
-
-def _sample_weights(examples: list[PreferenceExample]) -> tuple[list[float], float]:
-    positive_total = sum(example.base_weight for example in examples if example.label == 1)
-    negative_total = sum(example.base_weight for example in examples if example.label == 0)
-    if not positive_total or not negative_total:
-        raise ValueError("Need both banned and retained examples")
-    target = (positive_total + negative_total) / 2
-    positive_factor = target / positive_total
-    negative_factor = target / negative_total
-    weights = [
-        example.base_weight * (positive_factor if example.label else negative_factor)
-        for example in examples
-    ]
-    return weights, math.log(positive_total / negative_total)
-
-
-def _evaluate(
-    model: PreferenceModel, examples: Iterable[PreferenceExample], threshold: float
-) -> dict[str, object]:
-    predicted = [
-        (
-            model.predict(
-                example.tags,
-                context_features=example.context_features,
-            ).probability,
-            example.label,
-        )
-        for example in examples
-    ]
-    true_positive = sum(probability >= threshold and label == 1 for probability, label in predicted)
-    false_positive = sum(
-        probability >= threshold and label == 0 for probability, label in predicted
-    )
-    false_negative = sum(probability < threshold and label == 1 for probability, label in predicted)
-    predicted_at_threshold = true_positive + false_positive
-    total = len(predicted)
-    correct = sum((probability >= 0.5) == bool(label) for probability, label in predicted)
-    roc_auc = _roc_auc(predicted)
-    return {
-        "examples": total,
-        # A time split measures ranking/threshold behavior only.  No external
-        # calibration set is available yet, so callers must not present this
-        # sigmoid as a trustworthy probability.
-        "calibrated": False,
-        "precision_at_threshold": round(true_positive / (true_positive + false_positive), 3)
-        if predicted_at_threshold
-        else None,
-        "predicted_at_threshold": predicted_at_threshold,
-        "precision_lower_bound": round(
-            _wilson_lower_bound(true_positive, predicted_at_threshold), 3
-        )
-        if predicted_at_threshold
-        else None,
-        "recall_at_threshold": round(true_positive / (true_positive + false_negative), 3)
-        if true_positive + false_negative
-        else None,
-        "roc_auc": round(roc_auc, 3) if roc_auc is not None else None,
-        "accuracy_at_0_5": round(correct / total, 3) if total else None,
-    }
-
-
-def _roc_auc(predicted: list[tuple[float, int]]) -> float | None:
-    """Compute ROC AUC with average ranks, without a numeric dependency."""
-    positives = sum(label == 1 for _, label in predicted)
-    negatives = sum(label == 0 for _, label in predicted)
-    if not positives or not negatives:
-        return None
-    ordered = sorted(predicted, key=lambda item: item[0])
-    positive_rank_sum = 0.0
-    index = 0
-    while index < len(ordered):
-        end = index + 1
-        score = ordered[index][0]
-        while end < len(ordered) and ordered[end][0] == score:
-            end += 1
-        average_rank = (index + 1 + end) / 2
-        positive_rank_sum += average_rank * sum(label == 1 for _, label in ordered[index:end])
-        index = end
-    return (positive_rank_sum - positives * (positives + 1) / 2) / (positives * negatives)
-
-
-def _wilson_lower_bound(successes: int, total: int, z: float = 1.96) -> float:
-    """Return a conservative 95% lower bound for a binomial precision."""
-    if total <= 0:
-        return 0.0
-    proportion = successes / total
-    denominator = 1 + z * z / total
-    center = proportion + z * z / (2 * total)
-    margin = z * math.sqrt((proportion * (1 - proportion) + z * z / (4 * total)) / total)
-    return max(0.0, (center - margin) / denominator)
-
-
-def _temporal_split(
-    examples: list[PreferenceExample], validation_days: int
-) -> tuple[list[PreferenceExample], list[PreferenceExample]]:
-    if validation_days <= 0 or not examples:
-        return examples, []
-    temporally_observed = [example for example in examples if example.temporal_label_known]
-    if not temporally_observed:
-        return [], []
-    newest = max(example.timestamp for example in temporally_observed)
-    cutoff = newest - validation_days * 86400
-    training = [example for example in temporally_observed if example.timestamp < cutoff]
-    holdout = [example for example in temporally_observed if example.timestamp >= cutoff]
-    return training, holdout
-
-
-def _has_both_classes(examples: Iterable[PreferenceExample], minimum: int) -> bool:
-    counts = Counter(example.label for example in examples)
-    return counts[0] >= minimum and counts[1] >= minimum
-
-
-_CONTEXT_FIELDS = frozenset({"color", "category", "purity", "uploader"})
-
-
-def _normalize_context_features(features: Iterable[object] | None) -> tuple[str, ...]:
-    if features is None:
-        return ()
-    if isinstance(features, str):
-        features = (features,)
-    normalized: set[str] = set()
-    for raw in features:
-        prefix, separator, value = str(raw).partition(":")
-        if not separator or prefix not in _CONTEXT_FIELDS:
-            continue
-        clean_value = normalize_tag(value)
-        if clean_value:
-            normalized.add(f"{prefix}:{clean_value}")
-    return tuple(sorted(normalized))
-
-
-def _model_context_features(metadata: dict[str, object] | None) -> tuple[str, ...]:
-    if not isinstance(metadata, dict):
-        return ()
-    values: list[str] = []
-    colors = metadata.get("colors", ())
-    if isinstance(colors, str):
-        colors = (colors,)
-    if isinstance(colors, list | tuple | set):
-        values.extend(f"color:{color}" for color in colors)
-    for field in ("category", "purity", "uploader"):
-        value = metadata.get(field)
-        if value not in (None, ""):
-            values.append(f"{field}:{value}")
-    return _normalize_context_features(values)
-
-
-def _context_min_support(token: str) -> int:
-    return DEFAULT_UPLOADER_MIN_SUPPORT if token.startswith("uploader:") else 2
-
-
-def _display_context_feature(token: str) -> tuple[str, str]:
-    prefix, _, value = token.partition(":")
-    return prefix, f"{prefix}: {value}"
-
-
-def _storage_feature_key(namespace: str, name: str) -> str:
-    if namespace == "combo":
-        return _combo_feature(name)
-    if namespace == "context":
-        return f"context:{name}"
-    return name
-
-
-def _active_feature_values(
-    tags: tuple[str, ...],
-    context_features: Iterable[object] | None,
-    feature_space: FeatureSpace,
-    normalization: str,
-) -> tuple[tuple[str, str, float], ...]:
-    normalized_tags = _model_tags(tags)
-    active_tags = [tag for tag in normalized_tags if tag in feature_space.tags]
-    active_pairs = (
-        [pair for pair in _pair_keys(normalized_tags) if pair in feature_space.combos]
-        if feature_space.combos
-        else []
-    )
-    active_context = [
-        token
-        for token in _normalize_context_features(context_features)
-        if token in feature_space.context
-    ]
-    values: list[tuple[str, str, float]] = []
-    tag_scale = (
-        1.0 / math.sqrt(len(active_tags))
-        if normalization == DEFAULT_FEATURE_NORMALIZATION and active_tags
-        else 1.0
-    )
-    values.extend(("tag", tag, tag_scale) for tag in active_tags)
-    pair_scale = (
-        1.0 / math.sqrt(len(active_pairs))
-        if normalization == DEFAULT_FEATURE_NORMALIZATION and active_pairs
-        else 1.0
-    )
-    values.extend(("combo", pair, pair_scale) for pair in active_pairs)
-
-    by_field: dict[str, list[str]] = {}
-    for token in active_context:
-        field, _, _ = token.partition(":")
-        by_field.setdefault(field, []).append(token)
-    for field, tokens in by_field.items():
-        scale = (
-            1.0 / math.sqrt(len(tokens))
-            if field == "color" and normalization == DEFAULT_FEATURE_NORMALIZATION and tokens
-            else 1.0
-        )
-        values.extend(("context", token, scale) for token in tokens)
-    return tuple(values)
-
-
-def _active_features(tags: tuple[str, ...], feature_space: FeatureSpace) -> tuple[str, ...]:
-    """Return legacy storage keys for callers that inspect the feature space."""
-    return tuple(
-        _storage_feature_key(namespace, name)
-        for namespace, name, _ in _active_feature_values(
-            tags,
-            (),
-            feature_space,
-            "none",
-        )
-    )
-
-
-def _model_tags(tags: Iterable[object] | None) -> tuple[str, ...]:
-    if tags is None:
-        return ()
-    if isinstance(tags, str):
-        tags = (tags,)
-    normalized: set[str] = set()
-    for raw_tag in tags:
-        tag = normalize_tag(raw_tag)
-        if tag and _is_eligible_tag(tag):
-            normalized.add(tag)
-    return tuple(sorted(normalized))
-
-
-def _is_eligible_tag(tag: str) -> bool:
-    return bool(tag) and tag not in _NON_PREFERENCE_FEATURE_TAGS
-
-
-def _pair_keys(tags: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(
-        _PAIR_SEPARATOR.join((first, second))
-        for index, first in enumerate(tags)
-        for second in tags[index + 1 :]
-    )
-
-
-def _pair_is_eligible(pair: str) -> bool:
-    first, second = pair.split(_PAIR_SEPARATOR, 1)
-    return _is_eligible_tag(first) and _is_eligible_tag(second)
-
-
-def _combo_feature(pair: str) -> str:
-    return f"combo:{pair}"
-
-
-def _format_pair(pair: str) -> str:
-    return pair.replace(_PAIR_SEPARATOR, " + ")
-
-
-def _ftrl_weight(z: float, n: float, alpha: float, beta: float, l1: float, l2: float) -> float:
-    if abs(z) <= l1:
-        return 0.0
-    return -(z - math.copysign(l1, z)) / ((beta + math.sqrt(n)) / alpha + l2)
-
-
-def _recency_weight(timestamp: int, now: int, half_life_days: int) -> float:
-    if half_life_days <= 0:
-        return 1.0
-    age_days = max(0, now - timestamp) / 86400
-    # Retain some value for older deliberate bans while prioritising current taste.
-    return 0.25 + 0.75 * 0.5 ** (age_days / half_life_days)
-
-
-def _metadata_timestamp(meta: dict, fallback: int) -> int:
-    try:
-        return int(meta.get("downloaded_at", fallback))
-    except (TypeError, ValueError):
-        return fallback
-
-
-def _sigmoid(value: float) -> float:
-    if value >= 35:
-        return 1.0
-    if value <= -35:
-        return 0.0
-    return 1 / (1 + math.exp(-value))
-
-
-def _validate_training_examples(examples: Iterable[PreferenceExample]) -> None:
-    values = list(examples)
-    if not _has_both_classes(values, MIN_TRAINING_PER_CLASS):
-        raise ValueError(
-            f"Need at least {MIN_TRAINING_PER_CLASS} banned and retained metadata examples"
-        )

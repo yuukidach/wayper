@@ -6,17 +6,21 @@ const fs = require('fs')
 
 let backendProcess = null
 let mainWindow = null
+let backendPathResolved = false
+let backendPath = null
 
 // Platform specific binary name
 const BACKEND_BINARY = process.platform === 'win32' ? 'wayper-backend.exe' : 'wayper-backend'
 
 function getBackendPath() {
+  if (backendPathResolved) return backendPath
+  backendPathResolved = true
   console.log('isPackaged:', app.isPackaged)
   console.log('defaultApp:', process.defaultApp)
   console.log('resourcesPath:', process.resourcesPath)
 
   if (process.env.WAYPER_DEV) {
-    return null
+    return backendPath
   }
 
   // If defaultApp is true, we are running via electron executable (dev mode)
@@ -25,16 +29,16 @@ function getBackendPath() {
 
   if (!isDev && app.isPackaged) {
     // In production, binary is in resources/wayper-backend/wayper-backend
-    return path.join(process.resourcesPath, 'wayper-backend', BACKEND_BINARY)
+    backendPath = path.join(process.resourcesPath, 'wayper-backend', BACKEND_BINARY)
   } else {
     // In dev, try to find locally built binary in onedir dist
     const localBuild = path.join(__dirname, '../../dist/wayper-backend', BACKEND_BINARY)
     console.log('Checking local build:', localBuild)
     if (fs.existsSync(localBuild)) {
-      return localBuild
+      backendPath = localBuild
     }
-    return null
   }
+  return backendPath
 }
 
 function getPortFilePath() {
@@ -49,7 +53,7 @@ function startBackend() {
   const binaryPath = getBackendPath()
   if (!binaryPath) {
     console.log('Development mode: Assuming backend is running externally.')
-    return
+    return false
   }
 
   console.log(`Starting backend from: ${binaryPath}`)
@@ -66,6 +70,7 @@ function startBackend() {
   backendProcess.on('exit', (code, signal) => {
     console.log(`Backend exited with code ${code} signal ${signal}`)
   })
+  return true
 }
 
 function waitForPortFile(timeout = 10000) {
@@ -96,7 +101,7 @@ function waitForPortFile(timeout = 10000) {
 function killBackend() {
   if (backendProcess) {
     console.log('Killing backend process...')
-    backendProcess.kill()
+    if (!backendProcess.killed) backendProcess.kill()
     backendProcess = null
   }
 }
@@ -187,9 +192,9 @@ if (!gotTheLock) {
 
   app.whenReady().then(async () => {
     buildMenu()
-    startBackend()
+    const backendStarted = startBackend()
     // In packaged mode, wait for the API to write its port file
-    if (getBackendPath()) {
+    if (backendStarted) {
       await waitForPortFile()
     }
     createWindow()

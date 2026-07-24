@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TypedDict
 
@@ -14,6 +15,7 @@ from .state import ALL_PURITIES
 from .util import atomic_write
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+ORIENTATIONS = ("landscape", "portrait")
 log = logging.getLogger("wayper.pool")
 
 
@@ -58,18 +60,22 @@ def count_images(directory: Path) -> int:
 
 def disk_usage_mb(config: WayperConfig) -> float:
     """Disk usage of pool + favorites images in MB (excludes trash, cache, state files)."""
-    total = 0
-    for purity in ALL_PURITIES:
-        # Pool dirs
-        for orient in ("landscape", "portrait"):
-            d = config.download_dir / purity / orient
-            if d.is_dir():
-                total += sum(f.stat().st_size for f in d.iterdir() if f.is_file())
-        # Favorites dirs
-        for orient in ("landscape", "portrait"):
-            d = config.download_dir / "favorites" / purity / orient
-            if d.is_dir():
-                total += sum(f.stat().st_size for f in d.iterdir() if f.is_file())
+    directories = (
+        directory
+        for purity in ALL_PURITIES
+        for orientation in ORIENTATIONS
+        for directory in (
+            pool_dir(config, purity, orientation),
+            favorites_dir(config, purity, orientation),
+        )
+    )
+    total = sum(
+        path.stat().st_size
+        for directory in directories
+        if directory.is_dir()
+        for path in directory.iterdir()
+        if path.is_file()
+    )
     return total / 1024 / 1024
 
 
@@ -79,6 +85,22 @@ def pool_dir(config: WayperConfig, mode: str, orientation: str) -> Path:
 
 def favorites_dir(config: WayperConfig, mode: str, orientation: str) -> Path:
     return config.download_dir / "favorites" / mode / orientation
+
+
+def favorite_filenames(
+    config: WayperConfig,
+    purities: Iterable[str] | None = None,
+) -> set[str]:
+    """Collect favorite filenames across the requested purities."""
+    if isinstance(purities, str):
+        purities = (purities,)
+    active = tuple(purities) if purities is not None else ALL_PURITIES
+    return {
+        image.name
+        for purity in active
+        for orientation in ORIENTATIONS
+        for image in list_images(favorites_dir(config, purity, orientation))
+    }
 
 
 def pick_random(
@@ -108,39 +130,57 @@ def pick_random(
     return None
 
 
+def _parse_blacklist_lines(lines: list[str]) -> list[tuple[int, str]]:
+    """Parse well-formed timestamped blacklist records for public listings."""
+    entries = []
+    for line in lines:
+        parts = line.split(maxsplit=1)
+        if len(parts) == 2 and parts[0].isdigit():
+            entries.append((int(parts[0]), parts[1]))
+    return entries
+
+
+def _blacklist_filenames(lines: list[str]) -> set[str]:
+    """Return filenames from the blacklist, including legacy untimestamped rows.
+
+    Older releases only required a two-field row when deciding whether an
+    image should be skipped; retaining that permissive read path prevents a
+    hand-edited or partially migrated blacklist from making a wallpaper
+    unexpectedly eligible again.  ``list_blacklist`` remains strict because
+    its timestamp is part of the API contract.
+    """
+    return {parts[1] for line in lines if len(parts := line.split(maxsplit=1)) == 2}
+
+
 def list_blacklist(config: WayperConfig) -> list[tuple[int, str]]:
     """Return all blacklist entries as (timestamp, filename) sorted newest-first."""
     bf = config.blacklist_file
     if not bf.exists():
         return []
-    entries = []
-    for line in bf.read_text().splitlines():
-        parts = line.split(maxsplit=1)
-        if len(parts) == 2 and parts[0].isdigit():
-            entries.append((int(parts[0]), parts[1]))
+    entries = _parse_blacklist_lines(bf.read_text().splitlines())
     entries.sort(key=lambda e: e[0], reverse=True)
     return entries
 
 
 _bl_cache: set[str] | None = None
 _bl_mtime: float = 0
+_bl_path: Path | None = None
 
 
 def _blacklist_set(config: WayperConfig) -> set[str]:
     """Return cached set of blacklisted filenames, refreshing on file change."""
-    global _bl_cache, _bl_mtime
+    global _bl_cache, _bl_mtime, _bl_path
     bf = config.blacklist_file
     try:
         mtime = bf.stat().st_mtime
     except OSError:
+        _bl_cache = None
+        _bl_path = bf
         return set()
-    if _bl_cache is None or mtime != _bl_mtime:
-        _bl_cache = set()
-        for line in bf.read_text().splitlines():
-            parts = line.split(maxsplit=1)
-            if len(parts) == 2:
-                _bl_cache.add(parts[1])
+    if _bl_cache is None or mtime != _bl_mtime or bf != _bl_path:
+        _bl_cache = _blacklist_filenames(bf.read_text().splitlines())
         _bl_mtime = mtime
+        _bl_path = bf
     return _bl_cache
 
 
@@ -153,8 +193,9 @@ def add_to_blacklist(config: WayperConfig, filename: str) -> None:
 
     with open(config.blacklist_file, "a") as f:
         f.write(f"{int(time.time())} {filename}\n")
-    global _bl_cache
+    global _bl_cache, _bl_path
     _bl_cache = None
+    _bl_path = None
 
 
 def remove_from_blacklist(config: WayperConfig, filename: str) -> None:
@@ -167,8 +208,9 @@ def remove_from_blacklist(config: WayperConfig, filename: str) -> None:
         if not (len(parts) == 2 and parts[1] == filename):
             lines.append(line)
     atomic_write(bf, "\n".join(lines) + "\n" if lines else "")
-    global _bl_cache
+    global _bl_cache, _bl_path
     _bl_cache = None
+    _bl_path = None
 
 
 def prune_blacklist(config: WayperConfig) -> None:
@@ -188,6 +230,12 @@ def prune_blacklist(config: WayperConfig) -> None:
         if len(parts) == 2 and parts[0].isdigit() and int(parts[0]) >= cutoff:
             lines.append(line)
     atomic_write(bf, "\n".join(lines) + "\n" if lines else "")
+    # The file was rewritten even when its timestamp happens to have the
+    # same filesystem resolution as the cached value.  Invalidate explicitly
+    # so the next rotation cannot use an expired entry from memory.
+    global _bl_cache, _bl_path
+    _bl_cache = None
+    _bl_path = None
 
 
 def enforce_quota(config: WayperConfig) -> None:
@@ -217,7 +265,7 @@ def should_download(config: WayperConfig, purities: set[str]) -> dict[str, bool]
     result = {}
     for purity in purities:
         needs = False
-        for orient in ("portrait", "landscape"):
+        for orient in ORIENTATIONS:
             if count_images(pool_dir(config, purity, orient)) < 30:
                 needs = True
                 break
@@ -291,7 +339,7 @@ def load_metadata(config: WayperConfig) -> dict[str, ImageMetadata]:
 def ensure_directories(config: WayperConfig) -> None:
     """Create all required directories."""
     for purity in ALL_PURITIES:
-        for orient in ("portrait", "landscape"):
+        for orient in ORIENTATIONS:
             pool_dir(config, purity, orient).mkdir(parents=True, exist_ok=True)
             favorites_dir(config, purity, orient).mkdir(parents=True, exist_ok=True)
     # System trash is managed by the OS — no need to create trash directories

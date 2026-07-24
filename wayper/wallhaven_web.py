@@ -22,7 +22,7 @@ from pathlib import Path
 import httpx
 
 from .config import CONFIG_DIR, WayperConfig
-from .pool import favorites_dir
+from .pool import favorite_filenames
 from .wallhaven import USER_AGENT, wallhaven_id
 
 log = logging.getLogger("wayper.wallhaven")
@@ -755,6 +755,20 @@ def fetch_cloud_users(config: WayperConfig) -> list[str]:
     return [u for u in users if u]
 
 
+def _merge_blacklist_values(target: list[str], incoming: list[str]) -> int:
+    """Append case-insensitively new cloud rules and return the count added."""
+    existing = {value.casefold() for value in target}
+    additions: list[str] = []
+    for value in incoming:
+        key = value.casefold()
+        if key in existing:
+            continue
+        existing.add(key)
+        additions.append(value)
+    target.extend(additions)
+    return len(additions)
+
+
 def merge_cloud_tags_into_config(config: WayperConfig) -> bool:
     """Merge cloud tag_blacklist into local exclude_tags. Returns True if config was modified."""
     from .config import save_config
@@ -762,13 +776,11 @@ def merge_cloud_tags_into_config(config: WayperConfig) -> bool:
     cloud = fetch_cloud_tags(config)
     if not cloud:
         return False
-    local_lower = {t.lower() for t in config.wallhaven.exclude_tags}
-    new_tags = [t for t in cloud if t.lower() not in local_lower]
-    if not new_tags:
+    added = _merge_blacklist_values(config.wallhaven.exclude_tags, cloud)
+    if not added:
         return False
-    config.wallhaven.exclude_tags.extend(new_tags)
     save_config(config)
-    log.info("Merged %d cloud tags into local exclude_tags", len(new_tags))
+    log.info("Merged %d cloud tags into local exclude_tags", added)
     return True
 
 
@@ -782,13 +794,11 @@ def merge_cloud_users_into_config(config: WayperConfig) -> bool:
     cloud = fetch_cloud_users(config)
     if not cloud:
         return False
-    local_lower = {u.lower() for u in config.wallhaven.exclude_uploaders}
-    new_users = [u for u in cloud if u.lower() not in local_lower]
-    if not new_users:
+    added = _merge_blacklist_values(config.wallhaven.exclude_uploaders, cloud)
+    if not added:
         return False
-    config.wallhaven.exclude_uploaders.extend(new_users)
     save_config(config)
-    log.info("Merged %d cloud users into local exclude_uploaders", len(new_users))
+    log.info("Merged %d cloud users into local exclude_uploaders", added)
     return True
 
 
@@ -805,22 +815,16 @@ def merge_cloud_blacklists_into_config(config: WayperConfig) -> bool:
 
     modified = False
     cloud_tags = [t for t in data.get("tag_blacklist", []) if t]
-    if cloud_tags:
-        local_lower = {t.lower() for t in config.wallhaven.exclude_tags}
-        new_tags = [t for t in cloud_tags if t.lower() not in local_lower]
-        if new_tags:
-            config.wallhaven.exclude_tags.extend(new_tags)
-            log.info("Merged %d cloud tags into local exclude_tags", len(new_tags))
-            modified = True
+    added_tags = _merge_blacklist_values(config.wallhaven.exclude_tags, cloud_tags)
+    if added_tags:
+        log.info("Merged %d cloud tags into local exclude_tags", added_tags)
+        modified = True
 
     cloud_users = [u for u in data.get("user_blacklist", []) if u]
-    if cloud_users:
-        local_lower = {u.lower() for u in config.wallhaven.exclude_uploaders}
-        new_users = [u for u in cloud_users if u.lower() not in local_lower]
-        if new_users:
-            config.wallhaven.exclude_uploaders.extend(new_users)
-            log.info("Merged %d cloud users into local exclude_uploaders", len(new_users))
-            modified = True
+    added_users = _merge_blacklist_values(config.wallhaven.exclude_uploaders, cloud_users)
+    if added_users:
+        log.info("Merged %d cloud users into local exclude_uploaders", added_users)
+        modified = True
 
     if modified:
         save_config(config)
@@ -866,16 +870,12 @@ def push_local_favorites(config: WayperConfig, remote_files: set[str]) -> int:
     if not _can_sync_favorites(config):
         return 0
 
-    from .pool import list_images
-    from .state import ALL_PURITIES
-
-    local_favs: list[str] = []
-    for purity in ALL_PURITIES:
-        for orientation in ("landscape", "portrait"):
-            fav_dir = favorites_dir(config, purity, orientation)
-            local_favs.extend(f.name for f in list_images(fav_dir))
-
-    missing = [f for f in local_favs if f not in remote_files]
+    # Keep the upload order stable so retries are predictable and logs are
+    # easy to correlate with the local gallery.  ``favorite_filenames`` is a
+    # set because callers usually only need membership checks.
+    missing = [
+        filename for filename in sorted(favorite_filenames(config)) if filename not in remote_files
+    ]
     if not missing:
         return 0
 

@@ -4,14 +4,22 @@ from __future__ import annotations
 
 from typing import TypedDict
 
+from .catalog import FAVORITE_WEIGHT as FAV_WEIGHT
+from .catalog import KEPT_WEIGHT, ImageCatalog, net_benefit
 from .pool import ImageMetadata
+from .tags import (
+    _TAG_WORD_ALIASES,
+    NON_PREFERENCE_TAGS,
+    SUBJECT_TAG_WORDS,
+    is_non_preference_tag,
+    is_subject_tag,
+    normalize_tag,
+    tag_items,
+)
 
 # Cost-benefit weights for suggestion scoring.
 # Losing a good image costs ~5x more than seeing a bad one.
 # Each favorited image counts as 3 additional kept images on top.
-KEPT_WEIGHT = 5
-FAV_WEIGHT = 3
-
 # Suggestions are deliberately conservative.  A tag/combination that matches
 # many images the user kept is not useful merely because the banned set is
 # larger.  The old net-benefit-only check made broad tags (for example
@@ -20,56 +28,16 @@ MIN_SUGGESTION_PRECISION = 0.90
 MAX_SUGGESTION_KEPT = 5
 MAX_SUGGESTION_KEPT_RATIO = 0.05
 BROAD_TAG_MIN_KEPT = 20
-NON_PREFERENCE_TAGS = frozenset({"portrait", "landscape"})
-SUBJECT_TAG_WORDS = frozenset({"women", "men", "girls", "boys"})
-_TAG_WORD_ALIASES = {
-    # Wallhaven has both singular and plural forms in older metadata.  These
-    # are safe to merge for preference learning (``woman`` and ``women`` are
-    # the same broad subject, unlike arbitrary noun pluralisation).
-    "woman": "women",
-    "man": "men",
-    "girl": "girls",
-    "boy": "boys",
-}
 
 
-def normalize_tag(value: object) -> str:
-    """Return a stable, case-insensitive tag key.
-
-    Wallhaven normally returns lower-case tags, but older metadata and custom
-    imports can contain different casing or repeated whitespace.  Treating
-    those as separate tags makes positive feedback disappear from the score.
-    """
-    if value is None:
-        return ""
-    words = str(value).strip().casefold().split()
-    return " ".join(_TAG_WORD_ALIASES.get(word, word) for word in words)
-
-
+# Keep the small helper names that older integrations imported while routing
+# all normalization through :mod:`wayper.tags`.
 def _tag_items(tags: object) -> list[tuple[str, str]]:
-    """Return unique ``(normalized, display)`` tag pairs in input order."""
-    if not isinstance(tags, list | tuple | set):
-        return []
-    result: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for raw in tags:
-        if raw is None:
-            continue
-        display = str(raw).strip()
-        key = normalize_tag(display)
-        if not key or key in seen:
-            continue
-        # When a singular/plural alias was collapsed, emit the canonical form
-        # so applying the recommendation uses the same Wallhaven tag family.
-        if " ".join(display.casefold().split()) != key:
-            display = key
-        seen.add(key)
-        result.append((key, display))
-    return result
+    return list(tag_items(tags))
 
 
 def _tag_set(tags: object) -> set[str]:
-    return {key for key, _ in _tag_items(tags)}
+    return {key for key, _ in tag_items(tags)}
 
 
 def is_broad_positive_tag(banned: int, kept: int, favorites: int) -> bool:
@@ -84,16 +52,6 @@ def is_broad_positive_tag(banned: int, kept: int, favorites: int) -> bool:
         return True
     total = banned + kept
     return kept > MAX_SUGGESTION_KEPT and total > 0 and kept / total >= 0.10
-
-
-def is_non_preference_tag(value: object) -> bool:
-    """Return whether a tag describes layout rather than visual taste."""
-    return normalize_tag(value) in NON_PREFERENCE_TAGS
-
-
-def is_subject_tag(value: object) -> bool:
-    """Return whether a tag names a broad human-subject category."""
-    return bool(set(normalize_tag(value).split()) & SUBJECT_TAG_WORDS)
 
 
 def passes_positive_feedback_guard(
@@ -150,6 +108,66 @@ class UploaderSuggestion(TypedDict):
     net_benefit: float
 
 
+__all__ = [
+    "KEPT_WEIGHT",
+    "FAV_WEIGHT",
+    "MIN_SUGGESTION_PRECISION",
+    "MAX_SUGGESTION_KEPT",
+    "MAX_SUGGESTION_KEPT_RATIO",
+    "BROAD_TAG_MIN_KEPT",
+    "NON_PREFERENCE_TAGS",
+    "SUBJECT_TAG_WORDS",
+    "_TAG_WORD_ALIASES",
+    "normalize_tag",
+    "is_non_preference_tag",
+    "is_subject_tag",
+    "is_broad_positive_tag",
+    "passes_positive_feedback_guard",
+    "TagSuggestion",
+    "ComboSuggestion",
+    "UploaderSuggestion",
+    "suggest_tags_to_exclude",
+    "suggest_combo_refinements",
+    "suggest_combo_patterns",
+    "suggest_uploaders_to_exclude",
+    "_tag_items",
+    "_tag_set",
+]
+
+
+def _normalized_rules(
+    excluded_tags: list[str],
+    excluded_combos: list[list[str]] | None,
+) -> tuple[set[str], tuple[frozenset[str], ...]]:
+    tags = {key for value in excluded_tags if (key := normalize_tag(value))}
+    combos = tuple(
+        combo for values in (excluded_combos or []) if (combo := frozenset(_tag_set(values)))
+    )
+    return tags, combos
+
+
+def _matches_exclusion(
+    image_tags: frozenset[str],
+    excluded_tags: set[str],
+    excluded_combos: tuple[frozenset[str], ...],
+) -> bool:
+    return bool(image_tags & excluded_tags) or any(
+        combo.issubset(image_tags) for combo in excluded_combos
+    )
+
+
+def _covered_banned_files(
+    catalog: ImageCatalog,
+    excluded_tags: set[str],
+    excluded_combos: tuple[frozenset[str], ...],
+) -> set[str]:
+    return {
+        record.filename
+        for record in catalog
+        if record.banned and _matches_exclusion(record.tags, excluded_tags, excluded_combos)
+    }
+
+
 def suggest_tags_to_exclude(
     metadata: dict[str, ImageMetadata],
     blacklisted: set[str],
@@ -171,7 +189,8 @@ def suggest_tags_to_exclude(
         return []
 
     favorites = favorites or set()
-    excluded_lower = {normalize_tag(t) for t in excluded_tags if normalize_tag(t)}
+    catalog = ImageCatalog(metadata, blacklisted, favorites)
+    excluded_lower, combo_sets_lower = _normalized_rules(excluded_tags, excluded_combos)
 
     # --- 1. Group by purity, count tags in disliked vs pool -----------------
     purity_groups: dict[str, dict] = {}
@@ -181,8 +200,8 @@ def suggest_tags_to_exclude(
     global_kept: dict[str, int] = {}
     global_fav: dict[str, int] = {}
 
-    for filename, meta in metadata.items():
-        purity = meta.get("purity", "sfw")
+    for record in catalog:
+        purity = record.purity
         if purity not in purity_groups:
             purity_groups[purity] = {
                 "dislike_tags": {},
@@ -191,46 +210,23 @@ def suggest_tags_to_exclude(
                 "pool_total": 0,
             }
         g = purity_groups[purity]
-        tag_items = _tag_items(meta.get("tags", []))
-        is_fav = filename in favorites
-        if filename in blacklisted:
+        if record.banned:
             g["dislike_total"] += 1
-            for tag, display in tag_items:
-                tag_display.setdefault(tag, display)
+            for tag in record.ordered_tags:
+                tag_display.setdefault(tag, catalog.display_tag(tag))
                 g["dislike_tags"][tag] = g["dislike_tags"].get(tag, 0) + 1
-                tag_dislike_images.setdefault(tag, set()).add(filename)
+                tag_dislike_images.setdefault(tag, set()).add(record.filename)
         else:
             g["pool_total"] += 1
-            for tag, display in tag_items:
-                tag_display.setdefault(tag, display)
+            for tag in record.ordered_tags:
+                tag_display.setdefault(tag, catalog.display_tag(tag))
                 g["pool_tags"][tag] = g["pool_tags"].get(tag, 0) + 1
                 global_kept[tag] = global_kept.get(tag, 0) + 1
-                if is_fav:
+                if record.favorite:
                     global_fav[tag] = global_fav.get(tag, 0) + 1
 
     # --- 2. Union of disliked images covered by any exclusion rule -----------
-    excluded_union: set[str] = set()
-    # Single-tag exclusions
-    for t in excluded_tags:
-        tag = normalize_tag(t)
-        if tag in tag_dislike_images:
-            excluded_union |= tag_dislike_images[tag]
-    # Combo exclusions
-    combo_sets_lower = [
-        {normalize_tag(t) for t in c if normalize_tag(t)} for c in (excluded_combos or [])
-    ]
-    if combo_sets_lower:
-        for filename in blacklisted:
-            if filename in excluded_union:
-                continue
-            meta = metadata.get(filename)
-            if not meta:
-                continue
-            tags_lower = _tag_set(meta.get("tags", []))
-            for cs in combo_sets_lower:
-                if cs.issubset(tags_lower):
-                    excluded_union.add(filename)
-                    break
+    excluded_union = _covered_banned_files(catalog, excluded_lower, combo_sets_lower)
 
     # --- 3. Accumulate global ban counts, filter by purity frequency ----------
     global_ban: dict[str, int] = {}
@@ -304,42 +300,27 @@ def suggest_combo_refinements(
         return []
 
     favorites = favorites or set()
+    catalog = ImageCatalog(metadata, blacklisted, favorites)
     context_lower = {normalize_tag(t) for t in context_tags if normalize_tag(t)}
-    excluded_lower = {normalize_tag(t) for t in excluded_tags if normalize_tag(t)}
+    excluded_lower, combo_sets_lower = _normalized_rules(excluded_tags, excluded_combos)
     existing_combos = {
         frozenset(normalize_tag(t) for t in c if normalize_tag(t)) for c in excluded_combos
     }
-    combo_sets_lower = [{normalize_tag(t) for t in c if normalize_tag(t)} for c in excluded_combos]
-
-    # --- 1. Build excluded_union: disliked images already covered by any rule ---
-    excluded_union: set[str] = set()
-    for filename in blacklisted:
-        meta = metadata.get(filename)
-        if not meta:
-            continue
-        tags_lower = _tag_set(meta.get("tags", []))
-        if tags_lower & excluded_lower:
-            excluded_union.add(filename)
-            continue
-        for cs in combo_sets_lower:
-            if cs.issubset(tags_lower):
-                excluded_union.add(filename)
-                break
+    excluded_union = _covered_banned_files(catalog, excluded_lower, combo_sets_lower)
 
     # --- 2. Find disliked / pool images that contain ALL context tags -----------
     dislike_files: list[str] = []
-    dislike_tags_list: list[set[str]] = []
-    pool_subset: list[tuple[str, set[str]]] = []
+    dislike_tags_list: list[tuple[str, ...]] = []
+    pool_subset: list[tuple[str, tuple[str, ...]]] = []
 
-    for filename, meta in metadata.items():
-        tags_lower = _tag_set(meta.get("tags", []))
-        if not context_lower.issubset(tags_lower):
+    for record in catalog:
+        if not context_lower.issubset(record.tags):
             continue
-        if filename in blacklisted:
-            dislike_files.append(filename)
-            dislike_tags_list.append(tags_lower)
+        if record.banned:
+            dislike_files.append(record.filename)
+            dislike_tags_list.append(record.ordered_tags)
         else:
-            pool_subset.append((filename, tags_lower))
+            pool_subset.append((record.filename, record.ordered_tags))
 
     if len(dislike_files) < 2:
         return []
@@ -351,16 +332,16 @@ def suggest_combo_refinements(
 
     tag_display: dict[str, str] = {}
     for filename, tags in zip(dislike_files, dislike_tags_list):
-        for tag, display in _tag_items(metadata[filename].get("tags", [])):
-            tag_display.setdefault(tag, display)
+        for tag in tags:
+            tag_display.setdefault(tag, catalog.display_tag(tag))
             if tag not in context_lower:
                 dislike_counts[tag] = dislike_counts.get(tag, 0) + 1
                 tag_dislike_images.setdefault(tag, set()).add(filename)
 
     pool_favorites: dict[str, int] = {}
     for filename, tags in pool_subset:
-        for tag, display in _tag_items(metadata[filename].get("tags", [])):
-            tag_display.setdefault(tag, display)
+        for tag in tags:
+            tag_display.setdefault(tag, catalog.display_tag(tag))
             if tag not in context_lower:
                 pool_counts[tag] = pool_counts.get(tag, 0) + 1
                 if filename in favorites:
@@ -430,13 +411,11 @@ def suggest_combo_patterns(
     MIN_PRECISION = MIN_SUGGESTION_PRECISION
 
     favorites = favorites or set()
-    excluded_lower = {normalize_tag(t) for t in excluded_tags if normalize_tag(t)}
+    catalog = ImageCatalog(metadata, blacklisted, favorites)
+    excluded_lower, combo_sets_lower = _normalized_rules(excluded_tags, excluded_combos)
     existing_combos_fs = {
         frozenset(normalize_tag(t) for t in c if normalize_tag(t)) for c in (excluded_combos or [])
     }
-    combo_sets_lower = [
-        {normalize_tag(t) for t in c if normalize_tag(t)} for c in (excluded_combos or [])
-    ]
     existing_pair_combos = {combo for combo in existing_combos_fs if len(combo) <= 2}
 
     # This is a signed tag↔image bipartite graph represented by bitsets:
@@ -450,28 +429,19 @@ def suggest_combo_patterns(
     tag_display: dict[str, str] = {}
     excluded_union_mask = 0
 
-    for image_idx, (filename, meta) in enumerate(metadata.items()):
+    for image_idx, record in enumerate(catalog):
         image_bit = 1 << image_idx
-        tag_items = _tag_items(meta.get("tags", []))
-        tags_lower = {tag for tag, _ in tag_items}
-        for tag, display in tag_items:
-            tag_display.setdefault(tag, display)
-        if filename in blacklisted:
-            # Check if already covered by existing exclusions.
-            if tags_lower & excluded_lower:
+        for tag in record.ordered_tags:
+            tag_display.setdefault(tag, catalog.display_tag(tag))
+        if record.banned:
+            if _matches_exclusion(record.tags, excluded_lower, combo_sets_lower):
                 excluded_union_mask |= image_bit
-            else:
-                for cs in combo_sets_lower:
-                    if cs.issubset(tags_lower):
-                        excluded_union_mask |= image_bit
-                        break
-            for tag in tags_lower:
+            for tag in record.ordered_tags:
                 banned_tag_masks[tag] = banned_tag_masks.get(tag, 0) | image_bit
         else:
-            is_fav = filename in favorites
-            for tag in tags_lower:
+            for tag in record.ordered_tags:
                 kept_tag_masks[tag] = kept_tag_masks.get(tag, 0) | image_bit
-                if is_fav:
+                if record.favorite:
                     fav_tag_masks[tag] = fav_tag_masks.get(tag, 0) | image_bit
 
     # --- 2. Find candidate tags (appear in >=3 banned images) ----------------
@@ -669,42 +639,31 @@ def suggest_uploaders_to_exclude(
         return []
 
     favorites = favorites or set()
+    catalog = ImageCatalog(metadata, blacklisted, favorites)
     excluded_lower = {str(u).strip().casefold() for u in excluded_uploaders if str(u).strip()}
 
-    uploader_ban: dict[str, int] = {}
-    uploader_kept: dict[str, int] = {}
-    uploader_fav: dict[str, int] = {}
-    uploader_display: dict[str, str] = {}
-
-    for filename, meta in metadata.items():
-        uploader_display_value = str(meta.get("uploader", "")).strip()
-        uploader = uploader_display_value.casefold()
-        if not uploader or uploader in excluded_lower:
-            continue
-        uploader_display.setdefault(uploader, uploader_display_value)
-        if filename in blacklisted:
-            uploader_ban[uploader] = uploader_ban.get(uploader, 0) + 1
-        else:
-            uploader_kept[uploader] = uploader_kept.get(uploader, 0) + 1
-            if filename in favorites:
-                uploader_fav[uploader] = uploader_fav.get(uploader, 0) + 1
-
     results: list[UploaderSuggestion] = []
-    for uploader, ban_count in uploader_ban.items():
-        if ban_count < 3:
+    # Preserve metadata order for equal-score ties, matching the old stable
+    # sort while still doing all normalization through the catalog.
+    uploaders = dict.fromkeys(record.uploader for record in catalog if record.uploader)
+    for uploader in uploaders:
+        if uploader in excluded_lower:
             continue
-        kept_count = uploader_kept.get(uploader, 0)
-        fav_count = uploader_fav.get(uploader, 0)
-        net_benefit = ban_count - KEPT_WEIGHT * kept_count - FAV_WEIGHT * fav_count
-        if net_benefit <= 0 or not passes_positive_feedback_guard(ban_count, kept_count, fav_count):
+        stats = catalog.uploader_stats(uploader)
+        if stats.banned < 3:
+            continue
+        benefit = net_benefit(stats.banned, stats.kept, stats.favorites)
+        if benefit <= 0 or not passes_positive_feedback_guard(
+            stats.banned, stats.kept, stats.favorites
+        ):
             continue
         results.append(
             {
-                "uploader": uploader_display.get(uploader, uploader),
-                "ban_count": ban_count,
-                "kept_count": kept_count,
-                "fav_count": fav_count,
-                "net_benefit": round(net_benefit, 1),
+                "uploader": catalog.display_uploader(uploader),
+                "ban_count": stats.banned,
+                "kept_count": stats.kept,
+                "fav_count": stats.favorites,
+                "net_benefit": round(benefit, 1),
             }
         )
 

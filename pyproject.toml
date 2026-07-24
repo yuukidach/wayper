@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 browser = ["browser-cookie3>=0.20", "nodriver>=0.38"]
+dev = ["pytest>=8.0", "ruff>=0.8"]
 
 [project.scripts]
 wayper = "wayper.cli:cli"

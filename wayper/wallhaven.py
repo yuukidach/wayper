@@ -12,7 +12,7 @@ import httpx
 from .config import WayperConfig
 from .image import resize_crop, validate_image
 from .pool import extract_tag_names, favorites_dir, is_blacklisted, pool_dir, save_metadata
-from .suggestions import normalize_tag
+from .tags import normalize_tag
 
 log = logging.getLogger("wayper.wallhaven")
 
