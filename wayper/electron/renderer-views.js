@@ -403,9 +403,66 @@ function renderBlocklistSuggestionsBar() {
 }
 
 function preferenceReviewItems() {
-    const items = appState.preferenceSuggestions?.items;
-    if (!Array.isArray(items)) return [];
-    return items.filter(item => item && typeof item.path === 'string' && item.path);
+    const data = appState.preferenceSuggestions;
+    if (!data || !Array.isArray(data.items)) return [];
+    // renderer-data.js normally provides the queue sanitizer.  Keep a small
+    // local fallback so this view remains independently testable.
+    if (typeof preferenceSuggestionItems === 'function') {
+        return preferenceSuggestionItems(data);
+    }
+    const resolved = appState.preferenceReviewResolvedPaths instanceof Set
+        ? appState.preferenceReviewResolvedPaths
+        : new Set();
+    const seen = new Set();
+    return data.items.filter(item => {
+        const path = typeof item?.path === 'string' ? item.path : '';
+        if (!path || resolved.has(path) || seen.has(path)) return false;
+        seen.add(path);
+        return true;
+    });
+}
+
+function preferenceReviewListWidth(list = null) {
+    const measured = Number(list?.clientWidth);
+    if (Number.isFinite(measured) && measured > 0) return measured;
+
+    // Before the list is mounted, estimate its content width from the outer
+    // grid.  The outer grid has 16px padding and the review panel has 14px
+    // horizontal padding on each side (plus its border).
+    const gridWidth = Number(
+        typeof els !== 'undefined' ? els.wallpaperGrid?.clientWidth : 0,
+    );
+    if (Number.isFinite(gridWidth) && gridWidth > 0) {
+        return Math.max(0, gridWidth - 32 - 28 - 2);
+    }
+    return 0;
+}
+
+function preferenceReviewColumnCount(list = null) {
+    const width = preferenceReviewListWidth(list);
+    if (width > 0) {
+        return Math.max(
+            1,
+            Math.floor((width + PREFERENCE_REVIEW_GAP)
+                / (PREFERENCE_REVIEW_CARD_MIN_WIDTH + PREFERENCE_REVIEW_GAP)),
+        );
+    }
+    const fallback = Number(appState.gridColumns);
+    return Number.isFinite(fallback) && fallback > 0 ? Math.floor(fallback) : 1;
+}
+
+function preferenceReviewDisplayLimit(list = null) {
+    const columns = preferenceReviewColumnCount(list);
+    // Keep the original eight-card density as a floor, then round up to a
+    // complete row for the current responsive column count.
+    return Math.max(
+        PREFERENCE_REVIEW_BASE_COUNT,
+        Math.ceil(PREFERENCE_REVIEW_BASE_COUNT / columns) * columns,
+    );
+}
+
+function preferenceReviewVisibleItems(list = null) {
+    return preferenceReviewItems().slice(0, preferenceReviewDisplayLimit(list));
 }
 
 function preferenceEvidence(contributions, direction) {
@@ -472,9 +529,26 @@ function preferenceLearningText(learning) {
 function removePreferenceSuggestion(path) {
     const data = appState.preferenceSuggestions;
     if (!data || !Array.isArray(data.items)) return;
+    if (!(appState.preferenceReviewResolvedPaths instanceof Set)) {
+        appState.preferenceReviewResolvedPaths = new Set();
+    }
+    appState.preferenceReviewResolvedPaths.add(path);
+    const items = data.items.filter(item => item?.path !== path);
+    const diagnostics = data.diagnostics && typeof data.diagnostics === 'object'
+        ? data.diagnostics
+        : {};
+    const previousTotal = Number(diagnostics.candidate_count);
+    const removed = items.length < data.items.length;
     appState.preferenceSuggestions = {
         ...data,
-        items: data.items.filter(item => item?.path !== path),
+        items,
+        diagnostics: {
+            ...diagnostics,
+            candidate_count: removed && Number.isFinite(previousTotal)
+                ? Math.max(items.length, previousTotal - 1)
+                : Number.isFinite(previousTotal) ? Math.max(items.length, previousTotal) : items.length,
+            loaded_candidate_count: items.length,
+        },
     };
 }
 
@@ -498,11 +572,18 @@ function refreshPreferenceSuggestionDiagnostics() {
         const score = Number(item?.feature_score);
         return Number.isFinite(score) ? Math.max(best, score) : best;
     }, 0);
+    const serverCandidateCount = Number(diagnostics.candidate_count);
     appState.preferenceSuggestions = {
         ...data,
         diagnostics: {
             ...diagnostics,
-            candidate_count: items.length,
+            // candidate_count is the server's total ranked pool, while
+            // loaded_candidate_count tracks the bounded queue in the renderer.
+            // Preserve the former so we know when a refill may still help.
+            candidate_count: Number.isFinite(serverCandidateCount)
+                ? Math.max(items.length, serverCandidateCount)
+                : items.length,
+            loaded_candidate_count: items.length,
             best_feature_score: items.length ? bestFeatureScore : null,
         },
     };
@@ -528,21 +609,17 @@ function preferenceReviewEmptyText(data) {
 
 function updatePreferenceReviewPanelAfterRemoval(path) {
     const row = preferenceReviewRow(path);
-    const panel = row?.closest('.model-review-panel');
-    if (!row || !panel) return;
+    const panel = row?.closest('.model-review-panel')
+        || (typeof els !== 'undefined'
+            ? els.wallpaperGrid?.querySelector('.model-review-panel')
+            : null);
+    if (!panel) return;
 
-    row.remove();
-    const remaining = preferenceReviewItems().length;
-    const count = panel.querySelector('.model-review-count');
-    if (count) count.textContent = preferenceReviewCountText(remaining);
-
-    if (remaining > 0) return;
-    panel.querySelector('.model-review-list')?.remove();
-    panel.querySelector('.model-review-empty')?.remove();
-    const empty = document.createElement('p');
-    empty.className = 'model-review-empty';
-    empty.textContent = preferenceReviewEmptyText(appState.preferenceSuggestions || {});
-    panel.appendChild(empty);
+    // Reconcile against the queued items.  Existing DOM rows are moved rather
+    // than recreated, so focus and in-flight button state survive while the
+    // next candidate takes the removed slot.
+    syncPreferenceReviewRows(panel);
+    void refillPreferenceReviewCandidates();
 }
 
 function updateBlocklistTabCounts() {
@@ -696,6 +773,226 @@ async function banLightboxReviewSuggestion() {
     return pendingBan;
 }
 
+function createPreferenceReviewRow(item) {
+    const row = document.createElement('article');
+    row.className = 'model-review-row';
+    row.dataset.path = item.path;
+
+    const thumbnailButton = document.createElement('button');
+    thumbnailButton.className = 'model-review-thumbnail-button';
+    thumbnailButton.type = 'button';
+    thumbnailButton.title = `Preview ${item.name || 'wallpaper'}`;
+    thumbnailButton.setAttribute(
+        'aria-label',
+        `Preview ${item.name || 'wallpaper'} full image`,
+    );
+    thumbnailButton.onclick = event => previewPreferenceSuggestion(item, event);
+    thumbnailButton.onkeydown = preserveModelReviewButtonKeyboard;
+
+    const thumbnail = document.createElement('img');
+    thumbnail.className = 'model-review-thumbnail';
+    thumbnail.src = thumbnailUrl(item.path);
+    thumbnail.loading = 'lazy';
+    thumbnail.decoding = 'async';
+    thumbnail.alt = '';
+    thumbnail.onerror = () => thumbnail.classList.add('missing');
+    thumbnailButton.appendChild(thumbnail);
+    row.appendChild(thumbnailButton);
+
+    const body = document.createElement('div');
+    body.className = 'model-review-body';
+    const itemHeader = document.createElement('div');
+    itemHeader.className = 'model-review-item-header';
+    const name = document.createElement('span');
+    name.className = 'model-review-name';
+    name.textContent = item.name || item.path;
+    name.title = item.path;
+    itemHeader.appendChild(name);
+    const rank = document.createElement('span');
+    rank.className = 'model-review-rank';
+    rank.textContent = formatPreferenceRank(item);
+    rank.title = `Net feature score ${formatPreferenceScore(item.feature_score)}`;
+    itemHeader.appendChild(rank);
+    body.appendChild(itemHeader);
+
+    const explanation = document.createElement('div');
+    explanation.className = 'model-review-explanation';
+    const dislikeSource = Array.isArray(item.dislike_evidence) && item.dislike_evidence.length
+        ? item.dislike_evidence
+        : item.contributions;
+    const keepSource = Array.isArray(item.keep_evidence) && item.keep_evidence.length
+        ? item.keep_evidence
+        : item.contributions;
+    const dislikeEvidence = preferenceEvidence(dislikeSource, 'dislike');
+    const keepEvidence = preferenceEvidence(keepSource, 'keep');
+    const appendEvidence = (label, entries, className) => {
+        if (!entries.length) return;
+        const prefix = document.createElement('span');
+        prefix.className = `model-review-explanation-label ${className}`;
+        prefix.textContent = label;
+        explanation.appendChild(prefix);
+        for (const entry of entries.slice(0, 3)) {
+            const chip = document.createElement('span');
+            const feature = entry.feature;
+            chip.className = [
+                'model-review-feature',
+                className,
+                feature.includes(' + ') ? 'combo' : '',
+            ].filter(Boolean).join(' ');
+            chip.textContent = feature;
+            chip.title = `${label}: ${feature}`;
+            explanation.appendChild(chip);
+        }
+    };
+    appendEvidence('Dislike', dislikeEvidence, 'dislike');
+    appendEvidence('Counter', keepEvidence, 'counter');
+    if (!dislikeEvidence.length && !keepEvidence.length) {
+        explanation.textContent = 'No individual feature explanation available';
+    }
+    body.appendChild(explanation);
+
+    const actions = document.createElement('div');
+    actions.className = 'model-review-actions';
+    const preview = document.createElement('button');
+    preview.className = 'model-review-preview';
+    preview.type = 'button';
+    preview.textContent = 'Preview';
+    preview.setAttribute('aria-label', `Preview ${item.name || 'wallpaper'} full image`);
+    preview.onclick = event => previewPreferenceSuggestion(item, event);
+    preview.onkeydown = preserveModelReviewButtonKeyboard;
+    actions.appendChild(preview);
+    const keep = document.createElement('button');
+    keep.className = 'model-review-keep';
+    keep.type = 'button';
+    keep.textContent = 'Keep';
+    keep.onclick = event => {
+        event.stopPropagation();
+        keepPreferenceSuggestion(item, row);
+    };
+    keep.onkeydown = preserveModelReviewButtonKeyboard;
+    actions.appendChild(keep);
+    const ban = document.createElement('button');
+    ban.className = 'model-review-ban';
+    ban.type = 'button';
+    ban.textContent = 'Ban';
+    ban.onclick = event => {
+        event.stopPropagation();
+        banPreferenceSuggestion(item, row);
+    };
+    ban.onkeydown = preserveModelReviewButtonKeyboard;
+    actions.appendChild(ban);
+    body.appendChild(actions);
+
+    row.appendChild(body);
+    return row;
+}
+
+function syncPreferenceReviewRows(panel) {
+    if (!panel) return;
+    let list = panel.querySelector('.model-review-list');
+    const items = preferenceReviewVisibleItems(list);
+    const count = panel.querySelector('.model-review-count');
+    if (count) count.textContent = preferenceReviewCountText(items.length);
+    panel.dataset.visibleLimit = String(preferenceReviewDisplayLimit(list));
+
+    if (!items.length) {
+        list?.remove();
+        panel.querySelector('.model-review-empty')?.remove();
+        const empty = document.createElement('p');
+        empty.className = 'model-review-empty';
+        empty.textContent = preferenceReviewEmptyText(appState.preferenceSuggestions || {});
+        panel.appendChild(empty);
+        return;
+    }
+
+    panel.querySelector('.model-review-empty')?.remove();
+    if (!list) {
+        list = document.createElement('div');
+        list.className = 'model-review-list';
+        panel.appendChild(list);
+    }
+
+    const existing = new Map(
+        [...list.querySelectorAll('.model-review-row')].map(row => [row.dataset.path, row]),
+    );
+    const fragment = document.createDocumentFragment();
+    for (const item of items) {
+        const row = existing.get(item.path) || createPreferenceReviewRow(item);
+        fragment.appendChild(row);
+        const keepBusy = typeof preferenceKeepInFlight !== 'undefined'
+            && preferenceKeepInFlight.has(item.path);
+        const banBusy = typeof preferenceBanInFlight !== 'undefined'
+            && preferenceBanInFlight.has(item.path);
+        if (keepBusy || banBusy) setPreferenceReviewActionBusy(row, true);
+    }
+    list.replaceChildren(fragment);
+}
+
+function preferenceReviewCandidateTotal() {
+    const diagnostics = appState.preferenceSuggestions?.diagnostics;
+    const total = Number(diagnostics?.candidate_count);
+    return Number.isFinite(total) ? Math.max(0, total) : null;
+}
+
+function refillPreferenceReviewCandidates() {
+    const data = appState.preferenceSuggestions;
+    if (
+        appState.mode !== 'trash'
+        || !data
+        || (data.status && data.status !== 'ready')
+        || typeof fetchPreferenceSuggestions !== 'function'
+    ) {
+        return Promise.resolve(false);
+    }
+    const items = preferenceReviewItems();
+    const target = preferenceReviewDisplayLimit(
+        typeof els !== 'undefined' ? els.wallpaperGrid?.querySelector('.model-review-list') : null,
+    );
+    const total = preferenceReviewCandidateTotal();
+    if (items.length >= target || (total !== null && items.length >= total)) {
+        return Promise.resolve(false);
+    }
+    if (appState.preferenceReviewRefillPromise) {
+        return appState.preferenceReviewRefillPromise;
+    }
+
+    const requestId = appState.imageRequestId;
+    const promise = fetchPreferenceSuggestions({
+        orient: appState.currentOrient,
+        requestId,
+        merge: true,
+    }).then(updated => {
+        if (!updated) return false;
+        refreshPreferenceSuggestionDiagnostics();
+        const panel = typeof els !== 'undefined'
+            ? els.wallpaperGrid?.querySelector('.model-review-panel')
+            : null;
+        if (panel) syncPreferenceReviewRows(panel);
+        return true;
+    }).finally(() => {
+        if (appState.preferenceReviewRefillPromise === promise) {
+            appState.preferenceReviewRefillPromise = null;
+        }
+    });
+    appState.preferenceReviewRefillPromise = promise;
+    return promise;
+}
+
+function syncPreferenceReviewLayout() {
+    const panel = typeof els !== 'undefined'
+        ? els.wallpaperGrid?.querySelector('.model-review-panel')
+        : null;
+    if (!panel || appState.mode !== 'trash') return;
+    const list = panel.querySelector('.model-review-list');
+    const limit = preferenceReviewDisplayLimit(list);
+    if (Number(panel.dataset.visibleLimit) !== limit) {
+        syncPreferenceReviewRows(panel);
+    }
+    if (preferenceReviewVisibleItems(list).length < limit) {
+        void refillPreferenceReviewCandidates();
+    }
+}
+
 function createPreferenceReviewPanel() {
     const data = appState.preferenceSuggestions;
     if (!data || typeof data !== 'object') return null;
@@ -718,7 +1015,9 @@ function createPreferenceReviewPanel() {
     heading.appendChild(subtitle);
     const count = document.createElement('span');
     count.className = 'model-review-count';
-    count.textContent = preferenceReviewCountText(preferenceReviewItems().length);
+    count.textContent = preferenceReviewCountText(
+        preferenceReviewVisibleItems().length,
+    );
     heading.appendChild(count);
     header.appendChild(heading);
 
@@ -730,138 +1029,7 @@ function createPreferenceReviewPanel() {
         header.appendChild(learning);
     }
     panel.appendChild(header);
-
-    const items = preferenceReviewItems();
-    if (!items.length) {
-        const empty = document.createElement('p');
-        empty.className = 'model-review-empty';
-        empty.textContent = preferenceReviewEmptyText(data);
-        panel.appendChild(empty);
-        return panel;
-    }
-
-    const list = document.createElement('div');
-    list.className = 'model-review-list';
-    for (const item of items) {
-        const row = document.createElement('article');
-        row.className = 'model-review-row';
-        row.dataset.path = item.path;
-
-        const thumbnailButton = document.createElement('button');
-        thumbnailButton.className = 'model-review-thumbnail-button';
-        thumbnailButton.type = 'button';
-        thumbnailButton.title = `Preview ${item.name || 'wallpaper'}`;
-        thumbnailButton.setAttribute(
-            'aria-label',
-            `Preview ${item.name || 'wallpaper'} full image`,
-        );
-        thumbnailButton.onclick = event => previewPreferenceSuggestion(item, event);
-        thumbnailButton.onkeydown = preserveModelReviewButtonKeyboard;
-
-        const thumbnail = document.createElement('img');
-        thumbnail.className = 'model-review-thumbnail';
-        thumbnail.src = thumbnailUrl(item.path);
-        thumbnail.loading = 'lazy';
-        thumbnail.decoding = 'async';
-        thumbnail.alt = '';
-        thumbnail.onerror = () => thumbnail.classList.add('missing');
-        thumbnailButton.appendChild(thumbnail);
-        row.appendChild(thumbnailButton);
-
-        const body = document.createElement('div');
-        body.className = 'model-review-body';
-        const itemHeader = document.createElement('div');
-        itemHeader.className = 'model-review-item-header';
-        const name = document.createElement('span');
-        name.className = 'model-review-name';
-        name.textContent = item.name || item.path;
-        name.title = item.path;
-        itemHeader.appendChild(name);
-        const rank = document.createElement('span');
-        rank.className = 'model-review-rank';
-        rank.textContent = formatPreferenceRank(item);
-        rank.title = `Net feature score ${formatPreferenceScore(item.feature_score)}`;
-        itemHeader.appendChild(rank);
-        body.appendChild(itemHeader);
-
-        const explanation = document.createElement('div');
-        explanation.className = 'model-review-explanation';
-        const dislikeSource = Array.isArray(item.dislike_evidence) && item.dislike_evidence.length
-            ? item.dislike_evidence
-            : item.contributions;
-        const keepSource = Array.isArray(item.keep_evidence) && item.keep_evidence.length
-            ? item.keep_evidence
-            : item.contributions;
-        const dislikeEvidence = preferenceEvidence(
-            dislikeSource,
-            'dislike',
-        );
-        const keepEvidence = preferenceEvidence(
-            keepSource,
-            'keep',
-        );
-        const appendEvidence = (label, entries, className) => {
-            if (!entries.length) return;
-            const prefix = document.createElement('span');
-            prefix.className = `model-review-explanation-label ${className}`;
-            prefix.textContent = label;
-            explanation.appendChild(prefix);
-            for (const entry of entries.slice(0, 3)) {
-                const chip = document.createElement('span');
-                const feature = entry.feature;
-                chip.className = [
-                    'model-review-feature',
-                    className,
-                    feature.includes(' + ') ? 'combo' : '',
-                ].filter(Boolean).join(' ');
-                chip.textContent = feature;
-                chip.title = `${label}: ${feature}`;
-                explanation.appendChild(chip);
-            }
-        };
-        appendEvidence('Dislike', dislikeEvidence, 'dislike');
-        appendEvidence('Counter', keepEvidence, 'counter');
-        if (!dislikeEvidence.length && !keepEvidence.length) {
-            explanation.textContent = 'No individual feature explanation available';
-        }
-        body.appendChild(explanation);
-
-        const actions = document.createElement('div');
-        actions.className = 'model-review-actions';
-        const preview = document.createElement('button');
-        preview.className = 'model-review-preview';
-        preview.type = 'button';
-        preview.textContent = 'Preview';
-        preview.setAttribute('aria-label', `Preview ${item.name || 'wallpaper'} full image`);
-        preview.onclick = event => previewPreferenceSuggestion(item, event);
-        preview.onkeydown = preserveModelReviewButtonKeyboard;
-        actions.appendChild(preview);
-        const keep = document.createElement('button');
-        keep.className = 'model-review-keep';
-        keep.type = 'button';
-        keep.textContent = 'Keep';
-        keep.onclick = event => {
-            event.stopPropagation();
-            keepPreferenceSuggestion(item, row);
-        };
-        keep.onkeydown = preserveModelReviewButtonKeyboard;
-        actions.appendChild(keep);
-        const ban = document.createElement('button');
-        ban.className = 'model-review-ban';
-        ban.type = 'button';
-        ban.textContent = 'Ban';
-        ban.onclick = event => {
-            event.stopPropagation();
-            banPreferenceSuggestion(item, row);
-        };
-        ban.onkeydown = preserveModelReviewButtonKeyboard;
-        actions.appendChild(ban);
-        body.appendChild(actions);
-
-        row.appendChild(body);
-        list.appendChild(row);
-    }
-    panel.appendChild(list);
+    syncPreferenceReviewRows(panel);
     return panel;
 }
 
@@ -1105,6 +1273,9 @@ function renderBlocklistView() {
     if (!appState.reviewingTag && !appState.reviewingUploader && !appState.searchQuery) {
         const modelReview = createPreferenceReviewPanel();
         if (modelReview) els.wallpaperGrid.appendChild(modelReview);
+        // Re-read the mounted list width so the first render uses the exact
+        // responsive column count (the fallback estimate is only for creation).
+        syncPreferenceReviewLayout();
     }
 
     // AI analysis results panel

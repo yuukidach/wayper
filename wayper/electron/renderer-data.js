@@ -194,9 +194,108 @@ async function fetchTagSuggestions({ render = false, requestId = null } = {}) {
     }
 }
 
-async function fetchPreferenceSuggestions({ orient = appState.currentOrient, requestId = null } = {}) {
+function preferenceReviewContextKey(orient = appState.currentOrient) {
+    return JSON.stringify({
+        purities: [...appState.purity].map(String).sort(),
+        orient: String(orient || ''),
+    });
+}
+
+function preferenceSuggestionItems(data) {
+    if (!Array.isArray(data?.items)) return [];
+    const resolved = appState.preferenceReviewResolvedPaths instanceof Set
+        ? appState.preferenceReviewResolvedPaths
+        : new Set();
+    const seen = new Set();
+    return data.items.filter(item => {
+        const path = typeof item?.path === 'string' ? item.path : '';
+        if (!path || resolved.has(path) || seen.has(path)) return false;
+        seen.add(path);
+        return true;
+    });
+}
+
+function preferenceSuggestionRank(item) {
+    const rank = Number(item?.rank);
+    return Number.isFinite(rank) ? rank : Number.MAX_SAFE_INTEGER;
+}
+
+function mergePreferenceSuggestionData(current, incoming) {
+    const byPath = new Map();
+    // Prefer the fresh server representation when a candidate is present in
+    // both responses, while retaining queued candidates that were not in the
+    // latest bounded response.
+    for (const item of preferenceSuggestionItems(current)) byPath.set(item.path, item);
+    for (const item of preferenceSuggestionItems(incoming)) byPath.set(item.path, item);
+    const items = [...byPath.values()].sort((a, b) => (
+        preferenceSuggestionRank(a) - preferenceSuggestionRank(b)
+        || String(a.name || a.path).localeCompare(String(b.name || b.path))
+    ));
+    const currentDiagnostics = current?.diagnostics && typeof current.diagnostics === 'object'
+        ? current.diagnostics
+        : {};
+    const incomingDiagnostics = incoming?.diagnostics && typeof incoming.diagnostics === 'object'
+        ? incoming.diagnostics
+        : {};
+    const currentTotal = Number(currentDiagnostics.candidate_count);
+    const incomingTotal = Number(incomingDiagnostics.candidate_count);
+    // A response with diagnostics is authoritative for the current pool.  Do
+    // not keep an older (larger) total after the last queued candidates have
+    // been acted on, otherwise every layout pass would trigger another refill.
+    const candidateCount = Number.isFinite(incomingTotal)
+        ? Math.max(items.length, incomingTotal)
+        : Number.isFinite(currentTotal)
+            ? Math.max(items.length, currentTotal)
+            : items.length;
+    return {
+        ...(current || {}),
+        ...(incoming || {}),
+        items,
+        diagnostics: {
+            ...currentDiagnostics,
+            ...incomingDiagnostics,
+            candidate_count: candidateCount,
+            loaded_candidate_count: items.length,
+        },
+    };
+}
+
+function preparePreferenceSuggestionData(data) {
+    if (!data || typeof data !== 'object') return data;
+    const items = preferenceSuggestionItems(data);
+    const diagnostics = data.diagnostics && typeof data.diagnostics === 'object'
+        ? data.diagnostics
+        : {};
+    const serverCount = Number(diagnostics.candidate_count);
+    return {
+        ...data,
+        items,
+        diagnostics: {
+            ...diagnostics,
+            candidate_count: Number.isFinite(serverCount)
+                ? Math.max(items.length, serverCount)
+                : items.length,
+            loaded_candidate_count: items.length,
+        },
+    };
+}
+
+async function fetchPreferenceSuggestions({
+    orient = appState.currentOrient,
+    requestId = null,
+    merge = false,
+    reset = false,
+} = {}) {
     const preferenceRequestId = ++appState.preferenceSuggestionRequestId;
     const purities = [...appState.purity];
+    const contextKey = preferenceReviewContextKey(orient);
+    const contextChanged = appState.preferenceReviewContextKey !== contextKey;
+    if (reset || contextChanged) {
+        appState.preferenceReviewContextKey = contextKey;
+        appState.preferenceReviewResolvedPaths = new Set();
+        // Never merge candidates from a different purity/orientation context.
+        appState.preferenceSuggestions = null;
+    }
     try {
         const data = await WayperApi.preferenceSuggestions(
             purities,
@@ -207,14 +306,20 @@ async function fetchPreferenceSuggestions({ orient = appState.currentOrient, req
             preferenceRequestId !== appState.preferenceSuggestionRequestId
             || appState.mode !== 'trash'
             || (requestId !== null && requestId !== appState.imageRequestId)
+            || preferenceReviewContextKey(orient) !== contextKey
         ) {
             return false;
         }
-        appState.preferenceSuggestions = data;
+        const prepared = preparePreferenceSuggestionData(data);
+        const current = appState.preferenceSuggestions;
+        appState.preferenceSuggestions = merge && current
+            ? mergePreferenceSuggestionData(current, prepared)
+            : prepared;
         return true;
     } catch (e) {
         if (
-            preferenceRequestId === appState.preferenceSuggestionRequestId
+            !merge
+            && preferenceRequestId === appState.preferenceSuggestionRequestId
             && appState.mode === 'trash'
             && (requestId === null || requestId === appState.imageRequestId)
         ) {
@@ -1382,7 +1487,11 @@ async function refreshImages(preserveFocus = false) {
         appState.preferenceSuggestions = null;
         els.wallpaperGrid.querySelector('.model-review-panel')?.remove();
         const suggestionsPromise = fetchTagSuggestions({ render: true, requestId });
-        const preferenceSuggestionsPromise = fetchPreferenceSuggestions({ orient, requestId });
+        const preferenceSuggestionsPromise = fetchPreferenceSuggestions({
+            orient,
+            requestId,
+            reset: true,
+        });
         try {
             resetImagePaging();
             const [statusData, blocklistData, pageData] = await Promise.all([

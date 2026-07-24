@@ -2497,6 +2497,7 @@ footer {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
   padding: 12px 14px;
   background: rgba(137, 180, 250, 0.045);
   border: 1px solid rgba(137, 180, 250, 0.16);
@@ -2554,7 +2555,8 @@ footer {
 
 .model-review-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(285px, 1fr));
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(285px, 100%), 1fr));
   gap: 8px;
 }
 

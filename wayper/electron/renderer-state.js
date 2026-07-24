@@ -69,6 +69,9 @@ let appState = {
     aiTimer: null,                 // Interval ID for elapsed time updates
     preferenceSuggestions: null,   // Local metadata-model image review candidates
     preferenceSuggestionRequestId: 0, // Invalidates stale model-review responses
+    preferenceReviewContextKey: null, // Purity/orientation context for the candidate queue
+    preferenceReviewResolvedPaths: new Set(), // Candidates already acted on in this view
+    preferenceReviewRefillPromise: null, // Coalesces concurrent candidate refills
     updateInfo: null,              // Latest app update check payload
 
     // Search
@@ -96,7 +99,13 @@ let observer = null;
 let sentinel = null;
 let blocklistObserver = null;
 let blocklistSentinel = null;
-const PREFERENCE_REVIEW_LIMIT = 8;
+// Keep a small ranked queue in memory so removing a visible candidate can be
+// filled immediately without waiting for another round-trip.  The renderer
+// only shows the number that forms complete rows and refills when needed.
+const PREFERENCE_REVIEW_LIMIT = 24;
+const PREFERENCE_REVIEW_BASE_COUNT = 8;
+const PREFERENCE_REVIEW_CARD_MIN_WIDTH = 285;
+const PREFERENCE_REVIEW_GAP = 8;
 const BLOCKLIST_PAGE_SIZE = WayperBlocklistPager.DEFAULT_PAGE_SIZE;
 const blocklistDateFormatter = new Intl.DateTimeFormat();
 const blocklistTimeFormatter = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' });
@@ -198,6 +207,11 @@ async function init() {
     // Resize listener for grid layout
     window.addEventListener('resize', debounce(() => {
         updateGridMetrics();
+        // The review list has its own responsive grid.  Keep its visible window
+        // aligned to complete rows when the app/sidebar is resized.
+        if (typeof syncPreferenceReviewLayout === 'function') {
+            syncPreferenceReviewLayout();
+        }
     }, 200));
 
     // Phase 1: config, monitors, and daemon start are independent
