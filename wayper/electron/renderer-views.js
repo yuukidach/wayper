@@ -667,6 +667,7 @@ async function banPreferenceSuggestion(item, row) {
         const banned = await banImage(item.path, {
             preserveView: true,
             preferenceContext: 'model_review',
+            refreshSuggestionsInPlace: true,
         });
         if (!banned) return false;
         removePreferenceSuggestion(item.path);
@@ -688,9 +689,11 @@ async function banLightboxReviewSuggestion() {
     if (!image?.reviewOnly || preferenceBanInFlight.has(image.path)) return false;
     const item = preferenceReviewItems().find(candidate => candidate.path === image.path) || image;
     const row = preferenceReviewRow(item.path);
-    const banned = await banPreferenceSuggestion(item, row);
-    if (banned && lightboxImg === image) closeLightbox();
-    return banned;
+    // Closing the preview is immediate UI feedback; the underlying review row
+    // stays busy until the filesystem/API transaction finishes.
+    const pendingBan = banPreferenceSuggestion(item, row);
+    closeLightbox();
+    return pendingBan;
 }
 
 function createPreferenceReviewPanel() {

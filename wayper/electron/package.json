@@ -8,7 +8,7 @@
     "start": "electron .",
     "build:backend": "cd ../.. && uv run pyinstaller --clean wayper.spec",
     "dist": "npm run build:backend && ./node_modules/.bin/electron-builder",
-    "test": "node --check renderer-state.js && node --check renderer-data.js && node --check renderer-views.js && node --check renderer-lightbox.js && node tests/exclusion-rules.test.js && node tests/blocklist-pager.test.js"
+    "test": "node --check renderer-state.js && node --check renderer-data.js && node --check renderer-views.js && node --check renderer-lightbox.js && node tests/exclusion-rules.test.js && node tests/blocklist-pager.test.js && node tests/model-review-actions.test.js"
   },
   "build": {
     "appId": "com.wayper.app",

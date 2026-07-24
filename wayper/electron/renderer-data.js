@@ -157,9 +157,11 @@ function blocklistSuggestionsAreCurrent() {
         && appState.tagSuggestionsKey === blocklistSuggestionsKey();
 }
 
-function invalidateBlocklistSuggestions() {
-    appState.tagSuggestionsKey = null;
+function invalidateBlocklistSuggestions({ keepVisible = false } = {}) {
+    const canKeepVisible = keepVisible && blocklistSuggestionsAreCurrent();
     appState.tagSuggestionsGeneration++;
+    if (canKeepVisible) return;
+    appState.tagSuggestionsKey = null;
     renderBlocklistSuggestionsBar();
 }
 
@@ -636,8 +638,18 @@ async function toggleFavoriteImage(path) {
     }
 }
 
-async function banImage(path, { preserveView = false, preferenceContext = null } = {}) {
-    invalidateBlocklistSuggestions();
+async function banImage(
+    path,
+    {
+        preserveView = false,
+        preferenceContext = null,
+        refreshSuggestionsInPlace = false,
+    } = {},
+) {
+    // Model-review bans change the exclusion evidence, but removing the existing
+    // bar while the request is in flight causes a large, unnecessary layout jump.
+    // Keep the current bar visible and replace it only after fresh data arrives.
+    invalidateBlocklistSuggestions({ keepVisible: refreshSuggestionsInPlace });
     removeImageFromState(path, { renderEmpty: !preserveView });
     // Update local counts so fetchStatus won't detect a "change" and trigger full refresh
     if (appState.status) {
@@ -659,6 +671,11 @@ async function banImage(path, { preserveView = false, preferenceContext = null }
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         applyMonitorCurrentImages(data.replacement_images);
+        if (refreshSuggestionsInPlace && appState.mode === 'trash') {
+            // Supersede any refresh started by an earlier concurrent review action.
+            invalidateBlocklistSuggestions({ keepVisible: true });
+            void fetchTagSuggestions({ render: true });
+        }
         return true;
     } catch (e) {
         console.error("Ban failed", e);
