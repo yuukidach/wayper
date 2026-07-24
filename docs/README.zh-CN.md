@@ -100,7 +100,8 @@ uv pip install -e ".[browser]"  # 可选：浏览器 cookie 提取，用于 Wall
 |------|------|------|------|
 | `←` / `→` | 上一张 / 下一张（缩放时为平移） | `Enter` | 设为壁纸 |
 | `f` | 收藏 | `x` / `Del` | 拉黑 |
-| `o` | 在 Wallhaven 打开 | `Space` / `Esc` | 关闭灯箱 |
+| `k`（Model review） | 保留预览中的候选图 | `o` | 在 Wallhaven 打开 |
+| `Space` / `Esc` | 关闭灯箱 | | |
 | 滚轮 | 在光标位置缩放（0.5×–8×） | 拖拽 | 缩放时平移 |
 | `0` | 重置为适应窗口 | `+` / `-` | 放大 / 缩小 |
 | 双击 | 100% / 适应窗口切换 | | |
@@ -124,7 +125,7 @@ wayper mode sketchy         # 开关 sketchy
 wayper mode sfw,sketchy     # 设置精确组合
 wayper suggest             # 基于频率的标签排除建议
 wayper suggest --ai        # 通过 Codex CLI 进行 AI 分析
-wayper model train         # 训练本地 tag + 受控 combo 偏好模型
+wayper model train         # 训练轻量的本地元数据排序模型
 wayper model score --tags "tag1,tag2"  # 解释本地“不喜欢”评分
 wayper model status        # 查看已保存模型和近期验证结果
 wayper status               # 查看当前状态
@@ -133,13 +134,17 @@ wayper setup                # 安装 .desktop（Linux）
 wayper --json status        # JSON 格式输出
 ```
 
-`wayper model train` 只使用本地元数据：近期拉黑的权重更高，收藏是强正反馈，
-并限制 tag-pair 特征数量以保持模型紧凑。评分绝不会自动修改黑名单或跳过下载。
-GUI 的「拉黑」页面新增 **Model review**：只展示带 tag/combo 证据的高置信候选图；
-「Ban」仍走普通的拉黑＋系统回收站流程，「Keep」会记录明确的正反馈。可先点「Preview」
-放大查看原图再决定。每累计 10 条新反馈，Wayper 会排队做一次本地全量小批重训，
-以安全吸收新 combo、取消拉黑和收藏变化；
-`wayper model status` 会显示待处理的反馈数量。
+`wayper model train` 只使用本地元数据和 Python 标准库：规范化 tag，以及紧凑的
+颜色/分类/纯度上下文（支持度足够的 uploader 也会保留）。v2 默认不启用 tag-pair；
+如需实验可用 `--max-combos`，不会引入 embedding 或大型 ML 运行时。近期拉黑的权重更高，
+收藏和明确的 **Keep** 才是正向标签；仍在池中的图片若没有明确操作，只作为背景对照，
+不再被假定为「喜欢」。Model review 按净特征证据做相对排序，不把 sigmoid 数值冒充校准概率；
+自动跳过仍保持关闭，直到独立的验证/校准安全门通过。
+
+GUI「拉黑」页面的 **Model review** 会显示排序后的候选图，并同时展示不喜欢证据和反向（Keep）证据：
+「Ban」仍走普通的拉黑＋系统回收站流程，同时记录这是 review 操作；「Keep」记录明确的正反馈。
+点「Preview」查看原图后，可在灯箱中按 `K` 保留、按 `X` 拉黑。反馈追加到本地 JSONL 事件日志（旧 JSON 日志仍可读取），
+每累计 10 条新反馈，Wayper 会排队做一次本地全量重训；`wayper model status` 会显示待处理数量和模型版本。
 
 ### 快捷键示例
 

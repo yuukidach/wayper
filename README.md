@@ -100,7 +100,8 @@ uv pip install -e ".[browser]"  # optional: browser cookie extraction for Wallha
 |-----|--------|-----|--------|
 | `←` / `→` | Previous / Next image (pan when zoomed) | `Enter` | Set as wallpaper |
 | `f` | Favorite | `x` / `Del` | Dislike |
-| `o` | Open on Wallhaven | `Space` / `Esc` | Close lightbox |
+| `k` (Model review) | Keep reviewed candidate | `o` | Open on Wallhaven |
+| `Space` / `Esc` | Close lightbox | | |
 | Scroll | Zoom at cursor (0.5×–8×) | Drag | Pan when zoomed in |
 | `0` | Reset to fit | `+` / `-` | Zoom in / out |
 | Double-click | Toggle 100% / fit | | |
@@ -124,7 +125,7 @@ wayper mode sketchy         # toggle sketchy on/off
 wayper mode sfw,sketchy     # set exact purity combination
 wayper suggest             # frequency-based tag exclusion suggestions
 wayper suggest --ai        # AI-powered analysis via Codex CLI
-wayper model train         # train a local tag + controlled-combo preference model
+wayper model train         # train the lightweight local metadata ranking model
 wayper model score --tags "tag1,tag2"  # explain a local dislike score
 wayper model status        # inspect the saved model and recent validation
 wayper status               # show current state
@@ -133,16 +134,24 @@ wayper setup                # install .desktop entry (Linux)
 wayper --json status        # machine-readable output
 ```
 
-`wayper model train` uses only local metadata. It weights recent bans, treats
-favorites as strong positive feedback, and limits tag-pair features to keep the
-saved model compact. Scoring never automatically changes your blacklist or
-skips downloads. In the GUI's Blocklist view, **Model review** shows only
-high-confidence pool candidates with their tag/combo evidence: **Ban** uses the
-normal blacklist + system-trash flow, while **Keep** records explicit positive
-feedback. Use **Preview** to zoom the full image before deciding. After 10 new
-feedback events, Wayper queues a local full-batch refresh so new combos and
-undo/favorite changes are learned safely; `wayper
-model status` shows the pending feedback count.
+`wayper model train` uses only local metadata and the Python standard library:
+normalized tags plus compact color/category/purity context (frequent uploaders
+can also be retained). The v2 default is tag-only with context features; tag
+pairs are an opt-in experiment (`--max-combos`) and no embedding or large ML
+runtime is installed. Recent bans are weighted more heavily, while favorites
+and explicit **Keep** actions are positive labels. A live image that has never
+been explicitly kept is treated as a background control, not as proof that you
+like it. The model review queue is a relative ranking by net feature evidence,
+not a calibrated probability, and automatic skipping remains disabled until a
+separate validation/calibration gate is met.
+
+In the GUI's Blocklist view, **Model review** shows ranked pool candidates with
+both dislike and counter-evidence chips: **Ban** uses the normal blacklist +
+system-trash flow and records that it came from review, while **Keep** records
+explicit positive feedback. Use **Preview** to inspect the full image; in that
+review lightbox, press `K` to keep or `X` to ban. Feedback is appended to a local JSONL event log (the older JSON log
+is still read), and after 10 new events Wayper queues a local full-batch refresh;
+`wayper model status` shows the pending count and model schema.
 
 ### Keybindings
 

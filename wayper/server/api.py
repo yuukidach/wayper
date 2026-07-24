@@ -302,6 +302,10 @@ class SetWallpaperRequest(BaseModel):
 class ActionRequest(BaseModel):
     image_path: str
     monitor: str | None = None
+    # Set only for a deliberate action from the local Model review queue.  The
+    # server still recomputes the candidate metadata before recording it; this
+    # flag is a context label, not a client-supplied training target.
+    preference_context: str | None = None
 
 
 class PreferenceFeedbackRequest(BaseModel):
@@ -372,6 +376,87 @@ def _pool_image_location(config: WayperConfig, image: Path) -> tuple[str, str] |
     return None
 
 
+def _model_review_item_details(
+    result: object,
+    item: object,
+) -> dict[str, object] | None:
+    """Extract bounded, JSON-safe ranking details from a review response."""
+    if not isinstance(result, dict) or not isinstance(item, dict):
+        return None
+    report = result.get("model")
+    model = report if isinstance(report, dict) else {}
+    details: dict[str, object] = {}
+    for key in (
+        "schema_version",
+        "feature_normalization",
+        "trained_at",
+    ):
+        value = model.get(key)
+        if isinstance(value, str | int | float | bool):
+            details[key] = value
+    for key in (
+        "score",
+        "feature_score",
+        "probability",
+        "calibrated",
+        "rank",
+        "percentile",
+    ):
+        value = item.get(key)
+        if isinstance(value, str | int | float | bool):
+            details[key] = value
+    return details or None
+
+
+def _model_review_feedback(config: WayperConfig, image: Path) -> dict[str, object] | None:
+    """Return server-observed ranking details for one review candidate.
+
+    The renderer sends only a context marker.  Looking the candidate up again
+    here prevents stale or fabricated client scores from becoming part of the
+    preference ledger while still preserving useful audit information when the
+    image is acted on from the review panel.
+    """
+    location = _pool_image_location(config, image)
+    if location is None:
+        return None
+    try:
+        from wayper.preference_model import preference_deletion_suggestions
+
+        purity, orientation = location
+        result = preference_deletion_suggestions(
+            config,
+            purities=(purity,),
+            orientation=orientation,
+            limit=60,
+        )
+    except Exception:
+        log.debug("Could not refresh model-review context for %s", image, exc_info=True)
+        return None
+
+    if not isinstance(result, dict):
+        return None
+    items = result.get("items")
+    if not isinstance(items, list):
+        return None
+    image = image.resolve()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_path = item.get("path")
+        if not isinstance(raw_path, str):
+            continue
+        try:
+            candidate_path = (config.download_dir / raw_path).resolve()
+        except (OSError, RuntimeError):
+            continue
+        if not candidate_path.is_relative_to(config.download_dir.resolve()):
+            continue
+        if candidate_path != image:
+            continue
+        return _model_review_item_details(result, item)
+    return None
+
+
 def _blocklist_filename(value: str) -> str:
     """Accept only the exact basename format used by blacklist entries."""
     if not value or value in {".", ".."} or "/" in value or "\\" in value:
@@ -400,6 +485,8 @@ def _record_preference_feedback(
     filename: str,
     source: str,
     *,
+    context: str | None = None,
+    model: dict[str, object] | None = None,
     strict: bool = False,
     already_locked: bool = False,
 ) -> None:
@@ -409,13 +496,15 @@ def _record_preference_feedback(
             record_preference_feedback,
         )
 
-        record_preference_feedback(
-            config,
-            action,
-            filename,
-            source=source,
-            already_locked=already_locked,
-        )
+        feedback_kwargs: dict[str, object] = {
+            "source": source,
+            "already_locked": already_locked,
+        }
+        if context is not None:
+            feedback_kwargs["context"] = context
+        if model is not None:
+            feedback_kwargs["model"] = model
+        record_preference_feedback(config, action, filename, **feedback_kwargs)
     except Exception as e:
         # The filesystem action has already succeeded. Feedback must not turn
         # a successful restore/unblock into an HTTP error if its ledger is full
@@ -951,12 +1040,18 @@ def ban_image_route(req: ActionRequest):
     config = get_config()
     img_full = _resolve_image(config, req.image_path)
 
-    result = do_ban(
-        config,
-        image=img_full,
-        wait_remote=False,
-        clear_thumbnail=lambda p: _remove_thumbnail(config, p),
-    )
+    is_model_review = req.preference_context == "model_review"
+    review_model = _model_review_feedback(config, img_full) if is_model_review else None
+
+    ban_kwargs: dict[str, object] = {
+        "image": img_full,
+        "wait_remote": False,
+        "clear_thumbnail": lambda p: _remove_thumbnail(config, p),
+    }
+    if is_model_review:
+        ban_kwargs["preference_context"] = "model_review"
+        ban_kwargs["preference_model"] = review_model
+    result = do_ban(config, **ban_kwargs)
     if not result.ok:
         raise HTTPException(400, result.error)
 
@@ -1013,18 +1108,46 @@ def preference_suggestion_feedback(req: PreferenceFeedbackRequest):
             orientation=orientation,
             limit=60,
         )
-        candidate_paths = {
-            (config.download_dir / path).resolve()
-            for item in current_candidates.get("items", [])
-            if isinstance(item, dict) and isinstance((path := item.get("path")), str)
-        }
+        if not isinstance(current_candidates, dict):
+            raise HTTPException(409, "Image is no longer a model review candidate")
+        candidate_items = current_candidates.get("items", [])
+        if not isinstance(candidate_items, list):
+            raise HTTPException(409, "Image is no longer a model review candidate")
+        candidate_paths: set[Path] = set()
+        for item in candidate_items:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path")
+            if not isinstance(path, str):
+                continue
+            try:
+                candidate_path = (config.download_dir / path).resolve()
+            except (OSError, RuntimeError):
+                continue
+            if candidate_path.is_relative_to(config.download_dir.resolve()):
+                candidate_paths.add(candidate_path)
         if image not in candidate_paths:
             raise HTTPException(409, "Image is no longer a model review candidate")
+        candidate_model: dict[str, object] | None = None
+        for item in candidate_items:
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                continue
+            try:
+                candidate_path = (config.download_dir / item["path"]).resolve()
+            except (OSError, RuntimeError):
+                continue
+            if candidate_path != image:
+                continue
+            candidate_model = _model_review_item_details(current_candidates, item)
+            break
+
         _record_preference_feedback(
             config,
             "keep",
             image.name,
             "model_suggestion",
+            context="model_review",
+            model=candidate_model or None,
             strict=True,
             already_locked=True,
         )

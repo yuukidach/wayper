@@ -476,16 +476,16 @@ def preference_model(ctx):
 @click.option(
     "--combo-min-support",
     type=click.IntRange(2),
-    default=5,
+    default=20,
     show_default=True,
-    help="Minimum labelled images containing a tag pair.",
+    help="Minimum labelled images containing a tag pair (only for experiments).",
 )
 @click.option(
     "--max-combos",
     type=click.IntRange(0),
-    default=30_000,
+    default=0,
     show_default=True,
-    help="Cap retained pair features to keep the model compact.",
+    help="Number of pair features; 0 uses the recommended tag-only model.",
 )
 @click.option(
     "--validation-days",
@@ -497,7 +497,7 @@ def preference_model(ctx):
 @click.option("--epochs", type=click.IntRange(1), default=6, show_default=True)
 @click.pass_context
 def train_preference_model_cmd(ctx, combo_min_support, max_combos, validation_days, epochs):
-    """Train a local tag and controlled-combo preference model."""
+    """Train the lightweight local metadata preference model."""
     from .preference_model import (
         model_report,
         preference_learning_status,
@@ -535,11 +535,14 @@ def train_preference_model_cmd(ctx, combo_min_support, max_combos, validation_da
         click.echo(f"Saved preference model: {path}")
         click.echo(
             "Training: "
-            f"{training['banned']} banned, {training['retained']} retained, "
+            f"{training['banned']} banned, {training['retained']} retained "
+            f"({training.get('controls', 0)} controls), "
             f"{training['favorites']} / {training['favorite_files']} favorites with usable metadata"
         )
         click.echo(
-            f"Features: {report['tag_features']} tags, {report['combo_features']} controlled combos"
+            f"Features: {report['tag_features']} tags, "
+            f"{report.get('context_features', 0)} context, "
+            f"{report['combo_features']} experimental combos"
         )
         validation = report["validation"]
         if isinstance(validation, dict) and validation.get("available"):
@@ -615,11 +618,18 @@ def preference_model_status(ctx):
             ):
                 click.echo(
                     "Training: "
-                    f"{banned} banned, {retained} retained, "
+                    f"{banned} banned, {retained} retained "
+                    f"({training.get('controls', 0)} controls), "
                     f"{favorites} / {favorite_files} favorites with usable metadata"
                 )
         click.echo(
-            f"Features: {report['tag_features']} tags, {report['combo_features']} controlled combos"
+            f"Model schema: {report.get('schema_version', 1)} "
+            f"({report.get('feature_normalization', 'legacy')})"
+        )
+        click.echo(
+            f"Features: {report['tag_features']} tags, "
+            f"{report.get('context_features', 0)} context, "
+            f"{report['combo_features']} experimental combos"
         )
         click.echo(f"Auto-skip threshold (not enabled by default): {model.threshold:.0%}")
         validation = report["validation"]
@@ -642,6 +652,8 @@ def preference_model_status(ctx):
                 f"{learning['changed_examples']} changed examples "
                 f"(automatic refresh at {learning['minimum_feedback']} feedback events)"
             )
+        if learning.get("upgrade_due"):
+            click.echo("Model refresh: v2 ranking upgrade pending")
 
 
 @preference_model.command("score")
@@ -662,6 +674,7 @@ def preference_model_score(ctx, filename, tags):
             click.echo(message, err=True)
         raise SystemExit(1)
 
+    input_metadata = None
     if tags:
         input_tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
         label = None
@@ -677,6 +690,7 @@ def preference_model_score(ctx, filename, tags):
                 click.echo(message, err=True)
             raise SystemExit(1)
         input_tags = meta.get("tags", [])
+        input_metadata = meta
         label = filename
     else:
         message = "Provide FILENAME or --tags tag1,tag2"
@@ -685,21 +699,34 @@ def preference_model_score(ctx, filename, tags):
             raise SystemExit(2)
         raise click.UsageError(message)
 
-    prediction = model.predict(input_tags)
+    from .preference_model import auto_skip_ready
+
+    prediction = model.predict(input_tags, metadata=input_metadata)
+    safe_to_skip = auto_skip_ready(model)
     result = {
         "filename": label,
         "probability": prediction.probability,
+        "calibrated": prediction.calibrated,
+        "score": prediction.score,
+        "feature_score": prediction.feature_score,
         "threshold": model.threshold,
-        "would_skip": prediction.probability >= model.threshold,
+        "would_skip": safe_to_skip and prediction.probability >= model.threshold,
         "contributions": list(prediction.contributions),
+        "dislike_evidence": [
+            item for item in prediction.contributions if item.get("direction") == "dislike"
+        ],
+        "keep_evidence": [
+            item for item in prediction.contributions if item.get("direction") == "keep"
+        ],
     }
     if ctx.obj["json"]:
         click.echo(json_mod.dumps(result, ensure_ascii=False, indent=2))
     else:
-        click.echo(f"Dislike probability: {prediction.probability:.1%}")
-        click.echo(
-            f"Would skip at {model.threshold:.0%}: {'yes' if result['would_skip'] else 'no'}"
-        )
+        if prediction.calibrated:
+            click.echo(f"Calibrated dislike probability: {prediction.probability:.1%}")
+        else:
+            click.echo(f"Uncalibrated dislike score: {prediction.score:+.3f}")
+        click.echo(f"Automatic skip safety gate: {'ready' if safe_to_skip else 'not ready'}")
         if prediction.contributions:
             click.echo("Top evidence:")
             for contribution in prediction.contributions:

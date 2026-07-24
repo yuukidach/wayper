@@ -50,14 +50,26 @@ class CoreResult:
 
 
 def _record_preference_feedback(
-    config: WayperConfig, action: str, filename: str, *, already_locked: bool = False
+    config: WayperConfig,
+    action: str,
+    filename: str,
+    *,
+    context: str = "core",
+    model: dict[str, object] | None = None,
+    already_locked: bool = False,
 ) -> None:
     """Persist local feedback without making a wallpaper action fail on telemetry."""
     try:
         from .preference_model import record_preference_feedback
 
         record_preference_feedback(
-            config, action, filename, source="core", already_locked=already_locked
+            config,
+            action,
+            filename,
+            source="core",
+            context=context,
+            model=model,
+            already_locked=already_locked,
         )
         if not already_locked:
             _schedule_preference_model_retrain(config)
@@ -307,6 +319,8 @@ def do_ban(
     *,
     image: Path | None = None,
     wait_remote: bool = True,
+    preference_context: str = "core",
+    preference_model: dict[str, object] | None = None,
 ) -> CoreResult:
     """Ban a wallpaper: blacklist, trash, switch to next.
 
@@ -363,7 +377,14 @@ def do_ban(
             except ValueError:
                 pass
 
-        _record_preference_feedback(config, "ban", img.name, already_locked=True)
+        _record_preference_feedback(
+            config,
+            "ban",
+            img.name,
+            context=preference_context,
+            model=preference_model,
+            already_locked=True,
+        )
 
     _schedule_preference_model_retrain(config)
 

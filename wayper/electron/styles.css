@@ -2055,6 +2055,11 @@ footer {
   color: var(--yellow);
 }
 
+.lb-btn[data-action="keep"]:hover {
+  background: rgba(166, 227, 161, 0.1);
+  color: var(--green);
+}
+
 .lb-btn[data-action="ban"]:hover {
   background: rgba(243, 139, 168, 0.1);
   color: var(--red);
@@ -2625,7 +2630,7 @@ footer {
   white-space: nowrap;
 }
 
-.model-review-probability {
+.model-review-rank {
   flex-shrink: 0;
   color: var(--peach);
   font-size: 10px;
@@ -2650,6 +2655,15 @@ footer {
   margin-right: 1px;
 }
 
+.model-review-explanation-label.dislike {
+  color: var(--red);
+}
+
+.model-review-explanation-label.counter {
+  color: var(--green);
+  margin-left: 4px;
+}
+
 .model-review-feature {
   max-width: 100%;
   overflow: hidden;
@@ -2665,6 +2679,16 @@ footer {
 .model-review-feature.combo {
   color: var(--blue);
   background: rgba(137, 180, 250, 0.13);
+}
+
+.model-review-feature.dislike {
+  color: var(--red);
+  background: rgba(243, 139, 168, 0.1);
+}
+
+.model-review-feature.counter {
+  color: var(--green);
+  background: rgba(166, 227, 161, 0.1);
 }
 
 .model-review-actions {

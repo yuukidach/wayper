@@ -13,9 +13,11 @@ from fastapi import HTTPException
 from wayper.config import MonitorConfig, WallhavenConfig, WayperConfig, load_config
 from wayper.pool import load_metadata, save_metadata
 from wayper.server.api import (
+    ActionRequest,
     PreferenceFeedbackRequest,
     UnblockRequest,
     app,
+    ban_image_route,
     get_config_route,
     preference_suggestion_feedback,
     preference_suggestions,
@@ -197,6 +199,7 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual(response["status"], "ok")
         self.assertEqual(feedback["revision"], 1)
         self.assertEqual(feedback["events"][0]["action"], "keep")
+        self.assertEqual(feedback["events"][0]["context"], "model_review")
 
     def test_preference_keep_feedback_rejects_non_candidates_and_unblock_paths(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -223,6 +226,36 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual(traversal_error.exception.status_code, 400)
         self.assertFalse(unchanged["removed"])
         self.assertEqual(feedback["events"], [])
+
+    def test_model_review_ban_passes_server_observed_context_to_core(self) -> None:
+        from wayper.core import CoreResult
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            image = config.download_dir / "sfw" / "landscape" / "candidate.jpg"
+            image.parent.mkdir(parents=True)
+            image.touch()
+            result = CoreResult(action="ban", image=image, extra={"replacement_images": {}})
+
+            with (
+                patch("wayper.server.api.get_config", return_value=config),
+                patch(
+                    "wayper.server.api._model_review_feedback",
+                    return_value={"schema_version": 2, "feature_score": 1.25, "rank": 1},
+                ),
+                patch("wayper.server.api.do_ban", return_value=result) as do_ban,
+            ):
+                response = ban_image_route(
+                    ActionRequest(
+                        image_path="sfw/landscape/candidate.jpg",
+                        preference_context="model_review",
+                    )
+                )
+
+        self.assertEqual(response["status"], "ok")
+        kwargs = do_ban.call_args.kwargs
+        self.assertEqual(kwargs["preference_context"], "model_review")
+        self.assertEqual(kwargs["preference_model"]["feature_score"], 1.25)
 
     def test_preference_keep_feedback_reports_a_ledger_write_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -106,7 +106,13 @@ class WayperConfig:
 
     @property
     def preference_feedback_file(self) -> Path:
+        """Legacy v1 preference ledger retained for read compatibility."""
         return self.download_dir / ".preference_feedback.json"
+
+    @property
+    def preference_events_file(self) -> Path:
+        """Append-only v2 preference decision log."""
+        return self.download_dir / ".preference_events.jsonl"
 
     @property
     def pid_file(self) -> Path:

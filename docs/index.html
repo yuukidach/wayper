@@ -368,17 +368,22 @@ wayper unban                # undo last ban
 wayper mode                 # toggle sfw↔nsfw (preserves sketchy)
 wayper mode sketchy         # toggle sketchy on/off
 wayper mode sfw,sketchy     # set exact purity combination
-wayper model train         # train local tag + controlled-combo preference model
+wayper model train         # train the lightweight local metadata ranking model
 wayper model score --tags "tag1,tag2"  # explain a local dislike score
 wayper model status        # inspect local model validation
 wayper status               # show current state
 wayper-gui                  # GUI app
 wayper setup                # install .desktop entry (Linux)
 wayper --json status        # machine-readable output</code></pre>
-  <p><code>wayper model train</code> stays local and never auto-deletes. Open Blocklist to
-  review high-confidence model candidates; Ban uses the normal system-trash flow and Keep
-  becomes positive feedback. Preview lets you inspect and zoom the full image before deciding.
-  Wayper refreshes locally after enough new feedback.</p>
+  <p><code>wayper model train</code> stays local and uses the standard library: normalized tags
+  plus compact color/category/purity context. The v2 default does not use embeddings or a large
+  ML runtime; tag pairs are opt-in with <code>--max-combos</code>. Live pool images are background
+  controls unless explicitly kept, and the review queue is a relative ranking by explainable net
+  feature evidence rather than a calibrated probability. Open Blocklist to review candidates:
+  Ban uses the normal system-trash flow and records review context, while Keep becomes explicit
+  positive feedback. Both dislike and counter-evidence are shown; in the Preview lightbox, press
+  <code>K</code> to keep or <code>X</code> to ban. Automatic skipping remains disabled until its validation gate
+  is met; Wayper refreshes locally after enough new feedback.</p>
 </section>
 
 <section id="browse">
@@ -412,6 +417,7 @@ wayper --json status        # machine-readable output</code></pre>
     <div><kbd>Enter</kbd> <span class="label">set as wallpaper</span></div>
     <div><kbd>f</kbd> <span class="label">favorite</span></div>
     <div><kbd>x</kbd> / <kbd>Del</kbd> <span class="label">ban</span></div>
+    <div><kbd>k</kbd> <span class="label">keep Model review candidate</span></div>
     <div><kbd>o</kbd> <span class="label">open on Wallhaven</span></div>
     <div><kbd>Space</kbd> / <kbd>Esc</kbd> <span class="label">close lightbox</span></div>
   </div>

@@ -29,6 +29,7 @@ from wayper.preference_model import (
     auto_skip_ready,
     build_training_examples,
     collect_preference_training_snapshot,
+    load_preference_feedback,
     load_preference_historical_bans,
     load_preference_model,
     preference_deletion_suggestions,
@@ -156,6 +157,94 @@ class PreferenceModelTest(unittest.TestCase):
         assert loaded is not None
         after = loaded.predict(["bad", "detail"])
         self.assertAlmostEqual(before.probability, after.probability)
+
+    def test_v2_context_features_round_trip_without_pair_features(self) -> None:
+        examples = [
+            *[
+                PreferenceExample(
+                    f"ban{index}.jpg",
+                    ("bad",),
+                    1,
+                    1.0,
+                    1_700_000_000 + index,
+                    context_features=("category:people", "color:#ff0000"),
+                )
+                for index in range(12)
+            ],
+            *[
+                PreferenceExample(
+                    f"keep{index}.jpg",
+                    ("good",),
+                    0,
+                    1.0,
+                    1_700_001_000 + index,
+                    context_features=("category:general", "color:#0000ff"),
+                )
+                for index in range(12)
+            ],
+        ]
+        model = train_preference_model(examples, validation_days=0)
+
+        self.assertEqual(model.schema_version, 2)
+        self.assertEqual(model.max_combo_features, 0)
+        self.assertEqual(model.combo_weights, {})
+        self.assertIn("category:people", model.feature_space.context)
+        prediction = model.predict(
+            ["bad"],
+            metadata={"category": "people", "colors": ["#ff0000"]},
+        )
+        self.assertTrue(any(item["type"] == "category" for item in prediction.contributions))
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "model.json"
+            save_preference_model(model, path)
+            loaded = load_preference_model(path)
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        self.assertEqual(loaded.feature_normalization, "field_l2")
+        self.assertEqual(loaded.context_weights, model.context_weights)
+
+    def test_legacy_feedback_and_unfavorite_do_not_create_keep_label(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            config.preference_feedback_file.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "revision": 1,
+                        "events": [
+                            {
+                                "revision": 1,
+                                "timestamp": 100,
+                                "action": "favorite",
+                                "filename": "kept.jpg",
+                            }
+                        ],
+                    }
+                )
+            )
+            record_preference_feedback(
+                config,
+                "unfavorite",
+                "kept.jpg",
+                timestamp=200,
+            )
+            feedback = load_preference_feedback(config)
+
+        self.assertEqual(feedback["revision"], 2)
+        self.assertEqual(
+            [event["action"] for event in feedback["events"]], ["favorite", "unfavorite"]
+        )
+        examples = build_training_examples(
+            {"kept.jpg": {"tags": ["calm"]}},
+            [],
+            set(),
+            {"kept.jpg"},
+            feedback_events=feedback["events"],
+        )
+        self.assertEqual(len(examples), 1)
+        self.assertTrue(examples[0].is_control)
+        self.assertFalse(examples[0].temporal_label_known)
 
     def test_validation_reports_when_both_recent_classes_exist(self) -> None:
         examples = [
@@ -328,6 +417,10 @@ class PreferenceModelTest(unittest.TestCase):
             )
             self.assertEqual([item["name"] for item in suggestions["items"]], ["bad-candidate.jpg"])
             self.assertTrue(suggestions["items"][0]["contributions"])
+            self.assertEqual(suggestions["items"][0]["rank"], 1)
+            self.assertIn("percentile", suggestions["items"][0])
+            self.assertIn("dislike_evidence", suggestions["items"][0])
+            self.assertIn("keep_evidence", suggestions["items"][0])
 
             record_preference_feedback(config, "keep", "bad-candidate.jpg")
             kept = preference_deletion_suggestions(

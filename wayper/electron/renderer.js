@@ -304,7 +304,7 @@ function setupEventListeners() {
 function handleMouseBack(e) {
     // Mouse back button (button 3) exits tag review or search
     if (e.button !== 3) return;
-    if (lightboxEl) { closeLightbox(); return; }
+    if (lightboxEl) { closeLightbox(e); return; }
     if (appState.reviewingTag) {
         e.preventDefault();
         exitComboLevel();
@@ -328,7 +328,7 @@ function handleGlobalKeydown(e) {
     if (lightboxEl) {
         switch(e.key) {
             case 'Escape':
-                closeLightbox();
+                closeLightbox(e);
                 return;
             case 'ArrowLeft':
                 e.preventDefault();
@@ -347,12 +347,19 @@ function handleGlobalKeydown(e) {
                 return;
             case ' ':
                 e.preventDefault();
-                closeLightbox();
+                closeLightbox(e);
                 return;
             case 'f':
                 if (lightboxImg && !lightboxImg.reviewOnly) {
                     toggleFavoriteImage(lightboxImg.path);
                     closeLightbox();
+                }
+                return;
+            case 'k':
+            case 'K':
+                if (lightboxImg?.reviewOnly) {
+                    e.preventDefault();
+                    void keepLightboxReviewSuggestion();
                 }
                 return;
             case 'x':
@@ -1214,7 +1221,7 @@ async function toggleFavoriteImage(path) {
     }
 }
 
-async function banImage(path, { preserveView = false } = {}) {
+async function banImage(path, { preserveView = false, preferenceContext = null } = {}) {
     invalidateBlocklistSuggestions();
     removeImageFromState(path, { renderEmpty: !preserveView });
     // Update local counts so fetchStatus won't detect a "change" and trigger full refresh
@@ -1229,7 +1236,10 @@ async function banImage(path, { preserveView = false } = {}) {
         const res = await fetch(`${API_URL}/api/image/ban`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image_path: path })
+            body: JSON.stringify({
+                image_path: path,
+                ...(preferenceContext ? { preference_context: preferenceContext } : {}),
+            })
         });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
@@ -2411,28 +2421,45 @@ function preferenceReviewItems() {
     return items.filter(item => item && typeof item.path === 'string' && item.path);
 }
 
-function positivePreferenceContributions(contributions) {
+function preferenceEvidence(contributions, direction) {
     if (!Array.isArray(contributions)) return [];
-    const features = [];
+    const evidence = [];
     const seen = new Set();
     for (const contribution of contributions) {
         const feature = typeof contribution === 'string'
             ? contribution
             : String(contribution?.feature || '');
+        if (!feature || seen.has(feature)) continue;
         const weight = Number(contribution?.weight);
-        const isPositive = contribution?.direction === 'dislike'
-            || (Number.isFinite(weight) && weight > 0);
-        if (!isPositive || !feature || seen.has(feature)) continue;
+        const actualDirection = typeof contribution === 'string'
+            ? 'dislike'
+            : (
+                contribution?.direction === 'dislike'
+                || (Number.isFinite(weight) && weight > 0)
+                    ? 'dislike'
+                    : 'keep'
+            );
+        if (actualDirection !== direction) continue;
         seen.add(feature);
-        features.push(feature);
+        evidence.push({ feature, contribution });
     }
-    return features;
+    return evidence;
 }
 
-function formatPreferenceProbability(probability) {
-    const value = Number(probability);
+function formatPreferenceScore(score) {
+    const value = Number(score);
     if (!Number.isFinite(value)) return '—';
-    return `${Math.round(Math.min(1, Math.max(0, value)) * 100)}%`;
+    return `${value >= 0 ? '+' : ''}${value.toFixed(2)}`;
+}
+
+function formatPreferenceRank(item) {
+    const rank = Number(item?.rank);
+    const percentile = Number(item?.percentile);
+    if (Number.isFinite(rank) && Number.isFinite(percentile)) {
+        return `#${Math.max(1, Math.round(rank))} · ${percentile.toFixed(1)}% pool`;
+    }
+    if (Number.isFinite(rank)) return `#${Math.max(1, Math.round(rank))}`;
+    return 'Ranked candidate';
 }
 
 function preferenceLearningText(learning) {
@@ -2480,40 +2507,36 @@ function refreshPreferenceSuggestionDiagnostics() {
     const diagnostics = data.diagnostics && typeof data.diagnostics === 'object'
         ? data.diagnostics
         : {};
-    const bestProbability = items.reduce((best, item) => {
-        const probability = Number(item?.probability);
-        return Number.isFinite(probability) ? Math.max(best, probability) : best;
+    const bestFeatureScore = items.reduce((best, item) => {
+        const score = Number(item?.feature_score);
+        return Number.isFinite(score) ? Math.max(best, score) : best;
     }, 0);
     appState.preferenceSuggestions = {
         ...data,
         diagnostics: {
             ...diagnostics,
             candidate_count: items.length,
-            best_probability: items.length ? bestProbability : null,
+            best_feature_score: items.length ? bestFeatureScore : null,
         },
     };
 }
 
 function preferenceReviewEmptyText(data) {
-    const reviewThreshold = Number(data?.review_threshold);
-    const thresholdLabel = Number.isFinite(reviewThreshold)
-        ? formatPreferenceProbability(reviewThreshold)
-        : null;
     const diagnostics = data?.diagnostics || {};
-    const bestProbability = Number(diagnostics.best_probability);
-    const bestLabel = Number.isFinite(bestProbability)
-        ? formatPreferenceProbability(bestProbability)
+    const bestFeatureScore = Number(diagnostics.best_feature_score);
+    const bestLabel = Number.isFinite(bestFeatureScore)
+        ? formatPreferenceScore(bestFeatureScore)
         : null;
     if (data?.status === 'untrained') {
         return 'Train a local preference model to start reviewing candidates.';
     }
-    if (thresholdLabel && bestLabel) {
-        return `No candidates above ${thresholdLabel}; closest score ${bestLabel}.`;
+    if (data?.status === 'upgrade_pending') {
+        return 'Updating the local ranking model; review will appear shortly.';
     }
-    if (thresholdLabel) {
-        return `No candidates above ${thresholdLabel} for this monitor and purity.`;
+    if (bestLabel) {
+        return `No net dislike-evidence candidates; strongest feature score ${bestLabel}.`;
     }
-    return 'No likely-dislike candidates for this monitor and purity.';
+    return 'No net dislike-evidence candidates for this monitor and purity.';
 }
 
 function updatePreferenceReviewPanelAfterRemoval(path) {
@@ -2593,7 +2616,7 @@ function previewPreferenceSuggestion(item, event) {
     event?.preventDefault();
     event?.stopPropagation();
     // Model candidates are live pool images even while the surrounding view is Trash.
-    // Review mode exposes only the deliberate Ban/X action plus the Wallhaven link;
+    // Review mode exposes deliberate Keep/K and Ban/X actions plus the Wallhaven link;
     // it never exposes Set, Favorite, Restore, or gallery navigation.
     showLightbox({ ...item, isTrash: false, reviewOnly: true });
 }
@@ -2613,17 +2636,38 @@ async function keepPreferenceSuggestion(item, row) {
             appState.preferenceSuggestions.learning = result.learning;
         }
         removePreferenceSuggestion(item.path);
-        renderBlocklistView();
-        await refreshImages();
+        refreshPreferenceSuggestionDiagnostics();
+        // Keeping a model-review candidate only changes the local preference
+        // ledger.  It is still a live pool image, so the blocklist image list,
+        // counts, and pagination do not need a full refresh.
+        updatePreferenceReviewPanelAfterRemoval(item.path);
+        return true;
     } catch (e) {
         console.error('Failed to record model review feedback:', e);
         alert(`Could not keep ${item.name || 'this wallpaper'}: ${e.message}`);
+        return false;
     } finally {
         setPreferenceReviewActionBusy(row, false);
     }
 }
 
+const preferenceKeepInFlight = new Set();
 const preferenceBanInFlight = new Set();
+
+async function keepLightboxReviewSuggestion() {
+    const image = lightboxImg;
+    if (!image?.reviewOnly || preferenceKeepInFlight.has(image.path)) return false;
+    preferenceKeepInFlight.add(image.path);
+    const item = preferenceReviewItems().find(candidate => candidate.path === image.path) || image;
+    const row = preferenceReviewRow(item.path);
+    try {
+        const kept = await keepPreferenceSuggestion(item, row);
+        if (kept && lightboxImg === image) closeLightbox();
+        return kept;
+    } finally {
+        preferenceKeepInFlight.delete(image.path);
+    }
+}
 
 async function banPreferenceSuggestion(item, row) {
     if (!item?.path || preferenceBanInFlight.has(item.path)) return false;
@@ -2633,7 +2677,10 @@ async function banPreferenceSuggestion(item, row) {
         // Keep all ban behavior (including trash and replacement wallpaper handling) in one path.
         // Suppress the empty-grid fallback here: the review panel is a separate live
         // surface and should lose one row, not rebuild the entire Blocklist view.
-        const banned = await banImage(item.path, { preserveView: true });
+        const banned = await banImage(item.path, {
+            preserveView: true,
+            preferenceContext: 'model_review',
+        });
         if (!banned) return false;
         removePreferenceSuggestion(item.path);
         refreshPreferenceSuggestionDiagnostics();
@@ -2677,13 +2724,7 @@ function createPreferenceReviewPanel() {
     heading.appendChild(title);
     const subtitle = document.createElement('span');
     subtitle.className = 'model-review-subtitle';
-    const reviewThreshold = Number(data.review_threshold);
-    const thresholdLabel = Number.isFinite(reviewThreshold)
-        ? formatPreferenceProbability(reviewThreshold)
-        : null;
-    subtitle.textContent = thresholdLabel
-        ? `Likely dislikes · ${thresholdLabel}+`
-        : 'Likely dislikes to review';
+    subtitle.textContent = 'Ranked by local tag/context evidence';
     heading.appendChild(subtitle);
     const count = document.createElement('span');
     count.className = 'model-review-count';
@@ -2746,28 +2787,52 @@ function createPreferenceReviewPanel() {
         name.textContent = item.name || item.path;
         name.title = item.path;
         itemHeader.appendChild(name);
-        const probability = document.createElement('span');
-        probability.className = 'model-review-probability';
-        probability.textContent = `${formatPreferenceProbability(item.probability)} dislike`;
-        itemHeader.appendChild(probability);
+        const rank = document.createElement('span');
+        rank.className = 'model-review-rank';
+        rank.textContent = formatPreferenceRank(item);
+        rank.title = `Net feature score ${formatPreferenceScore(item.feature_score)}`;
+        itemHeader.appendChild(rank);
         body.appendChild(itemHeader);
 
         const explanation = document.createElement('div');
         explanation.className = 'model-review-explanation';
-        const evidence = positivePreferenceContributions(item.contributions);
-        if (evidence.length) {
+        const dislikeSource = Array.isArray(item.dislike_evidence) && item.dislike_evidence.length
+            ? item.dislike_evidence
+            : item.contributions;
+        const keepSource = Array.isArray(item.keep_evidence) && item.keep_evidence.length
+            ? item.keep_evidence
+            : item.contributions;
+        const dislikeEvidence = preferenceEvidence(
+            dislikeSource,
+            'dislike',
+        );
+        const keepEvidence = preferenceEvidence(
+            keepSource,
+            'keep',
+        );
+        const appendEvidence = (label, entries, className) => {
+            if (!entries.length) return;
             const prefix = document.createElement('span');
-            prefix.className = 'model-review-explanation-label';
-            prefix.textContent = 'Matches';
+            prefix.className = `model-review-explanation-label ${className}`;
+            prefix.textContent = label;
             explanation.appendChild(prefix);
-            for (const feature of evidence.slice(0, 3)) {
+            for (const entry of entries.slice(0, 3)) {
                 const chip = document.createElement('span');
-                chip.className = `model-review-feature${feature.includes(' + ') ? ' combo' : ''}`;
+                const feature = entry.feature;
+                chip.className = [
+                    'model-review-feature',
+                    className,
+                    feature.includes(' + ') ? 'combo' : '',
+                ].filter(Boolean).join(' ');
                 chip.textContent = feature;
+                chip.title = `${label}: ${feature}`;
                 explanation.appendChild(chip);
             }
-        } else {
-            explanation.textContent = 'High score from the model’s overall history';
+        };
+        appendEvidence('Dislike', dislikeEvidence, 'dislike');
+        appendEvidence('Counter', keepEvidence, 'counter');
+        if (!dislikeEvidence.length && !keepEvidence.length) {
+            explanation.textContent = 'No individual feature explanation available';
         }
         body.appendChild(explanation);
 
@@ -3575,6 +3640,9 @@ function showLightbox(img) {
         </div>
         <div class="lightbox-toolbar">
             ${reviewOnly ? `
+                <button class="lb-btn" data-action="keep" title="Keep (K)">
+                    ${ICONS.favorite(18)}<span>Keep</span><kbd>K</kbd>
+                </button>
                 <button class="lb-btn" data-action="ban" title="Ban (X)">
                     ${ICONS.ban(18)}<span>Ban</span><kbd>X</kbd>
                 </button>
@@ -3633,6 +3701,9 @@ function showLightbox(img) {
             const action = btn.dataset.action;
             if (action === 'set') { setWallpaper(lightboxImg.path); closeLightbox(); }
             else if (action === 'fav') { toggleFavoriteImage(lightboxImg.path); closeLightbox(); }
+            else if (action === 'keep' && lightboxImg.reviewOnly) {
+                void keepLightboxReviewSuggestion();
+            }
             else if (action === 'ban') {
                 if (lightboxImg.reviewOnly) {
                     void banLightboxReviewSuggestion();
@@ -3647,8 +3718,13 @@ function showLightbox(img) {
     });
 }
 
-function closeLightbox() {
+function closeLightbox(event) {
     if (!lightboxEl) return;
+    // The lightbox is a separate overlay.  Keep its close gesture from
+    // bubbling into the underlying blocklist controls or triggering a second
+    // page-level action.
+    event?.preventDefault();
+    event?.stopPropagation();
     // Safety net: if a drag is in flight when closing, tear down its window listeners
     if (dragState) {
         window.removeEventListener('mousemove', handleMouseMove);
