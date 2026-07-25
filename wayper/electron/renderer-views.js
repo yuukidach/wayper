@@ -557,6 +557,31 @@ function preferenceReviewRow(path) {
         .find(row => row.dataset.path === path) || null;
 }
 
+/**
+ * Move focus back into the review queue after an action removes a candidate.
+ *
+ * Model-review actions are deliberately rendered as ordinary buttons so they
+ * remain usable with a screen reader and with Tab.  The queue is refreshed in
+ * place, though, which means the element that had focus can disappear while a
+ * Keep/Ban request is completing.  Keeping this small helper here gives both
+ * the row action and the lightbox a common, safe focus target.
+ */
+function focusPreferenceReviewCandidate(path, selector = '.model-review-preview') {
+    if (!path || typeof document === 'undefined') return false;
+    const row = preferenceReviewRow(path);
+    if (!row) return false;
+    const candidates = [
+        row.querySelector?.(selector),
+        ...(row.querySelectorAll ? [...row.querySelectorAll('button')] : []),
+        row,
+    ];
+    const target = candidates.find(candidate => candidate && !candidate.disabled) || row;
+    if (typeof target.focus !== 'function') return false;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView?.({ block: 'nearest', behavior: 'auto' });
+    return true;
+}
+
 function preferenceReviewCountText(count) {
     return `${count} candidate${count === 1 ? '' : 's'}`;
 }
@@ -607,7 +632,7 @@ function preferenceReviewEmptyText(data) {
     return 'No net dislike-evidence candidates for this monitor and purity.';
 }
 
-function updatePreferenceReviewPanelAfterRemoval(path) {
+function updatePreferenceReviewPanelAfterRemoval(path, { restoreFocus: requestedFocus = null } = {}) {
     const row = preferenceReviewRow(path);
     const panel = row?.closest('.model-review-panel')
         || (typeof els !== 'undefined'
@@ -615,10 +640,32 @@ function updatePreferenceReviewPanelAfterRemoval(path) {
             : null);
     if (!panel) return;
 
+    // If the action was launched from a focused review control, remember the
+    // nearest surviving row before replacing the list.  Without this, the
+    // browser drops focus to <body> as soon as the active row is removed and
+    // keyboard review appears to stop after the first decision.
+    const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
+    const restoreFocus = requestedFocus ?? Boolean(row?.contains?.(activeElement));
+    const rowsBefore = [...panel.querySelectorAll('.model-review-row')];
+    const removedIndex = rowsBefore.indexOf(row);
+    const fallbackPath = restoreFocus
+        ? rowsBefore[removedIndex + 1]?.dataset.path
+            || rowsBefore[removedIndex - 1]?.dataset.path
+        : null;
+
     // Reconcile against the queued items.  Existing DOM rows are moved rather
     // than recreated, so focus and in-flight button state survive while the
     // next candidate takes the removed slot.
     syncPreferenceReviewRows(panel);
+    if (restoreFocus) {
+        const focused = fallbackPath
+            ? focusPreferenceReviewCandidate(fallbackPath)
+            : false;
+        if (!focused && typeof panel.focus === 'function') {
+            panel.tabIndex = -1;
+            panel.focus({ preventScroll: true });
+        }
+    }
     void refillPreferenceReviewCandidates();
 }
 
@@ -680,7 +727,7 @@ function previewPreferenceSuggestion(item, event) {
     event?.preventDefault();
     event?.stopPropagation();
     // Model candidates are live pool images even while the surrounding view is Trash.
-    // Review mode exposes deliberate Keep/K and Ban/X actions plus the Wallhaven link;
+    // Review mode exposes deliberate Keep (A) and Ban (X) actions plus the Wallhaven link;
     // it never exposes Set, Favorite, Restore, or gallery navigation.
     showLightbox({ ...item, isTrash: false, reviewOnly: true });
 }
@@ -692,7 +739,250 @@ function preserveModelReviewButtonKeyboard(event) {
     }
 }
 
+function reviewRowRect(row) {
+    const rect = row?.getBoundingClientRect?.();
+    if (!rect) return null;
+    const left = Number(rect.left);
+    const top = Number(rect.top);
+    const width = Number(rect.width);
+    const height = Number(rect.height);
+    const right = Number.isFinite(Number(rect.right)) ? Number(rect.right) : left + width;
+    const bottom = Number.isFinite(Number(rect.bottom)) ? Number(rect.bottom) : top + height;
+    if (![left, top, right, bottom].every(Number.isFinite)) return null;
+    if (right <= left && bottom <= top) return null;
+    return {
+        left,
+        top,
+        right,
+        bottom,
+        centerX: (left + right) / 2,
+        centerY: (top + bottom) / 2,
+    };
+}
+
+function reviewAxisOverlap(firstStart, firstEnd, secondStart, secondEnd) {
+    return Math.max(0, Math.min(firstEnd, secondEnd) - Math.max(firstStart, secondStart));
+}
+
+function directionalReviewNeighbor(row, key, rows) {
+    const current = reviewRowRect(row);
+    if (!current) return null;
+    const measured = rows
+        .map(candidate => ({ candidate, rect: reviewRowRect(candidate) }))
+        .filter(entry => entry.rect && entry.candidate !== row);
+    if (!measured.length) return null;
+
+    const vertical = key === 'ArrowUp' || key === 'ArrowDown';
+    const forward = key === 'ArrowDown' || key === 'ArrowRight';
+    const candidates = measured.filter(({ rect }) => {
+        const sameAxis = vertical
+            ? reviewAxisOverlap(current.top, current.bottom, rect.top, rect.bottom)
+            : reviewAxisOverlap(current.left, current.right, rect.left, rect.right);
+        // Do not mistake a differently-sized card in the same visual row or
+        // column for a candidate in the requested direction.
+        if (sameAxis > 0) return false;
+        const delta = vertical
+            ? rect.centerY - current.centerY
+            : rect.centerX - current.centerX;
+        return forward ? delta > 0.5 : delta < -0.5;
+    });
+    if (!candidates.length) return null;
+
+    candidates.sort((a, b) => {
+        const aOverlap = vertical
+            ? reviewAxisOverlap(current.left, current.right, a.rect.left, a.rect.right)
+            : reviewAxisOverlap(current.top, current.bottom, a.rect.top, a.rect.bottom);
+        const bOverlap = vertical
+            ? reviewAxisOverlap(current.left, current.right, b.rect.left, b.rect.right)
+            : reviewAxisOverlap(current.top, current.bottom, b.rect.top, b.rect.bottom);
+        const aAligned = aOverlap > 0 ? 1 : 0;
+        const bAligned = bOverlap > 0 ? 1 : 0;
+        if (aAligned !== bAligned) return bAligned - aAligned;
+
+        const aMain = vertical
+            ? Math.abs(a.rect.centerY - current.centerY)
+            : Math.abs(a.rect.centerX - current.centerX);
+        const bMain = vertical
+            ? Math.abs(b.rect.centerY - current.centerY)
+            : Math.abs(b.rect.centerX - current.centerX);
+        if (aMain !== bMain) return aMain - bMain;
+
+        const aCross = vertical
+            ? Math.abs(a.rect.centerX - current.centerX)
+            : Math.abs(a.rect.centerY - current.centerY);
+        const bCross = vertical
+            ? Math.abs(b.rect.centerX - current.centerX)
+            : Math.abs(b.rect.centerY - current.centerY);
+        return aCross - bCross;
+    });
+    return candidates[0].candidate;
+}
+
+function modelReviewColumnCount(panel) {
+    const list = panel?.querySelector?.('.model-review-list');
+    if (typeof preferenceReviewColumnCount === 'function') {
+        try {
+            const measured = Number(preferenceReviewColumnCount(list));
+            if (Number.isFinite(measured) && measured > 0) return Math.floor(measured);
+        } catch {
+            // The helper shares responsive constants with renderer-state.js;
+            // use the CSS/outer-grid fallback while scripts are bootstrapping.
+        }
+    }
+    const template = list && typeof getComputedStyle === 'function'
+        ? getComputedStyle(list).gridTemplateColumns
+        : '';
+    const columns = String(template || '').trim().split(/\s+/).filter(Boolean).length;
+    if (columns > 0) return columns;
+    return Math.max(1, Number(appState.gridColumns) || 1);
+}
+
+function indexedReviewNeighbor(row, key, rows, panel) {
+    const current = rows.indexOf(row);
+    if (current < 0) return null;
+    const columns = modelReviewColumnCount(panel);
+    let nextIndex = -1;
+    if (columns <= 1 && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+        nextIndex = current + (key === 'ArrowRight' ? 1 : -1);
+    } else {
+        switch (key) {
+            case 'ArrowLeft':
+                nextIndex = current % columns > 0 ? current - 1 : -1;
+                break;
+            case 'ArrowRight':
+                nextIndex = current % columns < columns - 1 ? current + 1 : -1;
+                break;
+            case 'ArrowUp':
+                nextIndex = current - columns;
+                break;
+            case 'ArrowDown':
+                nextIndex = current + columns;
+                break;
+        }
+    }
+    return nextIndex >= 0 && nextIndex < rows.length ? rows[nextIndex] : null;
+}
+
+function moveModelReviewFocus(row, direction) {
+    const panel = row?.closest?.('.model-review-panel');
+    if (!panel) return false;
+    const rows = [...panel.querySelectorAll('.model-review-row')];
+    const current = rows.indexOf(row);
+    if (current < 0) return false;
+    const key = direction === -1
+        ? 'ArrowUp'
+        : direction === 1 ? 'ArrowDown' : direction;
+    const next = directionalReviewNeighbor(row, key, rows)
+        || indexedReviewNeighbor(row, key, rows, panel);
+    if (!next || typeof next.focus !== 'function') {
+        // The review queue is the first keyboard surface above the gallery.
+        // Once its final candidate is reached, continue into the first
+        // wallpaper card so ArrowDown/ArrowRight never strand the user.
+        const movingForward = key === 'ArrowDown' || key === 'ArrowRight';
+        if (movingForward && current === rows.length - 1) {
+            const firstCard = document.querySelector?.('.wallpaper-card')
+                || document.getElementsByClassName?.('wallpaper-card')?.[0];
+            if (firstCard?.focus) {
+                firstCard.focus({ preventScroll: true });
+                firstCard.scrollIntoView?.({ block: 'nearest', behavior: 'auto' });
+                return true;
+            }
+        }
+        return false;
+    }
+    next.focus({ preventScroll: true });
+    next.scrollIntoView?.({ block: 'nearest', behavior: 'auto' });
+    return true;
+}
+
+/**
+ * Keyboard behavior for a model-review row.
+ *
+ * Rows are focusable in addition to their individual controls.  This lets a
+ * keyboard user review a queue efficiently (Enter/Space to preview, A to
+ * keep, X/Delete to ban, and arrows to move between candidates) without
+ * falling through to the gallery's global shortcuts, which otherwise operate
+ * on the unrelated current wallpaper.
+ */
+function handleModelReviewRowKeyboard(event) {
+    const row = event.currentTarget?.closest?.('.model-review-row')
+        || event.target?.closest?.('.model-review-row');
+    if (!row) return false;
+    const item = preferenceReviewItems().find(candidate => candidate.path === row.dataset.path);
+    if (!item) return false;
+
+    const target = event.target;
+    const button = target?.closest?.('button');
+    const key = event.key;
+
+    // Let native button activation generate its click.  We only stop the
+    // event from reaching handleGlobalKeydown, whose Enter/Space shortcuts
+    // belong to the gallery/lightbox rather than this review card.
+    if (button && (key === 'Enter' || key === ' ')) {
+        event.stopPropagation();
+        return true;
+    }
+
+    if (key === 'Enter' || key === ' ') {
+        event.preventDefault();
+        event.stopPropagation();
+        previewPreferenceSuggestion(item);
+        return true;
+    }
+
+    if (key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
+        if (activeElement && row.contains?.(activeElement)) {
+            activeElement.blur?.();
+        } else {
+            row.blur?.();
+        }
+        return true;
+    }
+
+    if (key === 'a' || key === 'A') {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!row.classList?.contains?.('is-busy')) {
+            void keepPreferenceSuggestion(item, row);
+        }
+        return true;
+    }
+
+    if (key === 'x' || key === 'X' || key === 'Delete') {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!row.classList?.contains?.('is-busy')) {
+            void banPreferenceSuggestion(item, row);
+        }
+        return true;
+    }
+
+    if (key === 'ArrowUp' || key === 'ArrowLeft') {
+        event.preventDefault();
+        event.stopPropagation();
+        moveModelReviewFocus(row, key);
+        return true;
+    }
+
+    if (key === 'ArrowDown' || key === 'ArrowRight') {
+        event.preventDefault();
+        event.stopPropagation();
+        moveModelReviewFocus(row, key);
+        return true;
+    }
+
+    return false;
+}
+
 async function keepPreferenceSuggestion(item, row) {
+    const restoreFocus = Boolean(
+        row
+        && typeof document !== 'undefined'
+        && row.contains?.(document.activeElement),
+    );
     setPreferenceReviewActionBusy(row, true);
     try {
         const result = await WayperApi.preferenceFeedback(item.path, 'keep');
@@ -704,7 +994,7 @@ async function keepPreferenceSuggestion(item, row) {
         // Keeping a model-review candidate only changes the local preference
         // ledger.  It is still a live pool image, so the blocklist image list,
         // counts, and pagination do not need a full refresh.
-        updatePreferenceReviewPanelAfterRemoval(item.path);
+        updatePreferenceReviewPanelAfterRemoval(item.path, { restoreFocus });
         return true;
     } catch (e) {
         console.error('Failed to record model review feedback:', e);
@@ -733,9 +1023,14 @@ async function keepLightboxReviewSuggestion() {
     }
 }
 
-async function banPreferenceSuggestion(item, row) {
+async function banPreferenceSuggestion(item, row, { restoreFocus: requestedFocus = null } = {}) {
     if (!item?.path || preferenceBanInFlight.has(item.path)) return false;
     preferenceBanInFlight.add(item.path);
+    const restoreFocus = requestedFocus ?? Boolean(
+        row
+        && typeof document !== 'undefined'
+        && row.contains?.(document.activeElement),
+    );
     setPreferenceReviewActionBusy(row, true);
     try {
         // Keep all ban behavior (including trash and replacement wallpaper handling) in one path.
@@ -750,7 +1045,7 @@ async function banPreferenceSuggestion(item, row) {
         removePreferenceSuggestion(item.path);
         refreshPreferenceSuggestionDiagnostics();
         updateBlocklistStateAfterBan(item);
-        updatePreferenceReviewPanelAfterRemoval(item.path);
+        updatePreferenceReviewPanelAfterRemoval(item.path, { restoreFocus });
         return true;
     } catch (e) {
         console.error('Failed to ban model review suggestion:', e);
@@ -768,7 +1063,10 @@ async function banLightboxReviewSuggestion() {
     const row = preferenceReviewRow(item.path);
     // Closing the preview is immediate UI feedback; the underlying review row
     // stays busy until the filesystem/API transaction finishes.
-    const pendingBan = banPreferenceSuggestion(item, row);
+    // The lightbox closes immediately, so the active element is no longer in
+    // the row when the asynchronous ban resolves.  Ask the row updater to
+    // move focus to the next surviving candidate once the transaction ends.
+    const pendingBan = banPreferenceSuggestion(item, row, { restoreFocus: true });
     closeLightbox();
     return pendingBan;
 }
@@ -777,15 +1075,28 @@ function createPreferenceReviewRow(item) {
     const row = document.createElement('article');
     row.className = 'model-review-row';
     row.dataset.path = item.path;
+    row.tabIndex = 0;
+    row.setAttribute?.('role', 'group');
+    row.setAttribute?.(
+        'aria-label',
+        `${item.name || item.path}. Arrow keys move by row and column. `
+            + 'Enter or Space to preview, A to keep, X or Delete to ban',
+    );
+    row.setAttribute?.(
+        'aria-keyshortcuts',
+        'ArrowUp ArrowDown ArrowLeft ArrowRight Enter Space A X Delete',
+    );
+    row.onkeydown = handleModelReviewRowKeyboard;
 
     const thumbnailButton = document.createElement('button');
     thumbnailButton.className = 'model-review-thumbnail-button';
     thumbnailButton.type = 'button';
-    thumbnailButton.title = `Preview ${item.name || 'wallpaper'}`;
+    thumbnailButton.title = `Preview ${item.name || 'wallpaper'} (Enter/Space)`;
     thumbnailButton.setAttribute(
         'aria-label',
         `Preview ${item.name || 'wallpaper'} full image`,
     );
+    thumbnailButton.setAttribute('aria-keyshortcuts', 'Enter Space');
     thumbnailButton.onclick = event => previewPreferenceSuggestion(item, event);
     thumbnailButton.onkeydown = preserveModelReviewButtonKeyboard;
 
@@ -857,7 +1168,9 @@ function createPreferenceReviewRow(item) {
     preview.className = 'model-review-preview';
     preview.type = 'button';
     preview.textContent = 'Preview';
+    preview.title = `Preview ${item.name || 'wallpaper'} (Enter/Space)`;
     preview.setAttribute('aria-label', `Preview ${item.name || 'wallpaper'} full image`);
+    preview.setAttribute('aria-keyshortcuts', 'Enter Space');
     preview.onclick = event => previewPreferenceSuggestion(item, event);
     preview.onkeydown = preserveModelReviewButtonKeyboard;
     actions.appendChild(preview);
@@ -865,6 +1178,9 @@ function createPreferenceReviewRow(item) {
     keep.className = 'model-review-keep';
     keep.type = 'button';
     keep.textContent = 'Keep';
+    keep.title = `Keep ${item.name || 'wallpaper'} (A)`;
+    keep.setAttribute('aria-label', `Keep ${item.name || 'wallpaper'} (A)`);
+    keep.setAttribute('aria-keyshortcuts', 'A');
     keep.onclick = event => {
         event.stopPropagation();
         keepPreferenceSuggestion(item, row);
@@ -875,6 +1191,9 @@ function createPreferenceReviewRow(item) {
     ban.className = 'model-review-ban';
     ban.type = 'button';
     ban.textContent = 'Ban';
+    ban.title = `Ban ${item.name || 'wallpaper'} (X)`;
+    ban.setAttribute('aria-label', `Ban ${item.name || 'wallpaper'} (X)`);
+    ban.setAttribute('aria-keyshortcuts', 'X Delete');
     ban.onclick = event => {
         event.stopPropagation();
         banPreferenceSuggestion(item, row);
@@ -999,6 +1318,8 @@ function createPreferenceReviewPanel() {
 
     const panel = document.createElement('section');
     panel.className = 'model-review-panel';
+    panel.tabIndex = -1;
+    panel.setAttribute('role', 'region');
     panel.setAttribute('aria-label', 'Model review');
 
     const header = document.createElement('div');
@@ -1011,7 +1332,7 @@ function createPreferenceReviewPanel() {
     heading.appendChild(title);
     const subtitle = document.createElement('span');
     subtitle.className = 'model-review-subtitle';
-    subtitle.textContent = 'Ranked by local tag/context evidence';
+    subtitle.textContent = 'Ranked by local tag/context evidence · Tab/Arrows · Enter/Space · A/X';
     heading.appendChild(subtitle);
     const count = document.createElement('span');
     count.className = 'model-review-count';

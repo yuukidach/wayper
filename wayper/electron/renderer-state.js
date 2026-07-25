@@ -321,19 +321,56 @@ function handleGlobalKeydown(e) {
     if (e.target.tagName === 'INPUT' && e.target.id !== 'search-input') return;
     if (e.target.id === 'search-input') return; // handled by handleSearchKeydown
 
+    // Model-review rows have their own keyboard actions.  Keep this guard
+    // before the gallery shortcuts: otherwise X/Delete would ban the current
+    // wallpaper and Enter/Space would open an unrelated focused card.
+    if (!lightboxEl) {
+        const modelReviewTarget = e.target?.closest?.('.model-review-row');
+        if (modelReviewTarget) {
+            const handled = typeof handleModelReviewRowKeyboard === 'function'
+                && handleModelReviewRowKeyboard(e);
+            const reviewKeys = [
+                'Enter', ' ', 'Escape', 'a', 'A', 'x', 'X', 'Delete',
+                'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+            ];
+            // Even if a stale row is between data refreshes, never let a
+            // review key fall through to a destructive gallery shortcut.
+            if (handled || reviewKeys.includes(e.key)) return;
+        }
+    }
+
     // Lightbox-specific shortcuts
     if (lightboxEl) {
+        // A focused toolbar/close/navigation button should receive native
+        // Enter/Space activation.  The lightbox listener normally stops these
+        // events before they reach this document listener; keep the check here
+        // as a defensive fallback for dynamically focused controls.
+        if (
+            (e.key === 'Enter' || e.key === ' ')
+            && lightboxEl.contains?.(e.target)
+            && e.target?.closest?.('button')
+        ) {
+            return;
+        }
         switch(e.key) {
             case 'Escape':
                 closeLightbox(e);
                 return;
             case 'ArrowLeft':
                 e.preventDefault();
-                arrowPanOrNavigate(-1);
+                if (lightboxImg?.reviewOnly) {
+                    navigateReviewLightbox(-1);
+                } else {
+                    arrowPanOrNavigate(-1);
+                }
                 return;
             case 'ArrowRight':
                 e.preventDefault();
-                arrowPanOrNavigate(1);
+                if (lightboxImg?.reviewOnly) {
+                    navigateReviewLightbox(1);
+                } else {
+                    arrowPanOrNavigate(1);
+                }
                 return;
             case 'Enter':
                 e.preventDefault();
@@ -352,8 +389,8 @@ function handleGlobalKeydown(e) {
                     closeLightbox();
                 }
                 return;
-            case 'k':
-            case 'K':
+            case 'a':
+            case 'A':
                 if (lightboxImg?.reviewOnly) {
                     e.preventDefault();
                     void keepLightboxReviewSuggestion();
@@ -540,26 +577,120 @@ function updateGridMetrics() {
     appState.gridColumns = cards.length; // All in one row
 }
 
+function modelReviewNavigationRows() {
+    if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') {
+        return [];
+    }
+    return [...document.querySelectorAll('.model-review-row')].filter(row => (
+        row
+        && !row.hidden
+        && row.getAttribute?.('aria-hidden') !== 'true'
+    ));
+}
+
+function focusNavigationTarget(target) {
+    if (!target || typeof target.focus !== 'function') return false;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView?.({ block: 'nearest', behavior: 'auto' });
+    return true;
+}
+
+function focusFirstModelReviewCandidate() {
+    return focusNavigationTarget(modelReviewNavigationRows()[0]);
+}
+
+function focusFirstGalleryCard(
+    cards = typeof document !== 'undefined'
+        ? document.getElementsByClassName('wallpaper-card')
+        : [],
+) {
+    return focusNavigationTarget(cards?.[0]);
+}
+
+function gridColumnCount(
+    cards = typeof document !== 'undefined'
+        ? document.getElementsByClassName('wallpaper-card')
+        : [],
+) {
+    const firstRect = cards[0]?.getBoundingClientRect?.();
+    const firstTop = firstRect?.top;
+    if (Number.isFinite(firstTop)) {
+        for (let i = 1; i < cards.length; i++) {
+            const rect = cards[i]?.getBoundingClientRect?.();
+            const top = rect?.top;
+            if (Number.isFinite(top) && top > firstTop + 1) return i;
+        }
+        if (cards.length > 0) return cards.length;
+    }
+    const grid = typeof els !== 'undefined' ? els.wallpaperGrid : null;
+    const template = grid && typeof getComputedStyle === 'function'
+        ? getComputedStyle(grid).gridTemplateColumns
+        : '';
+    const columns = String(template || '').trim().split(/\s+/).filter(Boolean).length;
+    return Math.max(1, columns || Number(appState.gridColumns) || 1);
+}
+
+function galleryCardIsInFirstRow(card, index, cards, columns) {
+    const firstRect = cards[0]?.getBoundingClientRect?.();
+    const cardRect = card?.getBoundingClientRect?.();
+    if (firstRect && cardRect && Number.isFinite(firstRect.top) && Number.isFinite(cardRect.top)) {
+        return cardRect.top <= firstRect.top + 1;
+    }
+    return index < columns;
+}
+
 function navigateGrid(direction) {
     const cards = document.getElementsByClassName('wallpaper-card'); // Live collection
-    if (cards.length === 0) return;
+    const reviewRows = modelReviewNavigationRows();
 
     const focused = document.activeElement;
-    // Check if focused element is actually a card
-    let index = -1;
-    if (focused && focused.classList.contains('wallpaper-card')) {
-        index = Array.prototype.indexOf.call(cards, focused);
+    const focusedReviewRow = focused?.closest?.('.model-review-row');
+
+    // Model-review rows are laid out before the gallery cards, so bridge the
+    // two focus regions when an arrow event reaches the document-level handler
+    // (the row's own handler normally handles this first).
+    if (focusedReviewRow) {
+        if (typeof moveModelReviewFocus === 'function') {
+            moveModelReviewFocus(focusedReviewRow, direction);
+            return;
+        }
+        const reviewIndex = reviewRows.indexOf(focusedReviewRow);
+        if (reviewIndex >= 0) {
+            const step = direction === 'ArrowUp' || direction === 'ArrowLeft' ? -1 : 1;
+            const nextRow = reviewRows[reviewIndex + step];
+            if (nextRow) {
+                focusNavigationTarget(nextRow);
+            } else if (step > 0) {
+                focusFirstGalleryCard(cards);
+            }
+            return;
+        }
     }
 
-    // If no card focused, start at 0
-    if (index === -1) {
-        cards[0].focus();
+    if (cards.length === 0) {
+        // A review queue can exist even when the recoverable gallery is empty.
+        // Keep arrow navigation useful in that state as well.
+        focusFirstModelReviewCandidate();
         return;
     }
 
-    // Read actual column count from CSS grid computed style
-    const gridStyle = getComputedStyle(els.wallpaperGrid);
-    const cols = gridStyle.gridTemplateColumns.split(' ').length || 1;
+    // Check if focused element is actually a card
+    let index = -1;
+    if (focused?.classList?.contains?.('wallpaper-card')) {
+        index = Array.prototype.indexOf.call(cards, focused);
+    }
+
+    // On entering the grid, expose the review queue first when it exists.  A
+    // user can then continue with ArrowDown/ArrowRight until the gallery;
+    // without a queue this preserves the original first-card behavior.
+    if (index === -1) {
+        if (reviewRows.length && focusFirstModelReviewCandidate()) return;
+        focusFirstGalleryCard(cards);
+        return;
+    }
+
+    // Read actual column count from CSS grid computed style.
+    const cols = gridColumnCount(cards);
     let nextIndex = index;
 
     switch(direction) {
@@ -569,11 +700,19 @@ function navigateGrid(direction) {
         case 'ArrowUp': nextIndex = index - cols; break;
     }
 
+    // The review panel occupies the row immediately above the first gallery
+    // row.  ArrowUp at that boundary should enter its first candidate instead
+    // of becoming a no-op.
+    if (
+        direction === 'ArrowUp'
+        && galleryCardIsInFirstRow(focused, index, cards, cols)
+        && reviewRows.length
+    ) {
+        if (focusFirstModelReviewCandidate()) return;
+    }
+
     if (nextIndex >= 0 && nextIndex < cards.length) {
-        cards[nextIndex].focus({ preventScroll: true });
-        requestAnimationFrame(() => {
-            cards[nextIndex].scrollIntoView({ block: 'nearest', behavior: 'auto' });
-        });
+        focusNavigationTarget(cards[nextIndex]);
     }
 }
 

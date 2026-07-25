@@ -2504,6 +2504,12 @@ footer {
   border-radius: var(--radius-lg);
 }
 
+.model-review-panel:focus-visible {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px var(--crust), 0 0 0 4px var(--blue);
+}
+
 .model-review-header {
   display: flex;
   align-items: baseline;
@@ -2534,6 +2540,13 @@ footer {
 .model-review-empty {
   color: var(--overlay1);
   font-size: 11px;
+}
+
+.model-review-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-review-count {
@@ -2574,6 +2587,12 @@ footer {
 
 .model-review-row:hover {
   border-color: rgba(137, 180, 250, 0.28);
+}
+
+.model-review-row:focus-visible {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px var(--crust), 0 0 0 4px var(--blue);
 }
 
 .model-review-row.is-busy {

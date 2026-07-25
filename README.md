@@ -100,7 +100,7 @@ uv pip install -e ".[browser]"  # optional: browser cookie extraction for Wallha
 |-----|--------|-----|--------|
 | `←` / `→` | Previous / Next image (pan when zoomed) | `Enter` | Set as wallpaper |
 | `f` | Favorite | `x` / `Del` | Dislike |
-| `k` (Model review) | Keep reviewed candidate | `o` | Open on Wallhaven |
+| `a` (Model review) | Keep reviewed candidate | `o` | Open on Wallhaven |
 | `Space` / `Esc` | Close lightbox | | |
 | Scroll | Zoom at cursor (0.5×–8×) | Drag | Pan when zoomed in |
 | `0` | Reset to fit | `+` / `-` | Zoom in / out |
@@ -149,7 +149,12 @@ In the GUI's Blocklist view, **Model review** shows ranked pool candidates with
 both dislike and counter-evidence chips: **Ban** uses the normal blacklist +
 system-trash flow and records that it came from review, while **Keep** records
 explicit positive feedback. Use **Preview** to inspect the full image; in that
-review lightbox, press `K` to keep or `X` to ban. Feedback is appended to a local JSONL event log (the older JSON log
+review queue, focus a candidate with `Tab` (or press `ArrowUp` from the first
+gallery row), then use the arrow keys to move between candidates (the up/down
+keys follow the visible rows). Press
+`Enter`/`Space` to preview, use the left/right keys in the preview to switch
+candidates, `A` to keep, or `X`/`Delete` to ban. The same `A` and
+`X`/`Delete` shortcuts work in the review lightbox. Feedback is appended to a local JSONL event log (the older JSON log
 is still read), and after 10 new events Wayper queues a local full-batch refresh;
 `wayper model status` shows the pending count and model schema.
 
