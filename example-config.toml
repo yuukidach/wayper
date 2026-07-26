@@ -26,6 +26,9 @@ categories = "111"     # 1=general, 1=anime, 1=people
 top_range = "1M"
 sorting = "toplist"
 ai_art_filter = 0      # 0=off, 1=on
+# Automatic filtering: rules, model, or rules+model. Model hits are queued
+# for manual Keep/Ban review and never enter the blacklist automatically.
+filter_strategy = "rules"
 batch_size = 5
 min_favorites = 0      # skip downloads with fewer Wallhaven favorites (0 = disabled)
 # exclude_tags = ["MetArt", "watermarked"]  # synced to Wallhaven cloud blacklist if credentials are set

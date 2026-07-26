@@ -920,6 +920,17 @@ main {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   gap: 0 24px;
+  --exclusion-list-height: 240px;
+}
+
+.exclusion-grid > .field {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.exclusion-grid > .field .hint {
+  margin-top: auto;
 }
 
 .settings-card {
@@ -1114,10 +1125,13 @@ main {
 .tag-chips {
   display: flex;
   flex-wrap: wrap;
+  align-content: flex-start;
   gap: 6px;
   margin-top: 8px;
   min-height: 0;
-  max-height: 120px;
+  flex: 0 0 var(--exclusion-list-height);
+  height: var(--exclusion-list-height);
+  max-height: var(--exclusion-list-height);
   overflow-y: auto;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
@@ -1146,8 +1160,8 @@ main {
 }
 
 #exclude-combos-container {
-  max-height: none;
-  overflow-y: visible;
+  max-height: var(--exclusion-list-height);
+  overflow-y: auto;
 }
 
 .tag-chip-remove {
@@ -2569,6 +2583,14 @@ footer {
 .model-review-list {
   display: grid;
   min-width: 0;
+  /*
+   * Keep every review slot the same size.  Without an explicit track size,
+   * CSS Grid derives each row from its tallest card.  Removing a candidate
+   * then moving the queued cards can change that tallest card and make the
+   * cards beside it visibly jump in height.
+   */
+  --model-review-card-height: 120px;
+  grid-auto-rows: var(--model-review-card-height);
   grid-template-columns: repeat(auto-fit, minmax(min(285px, 100%), 1fr));
   gap: 8px;
 }
@@ -2578,6 +2600,9 @@ footer {
   grid-template-columns: 88px minmax(0, 1fr);
   gap: 10px;
   min-width: 0;
+  min-height: 0;
+  height: var(--model-review-card-height);
+  overflow: hidden;
   padding: 8px;
   background: rgba(49, 50, 68, 0.46);
   border: 1px solid rgba(69, 71, 90, 0.65);
@@ -2631,6 +2656,8 @@ footer {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .model-review-item-header {
@@ -2638,6 +2665,7 @@ footer {
   align-items: baseline;
   gap: 8px;
   min-width: 0;
+  flex-shrink: 0;
 }
 
 .model-review-name {
@@ -2664,8 +2692,12 @@ footer {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  align-content: flex-start;
   gap: 4px;
   min-height: 18px;
+  height: 36px;
+  flex-shrink: 0;
+  overflow: hidden;
   color: var(--overlay1);
   font-size: 10px;
   line-height: 1.35;
@@ -2717,6 +2749,7 @@ footer {
   justify-content: flex-end;
   gap: 5px;
   margin-top: auto;
+  flex-shrink: 0;
 }
 
 .model-review-actions button {

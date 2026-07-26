@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from wayper.config import WayperConfig
+from wayper.config import WayperConfig, normalize_filter_strategy
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +35,10 @@ def config_payload(config: WayperConfig, mode: set[str]) -> dict[str, object]:
             "top_range": config.wallhaven.top_range,
             "sorting": config.wallhaven.sorting,
             "ai_art_filter": config.wallhaven.ai_art_filter,
+            "filter_strategy": config.wallhaven.filter_strategy,
+            # Keep the alias in the payload for clients released before the
+            # strategy was given its final name.
+            "filter_mode": config.wallhaven.filter_strategy,
             "batch_size": config.wallhaven.batch_size,
             "min_favorites": config.wallhaven.min_favorites,
             "exclude_tags": config.wallhaven.exclude_tags,
@@ -93,6 +97,9 @@ def apply_config_updates(
         for key in ("categories", "top_range", "sorting", "ai_art_filter"):
             if key in wallhaven:
                 setattr(config.wallhaven, key, wallhaven[key])
+        strategy_value = wallhaven.get("filter_strategy", wallhaven.get("filter_mode"))
+        if strategy_value is not None:
+            config.wallhaven.filter_strategy = normalize_filter_strategy(strategy_value)
         if "batch_size" in wallhaven:
             config.wallhaven.batch_size = max(1, int(wallhaven["batch_size"]))
         if "min_favorites" in wallhaven:

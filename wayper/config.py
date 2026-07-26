@@ -17,6 +17,31 @@ else:
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 
 
+# The canonical values exposed in the GUI/API.  ``rules_model`` and
+# ``rules+model`` are accepted as input aliases for hand-edited configs and
+# older clients, but are always serialized as ``rules+model``.
+FILTER_STRATEGIES = ("rules", "model", "rules+model")
+
+
+def normalize_filter_strategy(value: object) -> str:
+    """Return a safe, canonical automatic-filter strategy.
+
+    Unknown values deliberately fall back to the historical rules-only
+    behaviour.  A malformed config must never turn on destructive model
+    filtering by accident.
+    """
+    normalized = str(value or "rules").strip().lower().replace(" ", "")
+    aliases = {
+        "rules_model": "rules+model",
+        "rules-and-model": "rules+model",
+        "rulesandmodel": "rules+model",
+        "both": "rules+model",
+        "off": "rules",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in FILTER_STRATEGIES else "rules"
+
+
 @dataclass
 class MonitorConfig:
     name: str
@@ -31,11 +56,27 @@ class WallhavenConfig:
     top_range: str = "1M"
     sorting: str = "toplist"
     ai_art_filter: int = 0
+    # ``rules`` preserves the original tag/uploader behaviour.  ``model``
+    # enables the validated local preference model, and ``rules+model`` runs
+    # both gates.  Model hits are quarantined for explicit review.
+    filter_strategy: str = "rules"
     batch_size: int = 5
     min_favorites: int = 0
     exclude_tags: list[str] = field(default_factory=list)
     exclude_combos: list[list[str]] = field(default_factory=list)
     exclude_uploaders: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.filter_strategy = normalize_filter_strategy(self.filter_strategy)
+
+    @property
+    def filter_mode(self) -> str:
+        """Backward-compatible alias used by early API clients."""
+        return self.filter_strategy
+
+    @filter_mode.setter
+    def filter_mode(self, value: object) -> None:
+        self.filter_strategy = normalize_filter_strategy(value)
 
 
 @dataclass
@@ -115,6 +156,21 @@ class WayperConfig:
         return self.download_dir / ".preference_events.jsonl"
 
     @property
+    def model_review_dir(self) -> Path:
+        """Quarantine directory for images rejected by the model gate.
+
+        It is intentionally separate from the pool and from system trash:
+        pending files are not yet a user decision and therefore must not train
+        the model or disappear from the review UI.
+        """
+        return self.download_dir / ".model-review"
+
+    @property
+    def model_review_file(self) -> Path:
+        """Append-safe index for pending and resolved model-review items."""
+        return self.download_dir / ".model-review.json"
+
+    @property
     def pid_file(self) -> Path:
         return CONFIG_DIR / "wayper.pid"
 
@@ -163,6 +219,7 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
     lines.append(f'top_range = "{wh.top_range}"')
     lines.append(f'sorting = "{wh.sorting}"')
     lines.append(f"ai_art_filter = {wh.ai_art_filter}")
+    lines.append(f'filter_strategy = "{_esc(normalize_filter_strategy(wh.filter_strategy))}"')
     lines.append(f"batch_size = {wh.batch_size}")
     lines.append(f"min_favorites = {wh.min_favorites}")
     if wh.exclude_tags:
@@ -219,6 +276,10 @@ def load_config(path: Path | None = None) -> WayperConfig:
         top_range=wallhaven_raw.get("top_range", "1M"),
         sorting=wallhaven_raw.get("sorting", "toplist"),
         ai_art_filter=wallhaven_raw.get("ai_art_filter", 0),
+        filter_strategy=wallhaven_raw.get(
+            "filter_strategy",
+            wallhaven_raw.get("filter_mode", "rules"),
+        ),
         batch_size=max(1, int(wallhaven_raw.get("batch_size", 5))),
         min_favorites=max(0, int(wallhaven_raw.get("min_favorites", 0))),
         exclude_tags=wallhaven_raw.get("exclude_tags", []),

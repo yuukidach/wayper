@@ -13,6 +13,8 @@ class StatusResponse(BaseModel):
     blocklist_count: int = 0
     recoverable_count: int = 0
     mode: list[str] = Field(default_factory=lambda: ["sfw"])
+    model_review_count: int = 0
+    model_filter_ready: bool = False
 
 
 class ImageItem(BaseModel):
@@ -68,6 +70,8 @@ class WallhavenConfigModel(BaseModel):
     top_range: str
     sorting: str
     ai_art_filter: int
+    filter_strategy: str = "rules"
+    filter_mode: str | None = None
     batch_size: int = 5
     min_favorites: int = 0
     exclude_tags: list[str]
