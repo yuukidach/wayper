@@ -375,11 +375,19 @@ wayper status               # show current state
 wayper-gui                  # GUI app
 wayper setup                # install .desktop entry (Linux)
 wayper --json status        # machine-readable output</code></pre>
-  <p><code>wayper model train</code> stays local and uses the standard library: normalized tags
-  plus compact color/category/purity context. The v2 default does not use embeddings or a large
-  ML runtime; tag pairs are opt-in with <code>--max-combos</code>. Live pool images are background
-  controls unless explicitly kept, and the review queue is a relative ranking by explainable net
-  feature evidence rather than a calibrated probability. Open Blocklist to review candidates:
+  <p><code>wayper model train</code> reads only local Wallhaven metadata (normalized tags and compact
+  color/category/purity context); it never opens image files or inspects pixels. The base model uses
+  the standard library. Install <code>uv pip install -e '.[semantic]'</code> to enable the optional
+  FastEmbed <code>BAAI/bge-small-en-v1.5</code> text head, which encodes metadata only and keeps a
+  persistent local embedding cache. Before any Model review decisions exist, an installation may
+  temporarily bootstrap from its older blacklist/favorite data. Once a review Ban or Keep is recorded,
+  only those explicit review decisions become new training labels; ordinary gallery actions remain
+  outside the label stream. The semantic head learns related metadata patterns from those examples,
+  without a manually configured person or region rule. Tag pairs remain opt-in with <code>--max-combos</code>.
+  Live pool images are background controls unless explicitly kept. The review queue ranks by explainable
+  learned evidence plus a bounded boost for the strongest specific dislike signal and diversifies repeated
+  reasons. This score is not a calibrated probability.
+  Open Blocklist to review candidates:
   Ban uses the normal system-trash flow and records review context, while Keep becomes explicit
   positive feedback. Both dislike and counter-evidence are shown; in the Preview lightbox, press
   <code>A</code> to keep or <code>X</code> to ban. Automatic skipping remains disabled until its validation gate

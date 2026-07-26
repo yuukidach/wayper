@@ -11,7 +11,14 @@ import click
 
 from .backend import notify
 from .config import load_config
-from .core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
+from .core import (
+    do_ban,
+    do_fav,
+    do_next,
+    do_prev,
+    do_unban,
+    do_unfav,
+)
 from .pool import favorite_filenames, should_download
 from .state import ALL_PURITIES, read_mode, toggle_base, toggle_purity, write_mode
 from .status import status_snapshot
@@ -494,6 +501,20 @@ def train_preference_model_cmd(ctx, combo_min_support, max_combos, validation_da
             f"{report.get('context_features', 0)} context, "
             f"{report['combo_features']} experimental combos"
         )
+        click.echo(f"Labels: {report.get('label_source', 'legacy')}")
+        if report.get("semantic_enabled"):
+            click.echo(
+                "Semantic head: "
+                f"{report.get('semantic_model')} "
+                f"({report.get('semantic_dimension')} dimensions)"
+            )
+        else:
+            training = report.get("training", {})
+            status = training.get("semantic_status") if isinstance(training, dict) else None
+            semantic_label = (
+                "unavailable" if status and str(status).startswith("unavailable") else "not trained"
+            )
+            click.echo(f"Semantic head: {semantic_label}")
         validation = report["validation"]
         if isinstance(validation, dict) and validation.get("available"):
             click.echo(
@@ -506,7 +527,11 @@ def train_preference_model_cmd(ctx, combo_min_support, max_combos, validation_da
                 f"{'ready' if report['auto_skip_ready'] else 'not ready'}"
             )
         else:
-            click.echo("Recent validation: insufficient labelled data")
+            reason = validation.get("reason") if isinstance(validation, dict) else None
+            click.echo(
+                "Recent validation: "
+                + ("disabled" if reason == "validation disabled" else "insufficient labelled data")
+            )
 
 
 @preference_model.command("refresh", hidden=True)
@@ -581,6 +606,23 @@ def preference_model_status(ctx):
             f"{report.get('context_features', 0)} context, "
             f"{report['combo_features']} experimental combos"
         )
+        click.echo(f"Labels: {report.get('label_source', 'legacy')}")
+        if report.get("semantic_enabled"):
+            click.echo(
+                "Semantic head: "
+                f"{report.get('semantic_model')} "
+                f"({report.get('semantic_dimension')} dimensions)"
+            )
+        else:
+            semantic_status = (
+                training.get("semantic_status") if isinstance(training, dict) else None
+            )
+            semantic_label = (
+                "unavailable"
+                if semantic_status and str(semantic_status).startswith("unavailable")
+                else "not trained"
+            )
+            click.echo(f"Semantic head: {semantic_label}")
         click.echo(f"Auto-skip threshold (not enabled by default): {model.threshold:.0%}")
         validation = report["validation"]
         if isinstance(validation, dict) and validation.get("available"):
@@ -590,7 +632,11 @@ def preference_model_status(ctx):
                 f"recall {validation.get('recall_at_threshold')} at threshold {model.threshold:.0%}"
             )
         else:
-            click.echo("Recent validation: insufficient labelled data")
+            reason = validation.get("reason") if isinstance(validation, dict) else None
+            click.echo(
+                "Recent validation: "
+                + ("disabled" if reason == "validation disabled" else "insufficient labelled data")
+            )
         click.echo(
             "Automatic filtering safety gate: "
             f"{'ready' if report['auto_skip_ready'] else 'not ready'}"
@@ -603,7 +649,7 @@ def preference_model_status(ctx):
                 f"(automatic refresh at {learning['minimum_feedback']} feedback events)"
             )
         if learning.get("upgrade_due"):
-            click.echo("Model refresh: v2 ranking upgrade pending")
+            click.echo("Model refresh: ranking/schema or label-source upgrade pending")
 
 
 @preference_model.command("score")
@@ -659,6 +705,9 @@ def preference_model_score(ctx, filename, tags):
         "calibrated": prediction.calibrated,
         "score": prediction.score,
         "feature_score": prediction.feature_score,
+        "semantic_score": prediction.semantic_score,
+        "semantic_probability": prediction.semantic_probability,
+        "semantic_available": prediction.semantic_available,
         "threshold": model.threshold,
         "would_skip": safe_to_skip and prediction.probability >= model.threshold,
         "contributions": list(prediction.contributions),

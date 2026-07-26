@@ -45,6 +45,7 @@ def _training_example_payload(example: PreferenceExample, *, include_weight: boo
         example.is_explicit_keep,
         example.is_control,
         example.temporal_label_known,
+        example.is_explicit_ban,
         list(example.context_features),
     ]
     if include_weight:
@@ -82,8 +83,10 @@ def train_preference_model(
     validation_days: int = 14,
     feedback_revision: int = 0,
     retrain_mode: str = "manual",
+    semantic_model: str | None = None,
+    label_source: str = "legacy",
 ) -> PreferenceModel:
-    """Fit the lightweight explainable preference ranking model."""
+    """Fit the sparse model and an optional metadata-only semantic head."""
     examples = sorted(
         examples,
         key=lambda example: (
@@ -96,6 +99,7 @@ def train_preference_model(
             example.is_explicit_keep,
             example.is_control,
             example.temporal_label_known,
+            example.is_explicit_ban,
         ),
     )
     _validate_training_examples(examples)
@@ -113,10 +117,15 @@ def train_preference_model(
         for example in examples
     )
     training, holdout = _temporal_split(examples, validation_days)
+    validation_reason = (
+        "validation disabled"
+        if validation_days <= 0
+        else "not enough temporally observed labelled data"
+    )
     validation: dict[str, object] = {
         "available": False,
         "calibrated": False,
-        "reason": "not enough temporally observed labelled data",
+        "reason": validation_reason,
         "excluded_implicit_retained": implicit_retained_excluded,
         "excluded_controls": implicit_retained_excluded,
     }
@@ -147,6 +156,30 @@ def train_preference_model(
         threshold=threshold,
         epochs=epochs,
     )
+    semantic_status = "disabled" if semantic_model is None else "insufficient_feedback"
+    if semantic_model is not None:
+        try:
+            from .semantic import fit_semantic_head
+
+            semantic_head = fit_semantic_head(examples, model_name=semantic_model)
+        except Exception as exc:  # pragma: no cover - optional runtime/environment dependent
+            semantic_head = None
+            semantic_status = f"unavailable: {type(exc).__name__}"
+        if semantic_head is not None:
+            model.semantic_model = semantic_head.model_name
+            model.semantic_bias = semantic_head.bias
+            model.semantic_weights = semantic_head.weights
+            model.semantic_blend = semantic_head.blend
+            model.semantic_rank_weight = semantic_head.rank_weight
+            semantic_status = "trained"
+            model.training_summary.update(
+                {
+                    "semantic_examples": semantic_head.examples,
+                    "semantic_positives": semantic_head.positives,
+                    "semantic_negatives": semantic_head.negatives,
+                    "semantic_dimension": semantic_head.dimension,
+                }
+            )
     model.validation = validation
     model.training_summary.update(
         {
@@ -156,7 +189,11 @@ def train_preference_model(
             "validation_days": validation_days,
             "retrain_mode": retrain_mode,
             "explicit_keeps": sum(example.is_explicit_keep for example in examples),
+            "explicit_bans": sum(example.is_explicit_ban for example in examples),
             "controls": sum(example.is_control for example in examples),
+            "semantic_model": semantic_model or "",
+            "semantic_status": semantic_status,
+            "label_source": label_source,
         }
     )
     return model
@@ -203,6 +240,7 @@ def _fit(
         "max_combo_features": max_combo_features,
         "feature_normalization": DEFAULT_FEATURE_NORMALIZATION,
         "epochs": epochs,
+        "semantic_status": "disabled",
     }
     return PreferenceModel(
         bias=bias,

@@ -1,10 +1,8 @@
-"""Small, local preference ranking model trained from wallpaper metadata.
+"""Local preference ranking trained from Wallhaven metadata.
 
-The recommended v2 model uses normalized tag unigrams plus a few low-cardinality
-metadata fields (colors, category, purity, and supported uploaders).  Optional
-tag pairs remain available for experiments, but are disabled by default.  The
-explainable sparse FTRL implementation uses only the standard library, so it
-does not pull in an embedding model or a heavyweight ML runtime.
+The primary model remains an explainable sparse FTRL ranker.  When the optional
+semantic extra is installed, an additional local text head generalizes across
+related tags.  Neither path reads image pixels.
 """
 
 from __future__ import annotations
@@ -60,6 +58,11 @@ from .preference.model import (
     _sigmoid,
     _storage_feature_key,
 )
+from .preference.semantic import (
+    DEFAULT_SEMANTIC_BLEND,
+    DEFAULT_SEMANTIC_MODEL,
+    DEFAULT_SEMANTIC_RANK_WEIGHT,
+)
 from .preference.training import (
     _build_feature_space,
     _evaluate,
@@ -95,14 +98,19 @@ __all__ = [
     "DEFAULT_FAVORITE_WEIGHT",
     "DEFAULT_RECENCY_HALF_LIFE_DAYS",
     "DEFAULT_FEATURE_NORMALIZATION",
+    "DEFAULT_SEMANTIC_MODEL",
+    "DEFAULT_SEMANTIC_BLEND",
+    "DEFAULT_SEMANTIC_RANK_WEIGHT",
     "MIN_TRAINING_PER_CLASS",
     "MIN_VALIDATION_PER_CLASS",
     "AUTO_SKIP_MIN_PRECISION",
     "AUTO_SKIP_MIN_PREDICTIONS",
     "AUTO_SKIP_MIN_PRECISION_LOWER_BOUND",
     "DEFAULT_REVIEW_MIN_FEATURE_SCORE",
+    "DEFAULT_REVIEW_DISLIKE_BOOST",
     "DEFAULT_REVIEW_THRESHOLD",
     "DEFAULT_REVIEW_LIMIT",
+    "DEFAULT_REVIEW_REASON_LIMIT",
     "AUTO_RETRAIN_MIN_FEEDBACK",
     "AUTO_RETRAIN_MIN_CHANGED_EXAMPLES",
     "AUTO_RETRAIN_DELAY_SECONDS",
@@ -166,8 +174,13 @@ AUTO_SKIP_MIN_PRECISION = 0.95
 AUTO_SKIP_MIN_PREDICTIONS = 20
 AUTO_SKIP_MIN_PRECISION_LOWER_BOUND = 0.80
 DEFAULT_REVIEW_MIN_FEATURE_SCORE = 0.0
+# Model review is human-confirmed and should retain more recall than automatic
+# filtering. Boost the part of the strongest non-color/non-purity dislike
+# contribution that is not matched by the strongest comparable keep signal.
+DEFAULT_REVIEW_DISLIKE_BOOST = 1.5
 DEFAULT_REVIEW_THRESHOLD = 0.82
 DEFAULT_REVIEW_LIMIT = 24
+DEFAULT_REVIEW_REASON_LIMIT = 2
 AUTO_RETRAIN_MIN_FEEDBACK = 10
 AUTO_RETRAIN_MIN_CHANGED_EXAMPLES = 12
 AUTO_RETRAIN_DELAY_SECONDS = 5
@@ -355,6 +368,13 @@ def _clean_model_feedback(model: dict[str, object] | None) -> dict[str, object] 
         "trained_at",
         "score",
         "feature_score",
+        "review_score",
+        "strongest_review_dislike_score",
+        "strongest_review_keep_score",
+        "hybrid_score",
+        "semantic_score",
+        "semantic_probability",
+        "semantic_available",
         "probability",
         "calibrated",
         "percentile",
@@ -441,6 +461,7 @@ def build_training_examples(
     now: int | None = None,
     favorite_weight: float = DEFAULT_FAVORITE_WEIGHT,
     recency_half_life_days: int = DEFAULT_RECENCY_HALF_LIFE_DAYS,
+    review_only: bool = False,
 ) -> list[PreferenceExample]:
     """Build dislike, explicit-keep, and background-control examples.
 
@@ -455,6 +476,14 @@ def build_training_examples(
     are excluded from temporal validation and reported separately.
     """
     now = int(time.time()) if now is None else now
+    if review_only:
+        return _build_model_review_examples(
+            metadata,
+            feedback_events,
+            now=now,
+            favorite_weight=favorite_weight,
+            recency_half_life_days=recency_half_life_days,
+        )
     latest_bans: dict[str, int] = {}
     for entries in (blacklist_entries, historical_bans):
         for timestamp, filename in entries:
@@ -485,6 +514,8 @@ def build_training_examples(
         if not tags:
             continue
         context_features = _model_context_features(meta)
+        feedback = latest_feedback.get(filename)
+        is_explicit_ban = bool(isinstance(feedback, dict) and feedback.get("action") == "ban")
         if filename in latest_bans:
             timestamp = latest_bans[filename]
             examples.append(
@@ -496,11 +527,11 @@ def build_training_examples(
                     timestamp=timestamp,
                     context_features=context_features,
                     temporal_label_known=True,
+                    is_explicit_ban=is_explicit_ban,
                 )
             )
         elif filename in retained:
             is_favorite = filename in favorites
-            feedback = latest_feedback.get(filename)
             is_explicit_keep = not is_favorite and _is_explicit_keep(feedback)
             explicit_positive = is_favorite or _has_explicit_positive_feedback(feedback)
             temporal_label_known = _has_explicit_positive_feedback(feedback)
@@ -517,6 +548,87 @@ def build_training_examples(
                     is_explicit_keep=is_explicit_keep,
                     is_control=not explicit_positive,
                     temporal_label_known=temporal_label_known,
+                )
+            )
+    return examples
+
+
+def _is_model_review_feedback(event: object) -> bool:
+    """Whether an event is an intentional label from the review queue."""
+    if not isinstance(event, dict) or event.get("action") not in {"ban", "keep"}:
+        return False
+    return event.get("context") == "model_review" or event.get("source") in {
+        "model_review",
+        "model_suggestion",
+    }
+
+
+def _model_review_labels(
+    events: Iterable[dict[str, object]],
+) -> dict[str, tuple[str, int]]:
+    """Resolve the latest curated review label for each filename.
+
+    Ordinary gallery actions are intentionally ignored.  An explicit unban
+    after a review Ban clears that reviewed label, allowing the user to
+    correct an earlier decision from the blocklist view.
+    """
+    ordered = sorted(
+        (event for event in events if _is_feedback_event(event)),
+        key=lambda event: int(event["revision"]),
+    )
+    labels: dict[str, tuple[str, int]] = {}
+    for event in ordered:
+        filename = str(event["filename"])
+        if _is_model_review_feedback(event):
+            labels[filename] = (str(event["action"]), int(event["timestamp"]))
+        elif event.get("action") == "unban" and labels.get(filename, (None, 0))[0] == "ban":
+            labels.pop(filename, None)
+    return labels
+
+
+def _build_model_review_examples(
+    metadata: dict[str, dict],
+    feedback_events: Iterable[dict[str, object]],
+    *,
+    now: int,
+    favorite_weight: float,
+    recency_half_life_days: int,
+) -> list[PreferenceExample]:
+    """Build labels exclusively from deliberate Model review decisions."""
+    labels = _model_review_labels(feedback_events)
+    examples: list[PreferenceExample] = []
+    for filename, (action, timestamp) in sorted(labels.items()):
+        meta = metadata.get(filename)
+        if not isinstance(meta, dict):
+            continue
+        tags = _model_tags(meta.get("tags", []))
+        if not tags:
+            continue
+        context_features = _model_context_features(meta)
+        if action == "ban":
+            examples.append(
+                PreferenceExample(
+                    filename=filename,
+                    tags=tags,
+                    label=1,
+                    base_weight=_recency_weight(timestamp, now, recency_half_life_days),
+                    timestamp=timestamp,
+                    context_features=context_features,
+                    temporal_label_known=True,
+                    is_explicit_ban=True,
+                )
+            )
+        else:  # keep
+            examples.append(
+                PreferenceExample(
+                    filename=filename,
+                    tags=tags,
+                    label=0,
+                    base_weight=favorite_weight,
+                    timestamp=timestamp,
+                    context_features=context_features,
+                    temporal_label_known=True,
+                    is_explicit_keep=True,
                 )
             )
     return examples
@@ -548,7 +660,7 @@ def collect_preference_training_snapshot(config: WayperConfig) -> PreferenceTrai
     feedback = load_preference_feedback(config)
     historical_bans = load_preference_historical_bans(config)
     snapshot_now = int(time.time() // 86400) * 86400
-    examples = tuple(
+    legacy_examples = tuple(
         build_training_examples(
             metadata,
             list_blacklist(config),
@@ -561,11 +673,26 @@ def collect_preference_training_snapshot(config: WayperConfig) -> PreferenceTrai
             now=snapshot_now,
         )
     )
+    review_examples = tuple(
+        build_training_examples(
+            metadata,
+            (),
+            set(),
+            set(),
+            feedback_events=feedback["events"],
+            now=snapshot_now,
+            review_only=True,
+        )
+    )
+    has_review_feedback = any(_is_model_review_feedback(event) for event in feedback["events"])
+    examples = review_examples if has_review_feedback else legacy_examples
+    label_source = "model_review" if has_review_feedback else "legacy"
     return PreferenceTrainingSnapshot(
         examples=examples,
         feedback_revision=int(feedback["revision"]),
         data_signature=_training_data_signature(examples),
         favorite_files=len(favorites),
+        label_source=label_source,
     )
 
 
@@ -578,6 +705,7 @@ def train_local_preference_model(
     epochs: int = DEFAULT_EPOCHS,
     validation_days: int = 14,
     retrain_mode: str = "manual",
+    semantic_model: str | None = DEFAULT_SEMANTIC_MODEL,
 ) -> tuple[PreferenceModel, PreferenceTrainingSnapshot]:
     """Fit one model from a consistent local snapshot without writing it yet."""
     _bootstrap_historical_preference_bans(config)
@@ -591,12 +719,37 @@ def train_local_preference_model(
         validation_days=validation_days,
         feedback_revision=snapshot.feedback_revision,
         retrain_mode=retrain_mode,
+        semantic_model=semantic_model,
+        label_source=snapshot.label_source,
     )
+    _warm_semantic_cache(model, snapshot)
     model.training_summary["favorite_files"] = snapshot.favorite_files
     model.training_summary["favorites_without_usable_metadata"] = snapshot.favorite_files - int(
         model.training_summary["favorites"]
     )
     return model, snapshot
+
+
+def _warm_semantic_cache(
+    model: PreferenceModel,
+    snapshot: PreferenceTrainingSnapshot,
+) -> None:
+    """Pre-embed live retained metadata so review requests stay responsive."""
+    if not model.semantic_enabled:
+        return
+    try:
+        from .preference.semantic import embed_metadata
+
+        retained = [
+            (example.tags, example.context_features)
+            for example in snapshot.examples
+            if example.label == 0
+        ]
+        embed_metadata(retained, model_name=model.semantic_model)
+        model.training_summary["semantic_cached_records"] = len(retained)
+        model.training_summary["semantic_cache_status"] = "ready"
+    except Exception as exc:  # pragma: no cover - optional runtime/environment dependent
+        model.training_summary["semantic_cache_status"] = f"unavailable: {type(exc).__name__}"
 
 
 def _save_manual_preference_model(
@@ -613,7 +766,10 @@ def _save_manual_preference_model(
     with FileLock(path=_preference_model_lock_path(path)):
         with FileLock():
             current = collect_preference_training_snapshot(config)
-            if current.data_signature != snapshot.data_signature:
+            if (
+                current.data_signature != snapshot.data_signature
+                or current.label_source != snapshot.label_source
+            ):
                 return False
             _write_preference_model_unlocked(model, path)
             return True
@@ -627,6 +783,7 @@ def train_and_save_local_preference_model(
     threshold: float = DEFAULT_THRESHOLD,
     epochs: int = DEFAULT_EPOCHS,
     validation_days: int = 14,
+    semantic_model: str | None = DEFAULT_SEMANTIC_MODEL,
 ) -> tuple[PreferenceModel, PreferenceTrainingSnapshot]:
     """Fit and commit a manual model, retrying once if labels changed mid-fit."""
     for _ in range(2):
@@ -638,6 +795,7 @@ def train_and_save_local_preference_model(
             epochs=epochs,
             validation_days=validation_days,
             retrain_mode="manual",
+            semantic_model=semantic_model,
         )
         if _save_manual_preference_model(config, model, snapshot):
             return model, snapshot
@@ -660,6 +818,11 @@ def model_report(
         "tag_features": len(model.tag_weights),
         "combo_features": len(model.combo_weights),
         "context_features": len(model.context_weights),
+        "semantic_enabled": model.semantic_enabled,
+        "semantic_model": model.semantic_model or None,
+        "semantic_dimension": len(model.semantic_weights) or None,
+        "semantic_blend": model.semantic_blend if model.semantic_enabled else None,
+        "label_source": model.training_summary.get("label_source", "legacy"),
         "training": training,
         "validation": model.validation,
         "auto_skip_ready": auto_skip_ready(model),
@@ -705,6 +868,8 @@ def preference_learning_status(
         return {
             "status": "untrained",
             "stale": True,
+            "label_source": snapshot.label_source,
+            "label_source_changed": False,
             "pending_feedback": snapshot.feedback_revision,
             "changed_examples": len(snapshot.examples),
             "weight_refresh_due": False,
@@ -712,11 +877,14 @@ def preference_learning_status(
             "due": False,
         }
 
+    summary = model.training_summary
+    stored_label_source = summary.get("label_source", "legacy")
+    label_source_changed = stored_label_source != snapshot.label_source
     upgrade_due = (
         model.schema_version != MODEL_SCHEMA_VERSION
         or model.feature_normalization != DEFAULT_FEATURE_NORMALIZATION
+        or label_source_changed
     )
-    summary = model.training_summary
     previous_revision = summary.get("feedback_revision", 0)
     if not isinstance(previous_revision, int):
         previous_revision = 0
@@ -739,6 +907,8 @@ def preference_learning_status(
         "status": "upgrade_pending" if upgrade_due else "ready",
         "stale": stale,
         "upgrade_due": upgrade_due,
+        "label_source": snapshot.label_source,
+        "label_source_changed": label_source_changed,
         "pending_feedback": pending_feedback,
         "changed_examples": changed_examples,
         "weight_refresh_due": weight_refresh_due,
@@ -753,6 +923,78 @@ def preference_learning_status(
     }
 
 
+def _preference_review_score(prediction: PreferencePrediction) -> float:
+    """Return a human-review score with one guarded dislike boost.
+
+    Several individually mild keep signals may otherwise erase a learned veto
+    when summed. The strongest comparable keep signal first reduces the boost,
+    and a signal at least as strong suppresses it entirely. This protects clear
+    counter-patterns instead of blindly chasing every positive coefficient.
+    """
+    dislike = prediction.strongest_review_dislike_score
+    keep = prediction.strongest_review_keep_score
+    boost = DEFAULT_REVIEW_DISLIKE_BOOST * max(0.0, dislike - keep)
+    return prediction.feature_score + boost
+
+
+def _diversify_preference_review_rank(
+    ranked: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Limit one learned reason from monopolizing the first review page."""
+    if len(ranked) <= DEFAULT_REVIEW_LIMIT:
+        return ranked
+    head: list[dict[str, object]] = []
+    deferred: list[dict[str, object]] = []
+    reason_counts: dict[tuple[str, str], int] = {}
+    for item in ranked:
+        prediction = item.get("prediction")
+        evidence = (
+            prediction.strongest_review_dislike
+            if isinstance(prediction, PreferencePrediction)
+            else None
+        )
+        reason = (
+            str(evidence.get("type", "")) if isinstance(evidence, dict) else "",
+            str(evidence.get("feature", "")) if isinstance(evidence, dict) else "",
+        )
+        if (
+            len(head) < DEFAULT_REVIEW_LIMIT
+            and reason_counts.get(reason, 0) < DEFAULT_REVIEW_REASON_LIMIT
+        ):
+            head.append(item)
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        else:
+            deferred.append(item)
+
+    if len(head) < min(DEFAULT_REVIEW_LIMIT, len(ranked)):
+        needed = min(DEFAULT_REVIEW_LIMIT, len(ranked)) - len(head)
+        head.extend(deferred[:needed])
+    selected = {id(item) for item in head}
+    # Diversity decides first-page membership, not the meaning of rank. Keep
+    # the selected page and the remainder in their original score order.
+    return [item for item in ranked if id(item) in selected] + [
+        item for item in ranked if id(item) not in selected
+    ]
+
+
+def _descending_percentiles(items: list[dict[str, object]], key: str) -> list[float]:
+    """Return deterministic 0..1 rank percentiles for one score field."""
+    if not items:
+        return []
+    ordered = sorted(
+        range(len(items)),
+        key=lambda index: (
+            -float(items[index].get(key, 0.0)),
+            str(items[index].get("name", "")),
+        ),
+    )
+    values = [0.0] * len(items)
+    denominator = max(1, len(items) - 1)
+    for rank, index in enumerate(ordered):
+        values[index] = 1.0 - rank / denominator
+    return values
+
+
 def preference_deletion_suggestions(
     config: WayperConfig,
     *,
@@ -762,9 +1004,10 @@ def preference_deletion_suggestions(
 ) -> dict[str, object]:
     """Return ranked pool images for human review only.
 
-    This function never alters the blacklist or filesystem.  Favorites,
-    blacklisted files, explicit positive corrections, metadata-only records,
-    and candidates without net learned dislike evidence are excluded.
+    This function never alters the blacklist or filesystem. Favorites,
+    blacklisted files, explicit positive corrections, and metadata-only records
+    are excluded. When available, a local text head is fused with the exact
+    sparse review score; no image pixels are inspected.
     """
     from .pool import favorites_dir, list_blacklist, list_images, load_metadata, pool_dir
     from .state import ALL_PURITIES
@@ -778,7 +1021,7 @@ def preference_deletion_suggestions(
             "status": "untrained",
             "items": [],
             "learning": learning,
-            "review_strategy": "net_feature_rank",
+            "review_strategy": "boosted_dislike_rank",
         }
 
     if model.schema_version != MODEL_SCHEMA_VERSION:
@@ -787,7 +1030,7 @@ def preference_deletion_suggestions(
             "items": [],
             "learning": learning,
             "model": model_report(model, model_path, learning=learning),
-            "review_strategy": "net_feature_rank",
+            "review_strategy": "boosted_dislike_rank",
         }
 
     active_purities = tuple(
@@ -812,16 +1055,12 @@ def preference_deletion_suggestions(
         for image in list_images(favorites_dir(config, purity, orient))
     }
     latest_feedback = _latest_feedback_by_filename(load_preference_feedback(config)["events"])
-    scored: list[dict[str, object]] = []
+    records: list[tuple[Path, str, dict[str, object]]] = []
     pool_images = 0
     metadata_images = 0
-    scored_images = 0
-    positive_evidence_images = 0
-    best_score: float | None = None
     for purity in active_purities:
         for orient in orientations:
             for image in list_images(pool_dir(config, purity, orient)):
-                pool_images += 1
                 filename = image.name
                 if (
                     filename in blacklisted
@@ -829,32 +1068,87 @@ def preference_deletion_suggestions(
                     or _has_explicit_positive_feedback(latest_feedback.get(filename))
                 ):
                     continue
+                pool_images += 1
                 meta = metadata.get(filename)
                 if not meta or not meta.get("tags"):
                     continue
                 metadata_images += 1
-                prediction = model.predict(meta["tags"], metadata=meta, top_n=20)
-                scored_images += 1
-                if prediction.positive_evidence_count > 0:
-                    positive_evidence_images += 1
-                    if best_score is None or prediction.feature_score > best_score:
-                        best_score = prediction.feature_score
-                if (
-                    prediction.feature_score <= DEFAULT_REVIEW_MIN_FEATURE_SCORE
-                    or prediction.positive_evidence_count == 0
-                ):
-                    continue
-                scored.append(
-                    {
-                        "path": str(image.relative_to(config.download_dir)),
-                        "name": filename,
-                        "prediction": prediction,
-                    }
-                )
+                records.append((image, filename, meta))
 
-    ranked_all = sorted(
-        scored,
-        key=lambda item: (-item["prediction"].feature_score, str(item["name"])),
+    predictions = model.predict_many(
+        [(meta.get("tags", []), meta, None) for _, _, meta in records],
+        top_n=20,
+    )
+    scored_images = len(records)
+    positive_evidence_images = 0
+    semantic_evidence_images = 0
+    best_score: float | None = None
+    best_review_score: float | None = None
+    best_semantic_score: float | None = None
+    scored: list[dict[str, object]] = []
+    for (image, filename, _meta), prediction in zip(records, predictions, strict=True):
+        if prediction.positive_evidence_count > 0:
+            positive_evidence_images += 1
+            if best_score is None or prediction.feature_score > best_score:
+                best_score = prediction.feature_score
+        if prediction.semantic_available and prediction.semantic_score is not None:
+            if prediction.semantic_score > 0:
+                semantic_evidence_images += 1
+            if best_semantic_score is None or prediction.semantic_score > best_semantic_score:
+                best_semantic_score = prediction.semantic_score
+        review_score = _preference_review_score(prediction)
+        if best_review_score is None or review_score > best_review_score:
+            best_review_score = review_score
+        exact_candidate = (
+            review_score > DEFAULT_REVIEW_MIN_FEATURE_SCORE
+            and prediction.positive_evidence_count > 0
+        )
+        semantic_candidate = bool(
+            prediction.semantic_available
+            and prediction.semantic_score is not None
+            and prediction.semantic_score >= 0
+        )
+        if not exact_candidate and not semantic_candidate:
+            continue
+        scored.append(
+            {
+                "path": str(image.relative_to(config.download_dir)),
+                "name": filename,
+                "prediction": prediction,
+                "review_score": review_score,
+                "semantic_score": prediction.semantic_score or 0.0,
+            }
+        )
+
+    semantic_enabled = any(
+        isinstance(item["prediction"], PreferencePrediction)
+        and item["prediction"].semantic_available
+        for item in scored
+    )
+    if semantic_enabled:
+        base_percentiles = _descending_percentiles(
+            [{"name": item["name"], "review_score": item["review_score"]} for item in scored],
+            "review_score",
+        )
+        semantic_percentiles = _descending_percentiles(scored, "semantic_score")
+        semantic_rank_weight = min(1.0, max(0.0, model.semantic_rank_weight or 0.65))
+        for index, item in enumerate(scored):
+            item["hybrid_score"] = (1.0 - semantic_rank_weight) * base_percentiles[
+                index
+            ] + semantic_rank_weight * semantic_percentiles[index]
+    else:
+        for item in scored:
+            item["hybrid_score"] = float(item["review_score"])
+
+    ranked_all = _diversify_preference_review_rank(
+        sorted(
+            scored,
+            key=lambda item: (
+                -float(item["hybrid_score"]),
+                -item["prediction"].feature_score,
+                str(item["name"]),
+            ),
+        ),
     )
     candidates: list[dict[str, object]] = []
     for rank, item in enumerate(ranked_all, 1):
@@ -866,6 +1160,29 @@ def preference_deletion_suggestions(
                 "name": item["name"],
                 "score": round(prediction.score, 4),
                 "feature_score": round(prediction.feature_score, 4),
+                "review_score": round(float(item["review_score"]), 4),
+                "hybrid_score": round(float(item["hybrid_score"]), 4),
+                "semantic_score": (
+                    round(prediction.semantic_score, 4)
+                    if prediction.semantic_score is not None
+                    else None
+                ),
+                "semantic_probability": (
+                    round(prediction.semantic_probability, 4)
+                    if prediction.semantic_probability is not None
+                    else None
+                ),
+                "semantic_available": prediction.semantic_available,
+                "strongest_review_dislike_score": round(
+                    prediction.strongest_review_dislike_score,
+                    4,
+                ),
+                "strongest_review_dislike": prediction.strongest_review_dislike,
+                "strongest_review_keep_score": round(
+                    prediction.strongest_review_keep_score,
+                    4,
+                ),
+                "strongest_review_keep": prediction.strongest_review_keep,
                 "probability": round(prediction.probability, 4),
                 "calibrated": prediction.calibrated,
                 "rank": all_rank,
@@ -893,14 +1210,21 @@ def preference_deletion_suggestions(
         "items": candidates[: max(1, limit)],
         "learning": learning,
         "model": model_report(model, model_path, learning=learning),
-        "review_strategy": "net_feature_rank",
+        "review_strategy": "hybrid_semantic_rank" if semantic_enabled else "boosted_dislike_rank",
         "diagnostics": {
             "pool_images": pool_images,
             "metadata_images": metadata_images,
             "scored_images": scored_images,
             "positive_evidence_images": positive_evidence_images,
+            "semantic_evidence_images": semantic_evidence_images,
             "candidate_count": len(candidates),
             "best_feature_score": round(best_score, 4) if best_score is not None else None,
+            "best_review_score": round(best_review_score, 4)
+            if best_review_score is not None
+            else None,
+            "best_semantic_score": round(best_semantic_score, 4)
+            if best_semantic_score is not None
+            else None,
         },
     }
 
@@ -1152,13 +1476,18 @@ def _save_automatic_preference_model(
     with FileLock(path=_preference_model_lock_path(path)):
         with FileLock():
             current = collect_preference_training_snapshot(config)
-            if current.data_signature != snapshot.data_signature:
+            if (
+                current.data_signature != snapshot.data_signature
+                or current.label_source != snapshot.label_source
+            ):
                 return False
             current_model = load_preference_model(path)
             if (
                 current_model is not None
                 and current_model.training_summary.get("training_data_signature")
                 == current.data_signature
+                and current_model.training_summary.get("label_source", "legacy")
+                == current.label_source
             ):
                 # A manual fit (or another worker) already covered exactly the
                 # same snapshot. Preserve its chosen hyperparameters.
@@ -1198,7 +1527,10 @@ def _run_auto_retrain(config: WayperConfig) -> str:
             validation_days=max(0, validation_days),
             feedback_revision=snapshot.feedback_revision,
             retrain_mode="automatic",
+            semantic_model=(model.semantic_model or DEFAULT_SEMANTIC_MODEL),
+            label_source=snapshot.label_source,
         )
+        _warm_semantic_cache(refreshed, snapshot)
         refreshed.training_summary["favorite_files"] = snapshot.favorite_files
         refreshed.training_summary["favorites_without_usable_metadata"] = (
             snapshot.favorite_files - int(refreshed.training_summary["favorites"])

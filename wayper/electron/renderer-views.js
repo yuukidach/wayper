@@ -593,8 +593,8 @@ function refreshPreferenceSuggestionDiagnostics() {
     const diagnostics = data.diagnostics && typeof data.diagnostics === 'object'
         ? data.diagnostics
         : {};
-    const bestFeatureScore = items.reduce((best, item) => {
-        const score = Number(item?.feature_score);
+    const bestReviewScore = items.reduce((best, item) => {
+        const score = Number(item?.review_score ?? item?.feature_score);
         return Number.isFinite(score) ? Math.max(best, score) : best;
     }, 0);
     const serverCandidateCount = Number(diagnostics.candidate_count);
@@ -609,16 +609,18 @@ function refreshPreferenceSuggestionDiagnostics() {
                 ? Math.max(items.length, serverCandidateCount)
                 : items.length,
             loaded_candidate_count: items.length,
-            best_feature_score: items.length ? bestFeatureScore : null,
+            best_review_score: items.length ? bestReviewScore : null,
         },
     };
 }
 
 function preferenceReviewEmptyText(data) {
     const diagnostics = data?.diagnostics || {};
-    const bestFeatureScore = Number(diagnostics.best_feature_score);
-    const bestLabel = Number.isFinite(bestFeatureScore)
-        ? formatPreferenceScore(bestFeatureScore)
+    const bestReviewScore = Number(
+        diagnostics.best_review_score ?? diagnostics.best_feature_score,
+    );
+    const bestLabel = Number.isFinite(bestReviewScore)
+        ? formatPreferenceScore(bestReviewScore)
         : null;
     if (data?.status === 'untrained') {
         return 'Train a local preference model to start reviewing candidates.';
@@ -627,9 +629,9 @@ function preferenceReviewEmptyText(data) {
         return 'Updating the local ranking model; review will appear shortly.';
     }
     if (bestLabel) {
-        return `No net dislike-evidence candidates; strongest feature score ${bestLabel}.`;
+        return `No learned dislike-evidence candidates; strongest review score ${bestLabel}.`;
     }
-    return 'No net dislike-evidence candidates for this monitor and purity.';
+    return 'No learned dislike-evidence candidates for this monitor and purity.';
 }
 
 function updatePreferenceReviewPanelAfterRemoval(path, { restoreFocus: requestedFocus = null } = {}) {
@@ -1122,7 +1124,12 @@ function createPreferenceReviewRow(item) {
     const rank = document.createElement('span');
     rank.className = 'model-review-rank';
     rank.textContent = formatPreferenceRank(item);
-    rank.title = `Net feature score ${formatPreferenceScore(item.feature_score)}`;
+    rank.title = `Hybrid rank ${formatPreferenceScore(item.hybrid_score ?? item.review_score ?? item.feature_score)}`
+        + ` · review score ${formatPreferenceScore(item.review_score ?? item.feature_score)}`
+        + (item.semantic_available
+            ? ` · semantic ${formatPreferenceScore(item.semantic_score)}`
+            : '')
+        + ` · net feature score ${formatPreferenceScore(item.feature_score)}`;
     itemHeader.appendChild(rank);
     body.appendChild(itemHeader);
 

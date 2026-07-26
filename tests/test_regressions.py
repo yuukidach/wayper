@@ -241,7 +241,13 @@ class RegressionTest(unittest.TestCase):
                 patch("wayper.server.api.get_config", return_value=config),
                 patch(
                     "wayper.server.api._model_review_feedback",
-                    return_value={"schema_version": 2, "feature_score": 1.25, "rank": 1},
+                    return_value={
+                        "schema_version": 2,
+                        "feature_score": -0.25,
+                        "review_score": 1.25,
+                        "strongest_review_dislike_score": 1.0,
+                        "rank": 1,
+                    },
                 ),
                 patch("wayper.server.api.do_ban", return_value=result) as do_ban,
             ):
@@ -255,7 +261,8 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual(response["status"], "ok")
         kwargs = do_ban.call_args.kwargs
         self.assertEqual(kwargs["preference_context"], "model_review")
-        self.assertEqual(kwargs["preference_model"]["feature_score"], 1.25)
+        self.assertEqual(kwargs["preference_model"]["feature_score"], -0.25)
+        self.assertEqual(kwargs["preference_model"]["review_score"], 1.25)
 
     def test_preference_keep_feedback_reports_a_ledger_write_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:

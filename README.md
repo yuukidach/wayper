@@ -134,16 +134,24 @@ wayper setup                # install .desktop entry (Linux)
 wayper --json status        # machine-readable output
 ```
 
-`wayper model train` uses only local metadata and the Python standard library:
-normalized tags plus compact color/category/purity context (frequent uploaders
-can also be retained). The v2 default is tag-only with context features; tag
-pairs are an opt-in experiment (`--max-combos`) and no embedding or large ML
-runtime is installed. Recent bans are weighted more heavily, while favorites
-and explicit **Keep** actions are positive labels. A live image that has never
-been explicitly kept is treated as a background control, not as proof that you
-like it. The model review queue is a relative ranking by net feature evidence,
-not a calibrated probability, and automatic skipping remains disabled until a
-separate validation/calibration gate is met.
+`wayper model train` reads only local Wallhaven metadata—normalized tags plus
+compact color/category/purity context—and never opens image files or inspects
+pixels. The base model works with the Python standard library; tag pairs remain
+an opt-in experiment (`--max-combos`). For a stronger local text head, install
+`uv pip install -e '.[semantic]'`: it uses `BAAI/bge-small-en-v1.5` through
+FastEmbed to encode the metadata text only, with a persistent local embedding
+cache. The first semantic training run may take longer while that cache is
+filled. Before any review decisions exist, an installation may use its older
+blacklist/favorite data as a temporary bootstrap. Once a **Model review** Ban or
+Keep has been recorded, only those explicit review decisions are used as new
+training labels; ordinary gallery actions are not silently promoted to labels.
+The optional semantic head learns related metadata patterns from the same review
+examples, without a manually configured person/region rule. A live image that
+has never been explicitly kept is treated as a background control, not as proof
+that you like it. The review queue ranks by learned evidence plus a bounded
+boost for the strongest specific dislike signal and diversifies repeated
+reasons. The score is not a calibrated probability, and automatic skipping
+remains disabled until a separate validation/calibration gate is met.
 
 In the GUI's Blocklist view, **Model review** shows ranked pool candidates with
 both dislike and counter-evidence chips: **Ban** uses the normal blacklist +
@@ -153,8 +161,7 @@ review queue, focus a candidate with `Tab` (or press `ArrowUp` from the first
 gallery row), then use the arrow keys to move between candidates (the up/down
 keys follow the visible rows). Press
 `Enter`/`Space` to preview, use the left/right keys in the preview to switch
-candidates, `A` to keep, or `X`/`Delete` to ban. The same `A` and
-`X`/`Delete` shortcuts work in the review lightbox. Feedback is appended to a local JSONL event log (the older JSON log
+candidates, `A` to keep, or `X`/`Delete` to ban. Feedback is appended to a local JSONL event log (the older JSON log
 is still read), and after 10 new events Wayper queues a local full-batch refresh;
 `wayper model status` shows the pending count and model schema.
 

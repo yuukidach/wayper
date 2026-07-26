@@ -9,8 +9,9 @@ from dataclasses import field as dataclass_field
 
 from ..tags import normalize_tag
 
-MODEL_SCHEMA_VERSION = 2
+MODEL_SCHEMA_VERSION = 3
 LEGACY_MODEL_SCHEMA_VERSION = 1
+SPARSE_MODEL_SCHEMA_VERSION = 2
 DEFAULT_COMBO_MIN_SUPPORT = 20
 DEFAULT_MAX_COMBO_FEATURES = 0
 DEFAULT_UPLOADER_MIN_SUPPORT = 10
@@ -24,6 +25,7 @@ MIN_VALIDATION_PER_CLASS = 5
 
 _PAIR_SEPARATOR = "\x1f"
 _CONTEXT_FIELDS = frozenset({"color", "category", "purity", "uploader"})
+_BROAD_REVIEW_FEATURE_TYPES = frozenset({"color", "purity"})
 _NON_PREFERENCE_FEATURE_TAGS = frozenset(
     {
         "portrait",
@@ -51,6 +53,7 @@ class PreferenceExample:
     # Keep additions after the v1 positional fields for source compatibility.
     context_features: tuple[str, ...] = ()
     is_control: bool = False
+    is_explicit_ban: bool = False
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,10 @@ class PreferenceTrainingSnapshot:
     feedback_revision: int
     data_signature: str
     favorite_files: int
+    # ``legacy`` bootstraps an installation before the user has reviewed any
+    # candidates; once review feedback exists, snapshots switch to the
+    # curated model-review label stream.
+    label_source: str = "legacy"
 
 
 @dataclass(frozen=True)
@@ -82,6 +89,13 @@ class PreferencePrediction:
     positive_evidence_count: int = 0
     feature_score: float = 0.0
     calibrated: bool = False
+    strongest_review_dislike_score: float = 0.0
+    strongest_review_dislike: dict[str, object] | None = None
+    strongest_review_keep_score: float = 0.0
+    strongest_review_keep: dict[str, object] | None = None
+    semantic_score: float | None = None
+    semantic_probability: float | None = None
+    semantic_available: bool = False
 
     def to_dict(self) -> dict[str, object]:
         dislike_evidence = [
@@ -99,6 +113,22 @@ class PreferencePrediction:
             "keep_evidence": keep_evidence,
             "positive_evidence_count": self.positive_evidence_count,
             "calibrated": self.calibrated,
+            "strongest_review_dislike_score": round(
+                self.strongest_review_dislike_score,
+                4,
+            ),
+            "strongest_review_dislike": self.strongest_review_dislike,
+            "strongest_review_keep_score": round(self.strongest_review_keep_score, 4),
+            "strongest_review_keep": self.strongest_review_keep,
+            "semantic_score": (
+                round(self.semantic_score, 4) if self.semantic_score is not None else None
+            ),
+            "semantic_probability": (
+                round(self.semantic_probability, 4)
+                if self.semantic_probability is not None
+                else None
+            ),
+            "semantic_available": self.semantic_available,
         }
 
 
@@ -127,6 +157,11 @@ class PreferenceModel:
     context_weights: dict[str, float] = dataclass_field(default_factory=dict)
     schema_version: int = MODEL_SCHEMA_VERSION
     feature_normalization: str = DEFAULT_FEATURE_NORMALIZATION
+    semantic_model: str = ""
+    semantic_bias: float = 0.0
+    semantic_weights: tuple[float, ...] = ()
+    semantic_blend: float = 0.0
+    semantic_rank_weight: float = 0.0
 
     @property
     def feature_space(self) -> FeatureSpace:
@@ -136,6 +171,11 @@ class PreferenceModel:
             frozenset(self.context_weights),
         )
 
+    @property
+    def semantic_enabled(self) -> bool:
+        """Whether this model contains a persisted semantic preference head."""
+        return bool(self.semantic_model and self.semantic_weights)
+
     def predict(
         self,
         tags: Iterable[object],
@@ -143,6 +183,8 @@ class PreferenceModel:
         metadata: dict[str, object] | None = None,
         context_features: Iterable[object] | None = None,
         top_n: int = 8,
+        _semantic_embedding: Iterable[float] | None = None,
+        _semantic_embedding_failed: bool = False,
     ) -> PreferencePrediction:
         """Return a local dislike margin and feature-level explanation."""
         normalized = _model_tags(tags)
@@ -176,24 +218,156 @@ class PreferenceModel:
             feature_score += contribution
             contributions.append((feature_type, display_name, contribution, weight))
 
-        ordered = sorted(contributions, key=lambda item: (-abs(item[2]), item[0], item[1]))[:top_n]
-        explanation = tuple(
-            {
+        sparse_positive_evidence_count = sum(item[2] > 0 for item in contributions)
+        semantic_score: float | None = None
+        semantic_probability: float | None = None
+        semantic_available = False
+        if self.semantic_enabled and not _semantic_embedding_failed:
+            try:
+                from .semantic import embed_metadata, score_embedding
+                from .semantic import semantic_probability as _probability
+
+                embedding = _semantic_embedding
+                if embedding is None:
+                    embedding = embed_metadata(
+                        [(normalized, normalized_context)],
+                        model_name=self.semantic_model,
+                    )[0]
+                semantic_score = score_embedding(
+                    _semantic_head(self),
+                    embedding,
+                )
+                semantic_probability = _probability(semantic_score)
+                semantic_available = True
+                semantic_contribution = self.semantic_blend * semantic_score
+                score += semantic_contribution
+                if semantic_contribution:
+                    contributions.append(
+                        (
+                            "semantic",
+                            "metadata semantic head",
+                            semantic_contribution,
+                            semantic_score,
+                        )
+                    )
+            except Exception:
+                # The optional runtime may be absent or its model cache may be
+                # unavailable.  Exact metadata scoring must remain usable.
+                semantic_score = None
+                semantic_probability = None
+                semantic_available = False
+
+        def explain(item: tuple[str, str, float, float]) -> dict[str, object]:
+            feature_type, name, contribution, coefficient = item
+            return {
                 "type": feature_type,
                 "feature": name,
                 "weight": round(contribution, 4),
                 "coefficient": round(coefficient, 4),
                 "direction": "dislike" if contribution > 0 else "keep",
             }
-            for feature_type, name, contribution, coefficient in ordered
+
+        ordered = sorted(contributions, key=lambda item: (-abs(item[2]), item[0], item[1]))[:top_n]
+        explanation = tuple(explain(item) for item in ordered)
+        review_dislike = max(
+            (
+                item
+                for item in contributions
+                if item[2] > 0 and item[0] not in _BROAD_REVIEW_FEATURE_TYPES
+            ),
+            key=lambda item: (item[2], item[0], item[1]),
+            default=None,
+        )
+        review_keep = min(
+            (
+                item
+                for item in contributions
+                if item[2] < 0 and item[0] not in _BROAD_REVIEW_FEATURE_TYPES
+            ),
+            key=lambda item: (item[2], item[0], item[1]),
+            default=None,
         )
         return PreferencePrediction(
             probability=_sigmoid(score),
             score=score,
             feature_score=feature_score,
             contributions=explanation,
-            positive_evidence_count=sum(item[2] > 0 for item in contributions),
+            positive_evidence_count=sparse_positive_evidence_count,
             calibrated=self.validation.get("calibrated") is True,
+            strongest_review_dislike_score=review_dislike[2] if review_dislike else 0.0,
+            strongest_review_dislike=explain(review_dislike) if review_dislike else None,
+            strongest_review_keep_score=-review_keep[2] if review_keep else 0.0,
+            strongest_review_keep=explain(review_keep) if review_keep else None,
+            semantic_score=semantic_score,
+            semantic_probability=semantic_probability,
+            semantic_available=semantic_available,
+        )
+
+    def predict_many(
+        self,
+        records: Iterable[
+            tuple[
+                Iterable[object],
+                dict[str, object] | None,
+                Iterable[object] | None,
+            ]
+        ],
+        *,
+        top_n: int = 8,
+    ) -> tuple[PreferencePrediction, ...]:
+        """Score metadata records in one embedding batch when enabled."""
+        materialized = tuple(
+            (
+                _model_tags(tags),
+                metadata,
+                (
+                    (context,)
+                    if isinstance(context, str)
+                    else tuple(context)
+                    if context is not None
+                    else None
+                ),
+            )
+            for tags, metadata, context in records
+        )
+        embeddings: list[tuple[float, ...] | None]
+        semantic_embedding_failed = False
+        if self.semantic_enabled and materialized:
+            try:
+                from .semantic import embed_metadata
+
+                embeddings = [
+                    tuple(vector)
+                    for vector in embed_metadata(
+                        [
+                            (
+                                tags,
+                                context if context is not None else _model_context_features(meta),
+                            )
+                            for tags, meta, context in materialized
+                        ],
+                        model_name=self.semantic_model,
+                    )
+                ]
+            except Exception:
+                embeddings = [None] * len(materialized)
+                semantic_embedding_failed = True
+        else:
+            embeddings = [None] * len(materialized)
+        return tuple(
+            self.predict(
+                tags,
+                metadata=metadata,
+                context_features=context,
+                top_n=top_n,
+                _semantic_embedding=embedding,
+                _semantic_embedding_failed=semantic_embedding_failed,
+            )
+            for (tags, metadata, context), embedding in zip(
+                materialized,
+                embeddings,
+                strict=True,
+            )
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -211,6 +385,17 @@ class PreferenceModel:
             "feature_normalization": self.feature_normalization,
             "training_summary": self.training_summary,
             "validation": self.validation,
+            "semantic_head": (
+                {
+                    "model_name": self.semantic_model,
+                    "bias": self.semantic_bias,
+                    "weights": list(self.semantic_weights),
+                    "blend": self.semantic_blend,
+                    "rank_weight": self.semantic_rank_weight,
+                }
+                if self.semantic_enabled
+                else {}
+            ),
         }
 
     @classmethod
@@ -221,6 +406,7 @@ class PreferenceModel:
         raw_schema_version = raw.get("schema_version")
         if isinstance(raw_schema_version, bool) or raw_schema_version not in {
             LEGACY_MODEL_SCHEMA_VERSION,
+            SPARSE_MODEL_SCHEMA_VERSION,
             MODEL_SCHEMA_VERSION,
         }:
             raise ValueError("Unsupported preference model file")
@@ -236,6 +422,14 @@ class PreferenceModel:
         validation = raw.get("validation", {})
         if not isinstance(summary, dict) or not isinstance(validation, dict):
             raise ValueError("Invalid preference model summary")
+        semantic_raw = raw.get("semantic_head", {})
+        if semantic_raw is None:
+            semantic_raw = {}
+        if not isinstance(semantic_raw, dict):
+            raise ValueError("Invalid preference model semantic head")
+        semantic_weights = semantic_raw.get("weights", [])
+        if not isinstance(semantic_weights, list | tuple):
+            raise ValueError("Invalid preference model semantic weights")
         return cls(
             bias=float(raw["bias"]),
             prior_log_odds=float(raw["prior_log_odds"]),
@@ -264,7 +458,25 @@ class PreferenceModel:
                     else DEFAULT_FEATURE_NORMALIZATION,
                 )
             ),
+            semantic_model=str(semantic_raw.get("model_name", "")),
+            semantic_bias=float(semantic_raw.get("bias", 0.0)),
+            semantic_weights=tuple(float(value) for value in semantic_weights),
+            semantic_blend=float(semantic_raw.get("blend", 0.0)),
+            semantic_rank_weight=float(semantic_raw.get("rank_weight", 0.0)),
         )
+
+
+def _semantic_head(model: PreferenceModel):
+    """Construct the optional runtime head lazily to keep imports lightweight."""
+    from .semantic import SemanticHead
+
+    return SemanticHead(
+        model_name=model.semantic_model,
+        bias=model.semantic_bias,
+        weights=model.semantic_weights,
+        blend=model.semantic_blend,
+        rank_weight=model.semantic_rank_weight,
+    )
 
 
 def _normalize_context_features(features: Iterable[object] | None) -> tuple[str, ...]:

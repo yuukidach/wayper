@@ -134,17 +134,22 @@ wayper setup                # 安装 .desktop（Linux）
 wayper --json status        # JSON 格式输出
 ```
 
-`wayper model train` 只使用本地元数据和 Python 标准库：规范化 tag，以及紧凑的
-颜色/分类/纯度上下文（支持度足够的 uploader 也会保留）。v2 默认不启用 tag-pair；
-如需实验可用 `--max-combos`，不会引入 embedding 或大型 ML 运行时。近期拉黑的权重更高，
-收藏和明确的 **Keep** 才是正向标签；仍在池中的图片若没有明确操作，只作为背景对照，
-不再被假定为「喜欢」。Model review 按净特征证据做相对排序，不把 sigmoid 数值冒充校准概率；
+`wayper model train` 只读取本地 Wallhaven 元数据——规范化 tag，以及紧凑的颜色/分类/纯度
+上下文——不会打开图片或分析像素。基础模型仍可只用 Python 标准库运行；tag-pair 仍需通过
+`--max-combos` 显式实验。若要启用更强的本地文本 head，可安装
+`uv pip install -e '.[semantic]'`；它通过 FastEmbed 使用 `BAAI/bge-small-en-v1.5`，编码的
+仍然只有元数据文本，并在本地持久化 embedding cache，首次训练填充 cache 时可能较慢。
+在还没有任何 Model review 决策时，安装可以暂时用旧的黑名单/收藏数据启动；一旦出现 **Model
+review** 的 Ban 或 Keep，后续新的训练标签只来自这些明确的复核决策，普通图库操作不会被默认为标签。
+可选的 semantic head 会从同一批复核样本学习相近的元数据模式，不需要手写人物或地区规则。近期拉黑
+的权重更高；池中从未明确 Keep 的图片只作为背景对照，不能证明「喜欢」。Model review 以学习到的证据
+排序，并对最强的具体 dislike 信号做有限加权，同时限制同一理由的重复数量。该分数不是校准概率；
 自动跳过仍保持关闭，直到独立的验证/校准安全门通过。
 
 GUI「拉黑」页面的 **Model review** 会显示排序后的候选图，并同时展示不喜欢证据和反向（Keep）证据：
 「Ban」仍走普通的拉黑＋系统回收站流程，同时记录这是 review 操作；「Keep」记录明确的正反馈。
 从图库首行按上方向键或用 Tab 将焦点移到候选卡片后，可用 `Enter`/`Space` 预览、`A` 保留、`X`/`Delete` 拉黑；方向键会按候选卡片的实际行列移动，
-预览灯箱中可用左右键切换候选，且同样支持 `A` 和 `X`/`Delete`。反馈追加到本地 JSONL 事件日志（旧 JSON 日志仍可读取），
+预览灯箱中可用左右键切换候选，且同样支持 `A`、`X`/`Delete`。反馈追加到本地 JSONL 事件日志（旧 JSON 日志仍可读取），
 每累计 10 条新反馈，Wayper 会排队做一次本地全量重训；`wayper model status` 会显示待处理数量和模型版本。
 
 ### 快捷键示例

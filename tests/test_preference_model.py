@@ -15,12 +15,16 @@ from click.testing import CliRunner
 from wayper.cli import cli
 from wayper.config import WayperConfig
 from wayper.preference_model import (
+    MODEL_SCHEMA_VERSION,
     PreferenceExample,
+    PreferenceModel,
+    PreferencePrediction,
     PreferenceTrainingSnapshot,
     _auto_retrain_lease_path,
     _bootstrap_historical_preference_bans,
     _build_feature_space,
     _claim_or_touch_auto_retrain_worker,
+    _diversify_preference_review_rank,
     _release_auto_retrain_worker,
     _save_automatic_preference_model,
     _save_manual_preference_model,
@@ -185,7 +189,7 @@ class PreferenceModelTest(unittest.TestCase):
         ]
         model = train_preference_model(examples, validation_days=0)
 
-        self.assertEqual(model.schema_version, 2)
+        self.assertEqual(model.schema_version, MODEL_SCHEMA_VERSION)
         self.assertEqual(model.max_combo_features, 0)
         self.assertEqual(model.combo_weights, {})
         self.assertIn("category:people", model.feature_space.context)
@@ -203,6 +207,226 @@ class PreferenceModelTest(unittest.TestCase):
         assert loaded is not None
         self.assertEqual(loaded.feature_normalization, "field_l2")
         self.assertEqual(loaded.context_weights, model.context_weights)
+
+    def test_explicit_ban_and_keep_flags_are_preserved_for_semantic_head(self) -> None:
+        metadata = {
+            "ban.jpg": {"tags": ["person"]},
+            "keep.jpg": {"tags": ["person", "asian"]},
+        }
+        examples = build_training_examples(
+            metadata,
+            [],
+            set(),
+            None,
+            feedback_events=[
+                {
+                    "schema_version": 2,
+                    "revision": 1,
+                    "timestamp": 100,
+                    "filename": "ban.jpg",
+                    "action": "ban",
+                },
+                {
+                    "schema_version": 2,
+                    "revision": 2,
+                    "timestamp": 101,
+                    "filename": "keep.jpg",
+                    "action": "keep",
+                },
+            ],
+            now=200,
+        )
+        by_name = {example.filename: example for example in examples}
+        self.assertTrue(by_name["ban.jpg"].is_explicit_ban)
+        self.assertTrue(by_name["keep.jpg"].is_explicit_keep)
+
+    def test_semantic_head_prediction_and_round_trip(self) -> None:
+        model = PreferenceModel(
+            bias=0.0,
+            prior_log_odds=0.0,
+            tag_weights={},
+            combo_weights={},
+            context_weights={},
+            threshold=0.98,
+            trained_at="test",
+            training_summary={"semantic_status": "trained"},
+            validation={},
+            combo_min_support=20,
+            max_combo_features=0,
+            semantic_model="fake-model",
+            semantic_bias=0.1,
+            semantic_weights=(1.0, -0.5),
+            semantic_blend=0.5,
+            semantic_rank_weight=0.65,
+        )
+        prediction = model.predict(["unseen"], _semantic_embedding=(1.0, 0.0))
+        self.assertTrue(prediction.semantic_available)
+        self.assertGreater(prediction.semantic_score or 0.0, 0.0)
+        self.assertTrue(any(item["type"] == "semantic" for item in prediction.contributions))
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "model.json"
+            save_preference_model(model, path)
+            loaded = load_preference_model(path)
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        self.assertEqual(loaded.semantic_model, "fake-model")
+        self.assertEqual(loaded.semantic_weights, (1.0, -0.5))
+
+    def test_predict_many_batches_semantic_metadata_without_images(self) -> None:
+        model = PreferenceModel(
+            bias=0.0,
+            prior_log_odds=0.0,
+            tag_weights={},
+            combo_weights={},
+            context_weights={},
+            threshold=0.98,
+            trained_at="test",
+            training_summary={},
+            validation={},
+            combo_min_support=20,
+            max_combo_features=0,
+            semantic_model="fake-model",
+            semantic_weights=(1.0, 0.0),
+            semantic_blend=1.0,
+            semantic_rank_weight=0.65,
+        )
+        with patch(
+            "wayper.preference.semantic.embed_metadata",
+            return_value=[(1.0, 0.0), (-1.0, 0.0)],
+        ) as embed:
+            predictions = model.predict_many(
+                [
+                    (("first",), {"category": "people"}, None),
+                    (("second",), {"category": "general"}, None),
+                ]
+            )
+        embed.assert_called_once()
+        self.assertEqual(len(predictions), 2)
+        self.assertGreater(predictions[0].semantic_score or 0.0, 0.0)
+        self.assertLess(predictions[1].semantic_score or 0.0, 0.0)
+
+    def test_model_has_no_metadata_identity_prior(self) -> None:
+        model = PreferenceModel(
+            bias=0.0,
+            prior_log_odds=0.0,
+            tag_weights={},
+            combo_weights={},
+            context_weights={},
+            threshold=0.98,
+            trained_at="test",
+            training_summary={},
+            validation={},
+            combo_min_support=20,
+            max_combo_features=0,
+        )
+
+        people = model.predict(["women", "blonde"], metadata={"category": "people"})
+        anime = model.predict(["women", "blonde"], metadata={"category": "anime"})
+
+        self.assertAlmostEqual(people.score, anime.score)
+        self.assertFalse(any(item["type"] == "concept" for item in people.contributions))
+        self.assertFalse(any(item["type"] == "concept" for item in anime.contributions))
+
+    def test_review_only_uses_model_review_ban_and_keep_only(self) -> None:
+        metadata = {
+            "gallery-ban.jpg": {"tags": ["ordinary-ban"]},
+            "review-ban.jpg": {"tags": ["review-ban"]},
+            "review-keep.jpg": {"tags": ["review-keep"]},
+            "favorite.jpg": {"tags": ["favorite"]},
+        }
+        events = [
+            {
+                "schema_version": 2,
+                "revision": 1,
+                "timestamp": 100,
+                "filename": "gallery-ban.jpg",
+                "action": "ban",
+                "source": "core",
+                "context": "core",
+            },
+            {
+                "schema_version": 2,
+                "revision": 2,
+                "timestamp": 101,
+                "filename": "review-ban.jpg",
+                "action": "ban",
+                "source": "core",
+                "context": "model_review",
+            },
+            {
+                "schema_version": 2,
+                "revision": 3,
+                "timestamp": 102,
+                "filename": "review-keep.jpg",
+                "action": "keep",
+                "source": "model_suggestion",
+                "context": "model_review",
+            },
+            {
+                "schema_version": 2,
+                "revision": 4,
+                "timestamp": 103,
+                "filename": "favorite.jpg",
+                "action": "favorite",
+                "source": "core",
+                "context": "core",
+            },
+        ]
+
+        examples = build_training_examples(
+            metadata,
+            [(99, "gallery-ban.jpg")],
+            {"favorite.jpg"},
+            retained_files={"favorite.jpg"},
+            feedback_events=events,
+            now=200,
+            review_only=True,
+        )
+
+        self.assertEqual(
+            {example.filename for example in examples},
+            {"review-ban.jpg", "review-keep.jpg"},
+        )
+        by_name = {example.filename: example for example in examples}
+        self.assertEqual(by_name["review-ban.jpg"].label, 1)
+        self.assertTrue(by_name["review-ban.jpg"].is_explicit_ban)
+        self.assertEqual(by_name["review-keep.jpg"].label, 0)
+        self.assertTrue(by_name["review-keep.jpg"].is_explicit_keep)
+        self.assertFalse(any(example.is_control for example in examples))
+
+    def test_review_unban_clears_a_previous_review_ban(self) -> None:
+        metadata = {"review-ban.jpg": {"tags": ["review-ban"]}}
+        events = [
+            {
+                "schema_version": 2,
+                "revision": 1,
+                "timestamp": 100,
+                "filename": "review-ban.jpg",
+                "action": "ban",
+                "source": "model_suggestion",
+                "context": "model_review",
+            },
+            {
+                "schema_version": 2,
+                "revision": 2,
+                "timestamp": 101,
+                "filename": "review-ban.jpg",
+                "action": "unban",
+                "source": "core",
+                "context": "core",
+            },
+        ]
+
+        examples = build_training_examples(
+            metadata,
+            (),
+            set(),
+            feedback_events=events,
+            review_only=True,
+        )
+
+        self.assertEqual(examples, [])
 
     def test_legacy_feedback_and_unfavorite_do_not_create_keep_label(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -428,6 +652,114 @@ class PreferenceModelTest(unittest.TestCase):
             )
             self.assertEqual(kept["items"], [])
 
+    def test_review_rank_preserves_a_strong_dislike_signal_in_mixed_preferences(self) -> None:
+        model = PreferenceModel(
+            bias=0.0,
+            prior_log_odds=0.0,
+            tag_weights={"asian": -1.4, "favorite one": -0.4, "favorite two": -0.4},
+            combo_weights={},
+            context_weights={"category:people": 0.5},
+            threshold=0.98,
+            trained_at="test",
+            training_summary={},
+            validation={},
+            combo_min_support=20,
+            max_combo_features=0,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            pool = config.download_dir / "sfw" / "portrait"
+            pool.mkdir(parents=True)
+            for filename in ("mixed-dislike.jpg", "protected-keep.jpg"):
+                (pool / filename).touch()
+            config.metadata_file.write_text(
+                json.dumps(
+                    {
+                        "mixed-dislike.jpg": {
+                            "tags": ["favorite one", "favorite two"],
+                            "category": "people",
+                        },
+                        "protected-keep.jpg": {
+                            "tags": ["favorite one", "favorite two", "asian"],
+                            "category": "people",
+                        },
+                    }
+                )
+            )
+            save_preference_model(model, config.preference_model_file)
+
+            suggestions = preference_deletion_suggestions(
+                config,
+                purities=("sfw",),
+                orientation="portrait",
+            )
+
+        self.assertEqual(suggestions["review_strategy"], "boosted_dislike_rank")
+        self.assertEqual(
+            [item["name"] for item in suggestions["items"]],
+            ["mixed-dislike.jpg"],
+        )
+        item = suggestions["items"][0]
+        self.assertLess(item["feature_score"], 0)
+        self.assertGreater(item["review_score"], 0)
+        self.assertEqual(item["strongest_review_dislike"]["feature"], "category: people")
+        self.assertLess(
+            item["strongest_review_keep_score"],
+            item["strongest_review_dislike_score"],
+        )
+
+    def test_review_boost_ignores_broad_color_and_purity_signals(self) -> None:
+        model = PreferenceModel(
+            bias=0.0,
+            prior_log_odds=0.0,
+            tag_weights={"subject": 0.25},
+            combo_weights={},
+            context_weights={
+                "category:people": 0.5,
+                "color:#ffffff": 1.2,
+                "purity:sfw": 1.0,
+            },
+            threshold=0.98,
+            trained_at="test",
+            training_summary={},
+            validation={},
+            combo_min_support=20,
+            max_combo_features=0,
+        )
+
+        prediction = model.predict(
+            ["subject"],
+            metadata={"category": "people", "colors": ["#ffffff"], "purity": "sfw"},
+        )
+
+        self.assertEqual(prediction.strongest_review_dislike_score, 0.5)
+        self.assertEqual(prediction.strongest_review_dislike["feature"], "category: people")
+
+    def test_review_rank_diversifies_repeated_primary_reasons(self) -> None:
+        def item(name: str, reason: str, score: float) -> dict[str, object]:
+            prediction = PreferencePrediction(
+                probability=0.5,
+                score=score,
+                feature_score=score,
+                contributions=(),
+                strongest_review_dislike_score=score,
+                strongest_review_dislike={"type": "tag", "feature": reason},
+            )
+            return {"name": name, "prediction": prediction, "review_score": score}
+
+        ranked = [
+            item(f"same-{index:02d}.jpg", "same", float(30 - index)) for index in range(1, 25)
+        ]
+        ranked.append(item("alternate.jpg", "alternate", 1.0))
+
+        diversified = _diversify_preference_review_rank(ranked)
+
+        self.assertEqual(
+            [entry["name"] for entry in diversified[:24]],
+            [*[f"same-{index:02d}.jpg" for index in range(1, 24)], "alternate.jpg"],
+        )
+        self.assertEqual(diversified[24]["name"], "same-24.jpg")
+
     def test_feedback_revision_marks_a_trained_model_due_for_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             config = WayperConfig(download_dir=Path(td))
@@ -459,6 +791,45 @@ class PreferenceModelTest(unittest.TestCase):
         self.assertTrue(status["stale"])
         self.assertEqual(status["pending_feedback"], 10)
         self.assertTrue(status["due"])
+
+    def test_snapshot_switches_to_model_review_labels_after_first_review_event(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            pool = config.download_dir / "sfw" / "landscape"
+            pool.mkdir(parents=True)
+            (pool / "ordinary-keep.jpg").touch()
+            config.metadata_file.write_text(
+                json.dumps(
+                    {
+                        "ordinary-ban.jpg": {"tags": ["ordinary-ban"]},
+                        "ordinary-keep.jpg": {"tags": ["ordinary-keep"]},
+                        "review-ban.jpg": {"tags": ["review-ban"]},
+                    }
+                )
+            )
+            config.blacklist_file.write_text("100 ordinary-ban.jpg\n")
+
+            legacy = collect_preference_training_snapshot(config)
+            self.assertEqual(legacy.label_source, "legacy")
+            self.assertEqual(
+                {example.filename for example in legacy.examples},
+                {"ordinary-ban.jpg", "ordinary-keep.jpg"},
+            )
+
+            record_preference_feedback(
+                config,
+                "ban",
+                "review-ban.jpg",
+                source="model_suggestion",
+                context="model_review",
+                timestamp=200,
+            )
+            reviewed = collect_preference_training_snapshot(config)
+
+        self.assertEqual(reviewed.label_source, "model_review")
+        self.assertEqual([example.filename for example in reviewed.examples], ["review-ban.jpg"])
+        self.assertTrue(reviewed.examples[0].is_explicit_ban)
+        self.assertFalse(any(example.is_control for example in reviewed.examples))
 
     def test_recency_weight_change_marks_model_for_refresh_without_new_feedback(self) -> None:
         examples = [

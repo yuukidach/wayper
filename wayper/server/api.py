@@ -380,6 +380,13 @@ def _model_review_item_details(
     for key in (
         "score",
         "feature_score",
+        "review_score",
+        "hybrid_score",
+        "strongest_review_dislike_score",
+        "strongest_review_keep_score",
+        "semantic_score",
+        "semantic_probability",
+        "semantic_available",
         "probability",
         "calibrated",
         "rank",
@@ -676,7 +683,10 @@ def get_disk_usage():
 
 
 @app.post("/api/control/{action}")
-def control_action(action: str, monitor_name: str | None = Body(None, embed=True)):
+def control_action(
+    action: str,
+    monitor_name: str | None = Body(None, embed=True),
+):
     config = get_config()
 
     # Resolve monitor

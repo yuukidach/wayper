@@ -9,7 +9,14 @@ from mcp.server.fastmcp import FastMCP
 from .backend import get_context, notify
 from .catalog import ImageCatalog
 from .config import load_config
-from .core import do_ban, do_fav, do_next, do_prev, do_unban, do_unfav
+from .core import (
+    do_ban,
+    do_fav,
+    do_next,
+    do_prev,
+    do_unban,
+    do_unfav,
+)
 from .daemon import request_mode_reload
 from .lock import FileLock
 from .pool import (
