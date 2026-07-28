@@ -56,15 +56,16 @@ class WallhavenConfig:
     top_range: str = "1M"
     sorting: str = "toplist"
     ai_art_filter: int = 0
-    # ``rules`` preserves the original tag/uploader behaviour.  ``model``
-    # enables the validated local preference model, and ``rules+model`` runs
-    # both gates.  Model hits are quarantined for explicit review.
-    filter_strategy: str = "rules"
     batch_size: int = 5
     min_favorites: int = 0
     exclude_tags: list[str] = field(default_factory=list)
     exclude_combos: list[list[str]] = field(default_factory=list)
     exclude_uploaders: list[str] = field(default_factory=list)
+    # ``rules`` preserves the original tag/uploader behaviour.  ``model``
+    # enables the validated local preference model, and ``rules+model`` runs
+    # both gates.  Model hits are quarantined for explicit review. Keep this
+    # field last so older positional constructors retain their meaning.
+    filter_strategy: str = "rules"
 
     def __post_init__(self) -> None:
         self.filter_strategy = normalize_filter_strategy(self.filter_strategy)
@@ -167,7 +168,7 @@ class WayperConfig:
 
     @property
     def model_review_file(self) -> Path:
-        """Append-safe index for pending and resolved model-review items."""
+        """Atomic index for pending and resolved model-review items."""
         return self.download_dir / ".model-review.json"
 
     @property

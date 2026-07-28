@@ -77,6 +77,7 @@ uv pip install -e ".[browser]"  # 可选：浏览器 cookie 提取，用于 Wall
 - **标签搜索** — 按 Wallhaven 标签、分类或文件名搜索，支持自动补全
 - **智能建议** — 分析拉黑模式，推荐要排除的标签；共现挖掘找出跨排除个体的共同描述符；支持组合排除（如"tattoo + nude"）精细过滤
 - **AI 分析** — 基于 Codex 的深度分析，支持迭代反馈。识别上传者模式并建议 Wallhaven 用户黑名单候选。点击建议标签可预览匹配图片
+- **自适应过滤** — 可通过侧边栏常驻开关选择 `rules`、`model` 或 `rules + model`。**Review** 将模型自动拦截的下载与普通模型推荐放在两条独立卡牌轨道中，二者不会再互相遮挡
 - **设置** — 在 GUI 中配置下载目录、Wallhaven 查询、排除标签/组合、纯度和显示器。修改即时生效，无需重启 daemon
 - **全键盘操作** — 每个操作都有快捷键：网格导航、标签切换、灯箱、收藏、拉黑、撤销
 
@@ -84,15 +85,16 @@ uv pip install -e ".[browser]"  # 可选：浏览器 cookie 提取，用于 Wall
 
 | 按键 | 操作 | 按键 | 操作 |
 |------|------|------|------|
-| `1` `2` `3` | 壁纸池 / 收藏 / 黑名单 | `F1` `F2` `F3` | 切换 SFW / Sketchy / NSFW |
+| `p` / `v` | 壁纸池 / 收藏 | `m` / `b` | Model / 黑名单 |
+| `s` | 设置 | `F1` `F2` `F3` | 切换 SFW / Sketchy / NSFW |
 | `h` / `l` | 上一张 / 下一张壁纸 | `f` | 收藏 |
 | `x` / `Del` | 拉黑 / 移除 | `u` | 撤销拉黑 |
-| `o` | 在 Wallhaven 打开 | `s` | 设置 |
+| `o` | 在 Wallhaven 打开 | | |
 | `/` | 聚焦搜索栏 | `Esc` | 清除搜索 / 取消聚焦 |
 | `Enter` / `Space` | 预览（灯箱） | 方向键 | 网格导航 |
 | `[` / `]` | 黑名单：可恢复 / 全部 | `a` | AI 分析（黑名单视图） |
 | `g` | 定位当前壁纸 | `gg` / `G` | 跳到第一张 / 最后一张 |
-| `4`–`9` | 切换显示器 | | |
+| `1`–`9` | 切换显示器 | | |
 
 **灯箱预览：**
 
@@ -100,7 +102,7 @@ uv pip install -e ".[browser]"  # 可选：浏览器 cookie 提取，用于 Wall
 |------|------|------|------|
 | `←` / `→` | 上一张 / 下一张（缩放时为平移） | `Enter` | 设为壁纸 |
 | `f` | 收藏 | `x` / `Del` | 拉黑 |
-| `a`（Model review） | 保留预览中的候选图 | `o` | 在 Wallhaven 打开 |
+| `a`（Review） | 保留预览中的候选图 | `o` | 在 Wallhaven 打开 |
 | `Space` / `Esc` | 关闭灯箱 | | |
 | 滚轮 | 在光标位置缩放（0.5×–8×） | 拖拽 | 缩放时平移 |
 | `0` | 重置为适应窗口 | `+` / `-` | 放大 / 缩小 |
@@ -139,18 +141,25 @@ wayper --json status        # JSON 格式输出
 `--max-combos` 显式实验。若要启用更强的本地文本 head，可安装
 `uv pip install -e '.[semantic]'`；它通过 FastEmbed 使用 `BAAI/bge-small-en-v1.5`，编码的
 仍然只有元数据文本，并在本地持久化 embedding cache，首次训练填充 cache 时可能较慢。
-在还没有任何 Model review 决策时，安装可以暂时用旧的黑名单/收藏数据启动；一旦出现 **Model
-review** 的 Ban 或 Keep，后续新的训练标签只来自这些明确的复核决策，普通图库操作不会被默认为标签。
+在还没有任何 Review 决策时，安装可以暂时用旧的黑名单/收藏数据启动；一旦出现 **Review**
+的 Ban 或 Keep，后续新的训练标签只来自这些明确的复核决策，普通图库操作不会被默认为标签。
 可选的 semantic head 会从同一批复核样本学习相近的元数据模式，不需要手写人物或地区规则。近期拉黑
-的权重更高；池中从未明确 Keep 的图片只作为背景对照，不能证明「喜欢」。Model review 以学习到的证据
-排序，并对最强的具体 dislike 信号做有限加权，同时限制同一理由的重复数量。该分数不是校准概率；
-自动跳过仍保持关闭，直到独立的验证/校准安全门通过。
+的权重更高；池中从未明确 Keep 的图片只作为背景对照，不能证明「喜欢」。Wayper 会分别从明确 Keep/Ban
+样本中保留最近一部分作为留出集，学习一条准确率优先、且更重视精度而非召回率的 Review 二分类边界，
+避免把弱猜测堆成很长的人工队列。**Recommended** 与 **Auto-held** 使用同一条边界：低于门槛的图片不会
+出现，页面数量只是上限而不是必须填满的目标。精确证据和语义分数只负责给已经越过门槛的图片排序，
+单凭排名不能让图片成为候选。由于所有模型命中都必须由用户确认，已训练模型无需通过用于无人值守删除的
+高精度安全门即可参与过滤；命中图片绝不会自动加入黑名单。
 
-GUI「拉黑」页面的 **Model review** 会显示排序后的候选图，并同时展示不喜欢证据和反向（Keep）证据：
-「Ban」仍走普通的拉黑＋系统回收站流程，同时记录这是 review 操作；「Keep」记录明确的正反馈。
-从图库首行按上方向键或用 Tab 将焦点移到候选卡片后，可用 `Enter`/`Space` 预览、`A` 保留、`X`/`Delete` 拉黑；方向键会按候选卡片的实际行列移动，
-预览灯箱中可用左右键切换候选，且同样支持 `A`、`X`/`Delete`。反馈追加到本地 JSONL 事件日志（旧 JSON 日志仍可读取），
-每累计 10 条新反馈，Wayper 会排队做一次本地全量重训；`wayper model status` 会显示待处理数量和模型版本。
+GUI 独立的 **Review** 是这条反馈闭环的控制中心。侧边栏开关只决定新下载使用
+`Rules`、`Model` 还是 `Both`（`Rules + model`），不会关闭模型推荐。复核界面有两条明确轨道：
+**Auto-held** 展示被模型自动隔离的下载，**Recommended** 展示图库中模型认为可能需要拉黑的图片。
+存在 Auto-held 项时会优先打开该轨道，因此自动拦截不会再埋在推荐项后面。每条轨道都是占满窗口的横向叠放卡牌：
+可以拖动、滚轮或左右按钮切换；点击当前图片或按 `Enter`/`Space` 进入完整预览；`A` 保留，`X`/`Delete` 拉黑。
+对于 Auto-held，Keep 会将文件释放到图库，Ban 才会移入系统回收站并加入黑名单；对于 Recommended，
+Keep 只记录正向纠正而不移动文件，Ban 走普通的图库到回收站/黑名单流程。GUI「拉黑」页面因此只负责
+可恢复/已拉黑的图片以及标签、上传者排除规则。反馈追加到本地 JSONL 事件日志（旧 JSON 日志仍可读取），
+每累计 10 条新反馈，Wayper 会排队做一次本地全量重训；`wayper model status` 会显示待处理数量和模型版本。过滤策略保存在 TOML 的 `wallhaven.filter_strategy`，旧安装默认仍为 `rules`。
 
 ### 快捷键示例
 
@@ -228,7 +237,7 @@ New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
 Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
-壁纸下载目录可在 GUI 设置页修改，也可编辑 [`example-config.toml`](../example-config.toml) 中的 `download_dir`。详见该文件的所有选项 — API key、代理、轮换间隔、配额、Wallhaven 最低收藏数、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
+壁纸下载目录可在 GUI 设置页修改，也可编辑 [`example-config.toml`](../example-config.toml) 中的 `download_dir`。详见该文件的所有选项 — API key、代理、轮换间隔、配额、Wallhaven 最低收藏数、`wallhaven.filter_strategy`（`rules` / `model` / `rules+model`）、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
 
 ## 依赖
 

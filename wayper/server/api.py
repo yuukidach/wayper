@@ -54,6 +54,7 @@ from wayper.server.schemas import (
     ConfigResponse,
     ImageItem,
     ImagePage,
+    ModelReviewActionRequest,
     MonitorInfo,
     PreferenceFeedbackRequest,
     SetModeRequest,
@@ -92,6 +93,7 @@ __all__ = [
     "ImageItem",
     "ImagePage",
     "MonitorInfo",
+    "ModelReviewActionRequest",
     "PreferenceFeedbackRequest",
     "SetModeRequest",
     "SetWallpaperRequest",
@@ -118,6 +120,9 @@ __all__ = [
     "ban_image_route",
     "preference_suggestions",
     "preference_suggestion_feedback",
+    "model_review_route",
+    "model_review_action_route",
+    "model_review_feedback_route",
     "daemon_action",
     "search_images",
     "tag_suggestions",
@@ -373,6 +378,7 @@ def _model_review_item_details(
         "schema_version",
         "feature_normalization",
         "trained_at",
+        "review_threshold",
     ):
         value = model.get(key)
         if isinstance(value, str | int | float | bool):
@@ -381,6 +387,7 @@ def _model_review_item_details(
         "score",
         "feature_score",
         "review_score",
+        "decision_score",
         "hybrid_score",
         "strongest_review_dislike_score",
         "strongest_review_keep_score",
@@ -521,6 +528,17 @@ def _schedule_preference_model_retrain(config: WayperConfig) -> None:
         # The label is already durable. A later GUI/API request can queue the
         # refresh again, so scheduling itself must not discard user feedback.
         log.warning("Could not schedule preference model refresh", exc_info=True)
+
+
+def _preference_learning_payload(config: WayperConfig) -> dict[str, object] | None:
+    """Return a fresh learning summary after a Model review decision."""
+    try:
+        from wayper.preference_model import preference_learning_status
+
+        return preference_learning_status(config)
+    except Exception:
+        log.debug("Could not refresh preference learning status", exc_info=True)
+        return None
 
 
 @app.get("/api/config", response_model=ConfigResponse)
@@ -752,6 +770,14 @@ def get_status(orient: str = "", include_recoverable: bool = True):
     if include_recoverable:
         recoverable_c = _blocklist_payload(config)["recoverable_count"]
 
+    try:
+        from wayper.model_review import model_review_status
+
+        review_status = model_review_status(config)
+    except Exception:
+        log.debug("Could not read model review status", exc_info=True)
+        review_status = {"pending_count": 0, "ready": False}
+
     return StatusResponse(
         running=running,
         pid=pid,
@@ -760,6 +786,8 @@ def get_status(orient: str = "", include_recoverable: bool = True):
         blocklist_count=blocklist_c,
         recoverable_count=recoverable_c,
         mode=sorted(purities),
+        model_review_count=int(review_status.get("pending_count", 0)),
+        model_filter_ready=bool(review_status.get("ready", False)),
     )
 
 
@@ -972,12 +1000,15 @@ def ban_image_route(req: ActionRequest):
     if not result.ok:
         raise HTTPException(400, result.error)
 
-    return {
+    response = {
         "status": "ok",
         "replacement_images": _relative_image_map(
             config, result.extra.get("replacement_images", {})
         ),
     }
+    if is_model_review:
+        response["learning"] = _preference_learning_payload(config)
+    return response
 
 
 @app.get("/api/preference-suggestions")
@@ -1006,10 +1037,40 @@ def preference_suggestions(purity: str = "", orient: str = "", limit: int = 24):
 
 @app.post("/api/preference-suggestions/feedback")
 def preference_suggestion_feedback(req: PreferenceFeedbackRequest):
-    """Record an explicit positive correction for a reviewed candidate."""
-    if req.action != "keep":
-        raise HTTPException(400, "Only the keep feedback action is supported")
+    """Record feedback for a ranked candidate or resolve a model quarantine.
+
+    Keeping this compatibility route accepting both sources lets older GUI
+    builds talk to a newer backend while the dedicated Model review screen
+    uses the explicit endpoint below.
+    """
     config = get_config()
+
+    if req.action == "keep":
+        try:
+            from wayper.model_review import list_model_review_items, resolve_model_review_item
+
+            pending = list_model_review_items(config, include_resolved=False, limit=500)
+            if any(item.get("path") == req.path for item in pending):
+                try:
+                    return {
+                        "status": "ok",
+                        "review": resolve_model_review_item(config, req.path, "keep"),
+                    }
+                except (FileExistsError, FileNotFoundError, ValueError) as exc:
+                    raise HTTPException(409, str(exc)) from exc
+        except HTTPException:
+            raise
+        except Exception:
+            log.debug(
+                "Could not resolve model quarantine through compatibility route",
+                exc_info=True,
+            )
+    elif req.action != "keep":
+        raise HTTPException(
+            400,
+            "Only the keep feedback action is supported for ranked candidates",
+        )
+
     with FileLock():
         image = _resolve_image(config, req.path)
         location = _pool_image_location(config, image)
@@ -1044,7 +1105,87 @@ def preference_suggestion_feedback(req: PreferenceFeedbackRequest):
         )
 
     _schedule_preference_model_retrain(config)
-    return {"status": "ok"}
+    return {"status": "ok", "learning": _preference_learning_payload(config)}
+
+
+@app.get("/api/model-review")
+@app.get("/api/model-review/items")
+def model_review_route(purity: str = "", orient: str = "", limit: int = 100):
+    """Return images automatically quarantined for an explicit human decision."""
+    from wayper.model_review import (
+        list_model_review_items,
+        model_review_status,
+        pending_model_review_count,
+    )
+
+    config = get_config()
+    purities = _parse_purities(purity) if purity else sorted(read_mode(config))
+    status = model_review_status(config)
+    items = list_model_review_items(
+        config,
+        purities=purities,
+        orientation=orient or None,
+        limit=min(500, max(1, limit)),
+    )
+    pending_count = pending_model_review_count(
+        config,
+        purities=purities,
+        orientation=orient or None,
+    )
+    # Keep the response shape close to preference-suggestions so the existing
+    # review renderer can consume it without trusting client-provided scores.
+    return {
+        "status": status.get("status", "untrained"),
+        "items": items,
+        # The sidebar status intentionally counts all purities, but the page
+        # count must match the currently selected purity/orientation filters.
+        "pending_count": pending_count,
+        "filter_strategy": config.wallhaven.filter_strategy,
+        "model_filter": status,
+        "learning": status.get("learning"),
+    }
+
+
+def _resolve_model_review_action(req: ModelReviewActionRequest) -> dict[str, object]:
+    from wayper.model_review import resolve_model_review_item
+
+    if req.action not in {"keep", "ban"}:
+        raise HTTPException(400, "Model review action must be keep or ban")
+    config = get_config()
+    try:
+        result = resolve_model_review_item(config, req.path, req.action)
+    except FileNotFoundError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (FileExistsError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    # Return the refreshed learning state so the inbox can update its status
+    # rail immediately after a decision without waiting for the next poll.
+    try:
+        from wayper.model_review import model_review_status
+
+        review_status = model_review_status(config)
+    except Exception:
+        review_status = {}
+    return {
+        "status": "ok",
+        "action": req.action,
+        "review": result,
+        "learning": review_status.get("learning"),
+        "model_filter": review_status,
+    }
+
+
+@app.post("/api/model-review/resolve")
+@app.post("/api/model-review/action")
+def model_review_action_route(req: ModelReviewActionRequest):
+    """Apply Keep/Ban to one automatically filtered image."""
+    return _resolve_model_review_action(req)
+
+
+@app.post("/api/model-review/feedback")
+def model_review_feedback_route(req: ModelReviewActionRequest):
+    """Alias retained for clients that call all preference decisions feedback."""
+    return _resolve_model_review_action(req)
 
 
 @app.post("/api/daemon/{action}")

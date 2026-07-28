@@ -1,10 +1,21 @@
 // --- Rendering ---
 
+function modelReviewModeActive() {
+    return typeof isModelReviewMode === 'function'
+        ? isModelReviewMode()
+        : appState?.mode === 'model-review';
+}
+
 function updateUI() {
+    els.wallpaperGrid?.classList.toggle('model-review-grid', modelReviewModeActive());
+    document.body?.setAttribute?.('data-mode', appState.mode);
+    document.body?.setAttribute?.('data-view', appState.view || 'grid');
+
     // Mode
     els.btnPool.classList.remove('active');
     els.btnFavorites.classList.remove('active');
     els.btnBlocklist.classList.remove('active');
+    els.btnModelReview?.classList.remove('active');
 
     if (appState.mode === 'pool') {
         els.btnPool.classList.add('active');
@@ -12,12 +23,18 @@ function updateUI() {
         els.btnFavorites.classList.add('active');
     } else if (appState.mode === 'trash') {
         els.btnBlocklist.classList.add('active');
+    } else if (modelReviewModeActive()) {
+        els.btnModelReview?.classList.add('active');
     }
 
     // Purity toggles
     els.btnPuritySfw.classList.toggle('active', appState.purity.includes('sfw'));
     els.btnPuritySketchy.classList.toggle('active', appState.purity.includes('sketchy'));
     els.btnPurityNsfw.classList.toggle('active', appState.purity.includes('nsfw'));
+
+    if (typeof updateFilterStrategyUI === 'function') {
+        updateFilterStrategyUI();
+    }
 }
 function updateStatusUI() {
     const running = appState.status.running;
@@ -31,6 +48,21 @@ function updateStatusUI() {
     }
     if (appState.status.blocklist_count !== undefined) {
         els.countBlocklist.innerText = appState.status.blocklist_count;
+    }
+    if (els.countModelReview && appState.status.model_review_count !== undefined) {
+        const reviewData = modelReviewModeActive() ? appState.modelReviewData : null;
+        const held = Number(
+            reviewData?.pending_count ?? appState.status.model_review_count,
+        );
+        const recommended = Number(reviewData?.recommendation_count);
+        const heldCount = Number.isFinite(held) ? Math.max(0, held) : 0;
+        const recommendationCount = Number.isFinite(recommended)
+            ? Math.max(0, recommended)
+            : 0;
+        els.countModelReview.innerText = heldCount + recommendationCount;
+        els.countModelReview.title = reviewData
+            ? `${heldCount} auto-held · ${recommendationCount} recommended`
+            : `${heldCount} auto-held`;
     }
 
     if (running) {
@@ -169,19 +201,28 @@ function renderMonitors() {
     els.monitorsList.innerHTML = '';
 
     appState.monitors.forEach((m, index) => {
-        const el = document.createElement('div');
+        const el = document.createElement('button');
+        el.type = 'button';
         el.className = `monitor-item ${m.name === appState.selectedMonitor ? 'active' : ''}`;
+        el.setAttribute('aria-pressed', String(m.name === appState.selectedMonitor));
+        el.setAttribute(
+            'aria-label',
+            `${m.name}, ${m.orientation}, ${m.current_image ? 'active wallpaper' : 'empty'}`,
+        );
 
         const isLandscape = m.orientation === 'landscape';
         const monitorIcon = isLandscape
             ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>'
             : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>';
-        const key = index + 4;
+        // Number keys belong to monitors so the first two displays are easy
+        // to reach without competing with gallery actions.
+        const key = index + 1;
         const shortcut = key <= 9 ? `<kbd>${key}</kbd>` : '';
+        if (key <= 9) el.setAttribute('aria-keyshortcuts', String(key));
 
         el.innerHTML = `
-            <h4>${monitorIcon} ${esc(m.name)} ${shortcut}</h4>
-            <p>${esc(m.orientation)} • ${m.current_image ? 'Active' : 'Empty'}</p>
+            <span class="monitor-item-title">${monitorIcon}<span class="monitor-name">${esc(m.name)}</span>${shortcut}</span>
+            <span class="monitor-item-meta">${esc(m.orientation)} · ${m.current_image ? 'Active' : 'Empty'}</span>
         `;
 
         el.onclick = () => {
@@ -201,6 +242,10 @@ function renderImages() {
     if (appState.mode === 'trash') {
         _trashBannerShown = false;
         renderBlocklistView();
+        return;
+    }
+    if (modelReviewModeActive()) {
+        renderModelReviewView();
         return;
     }
 
@@ -403,8 +448,11 @@ function renderBlocklistSuggestionsBar() {
 }
 
 function preferenceReviewItems() {
-    const data = appState.preferenceSuggestions;
+    const data = modelReviewModeActive() ? appState.modelReviewData : appState.preferenceSuggestions;
     if (!data || !Array.isArray(data.items)) return [];
+    if (modelReviewModeActive() && typeof modelReviewVisibleItems === 'function') {
+        return modelReviewVisibleItems(data);
+    }
     // renderer-data.js normally provides the queue sanitizer.  Keep a small
     // local fallback so this view remains independently testable.
     if (typeof preferenceSuggestionItems === 'function') {
@@ -462,6 +510,7 @@ function preferenceReviewDisplayLimit(list = null) {
 }
 
 function preferenceReviewVisibleItems(list = null) {
+    if (modelReviewModeActive()) return preferenceReviewItems();
     return preferenceReviewItems().slice(0, preferenceReviewDisplayLimit(list));
 }
 
@@ -497,6 +546,7 @@ function formatPreferenceScore(score) {
 }
 
 function formatPreferenceRank(item) {
+    if (item?.auto_filtered) return 'Auto-held';
     const rank = Number(item?.rank);
     const percentile = Number(item?.percentile);
     if (Number.isFinite(rank) && Number.isFinite(percentile)) {
@@ -538,10 +588,14 @@ function removePreferenceSuggestion(path) {
         ? data.diagnostics
         : {};
     const previousTotal = Number(diagnostics.candidate_count);
+    const previousPending = Number(data.pending_count);
     const removed = items.length < data.items.length;
     appState.preferenceSuggestions = {
         ...data,
         items,
+        pending_count: removed && Number.isFinite(previousPending)
+            ? Math.max(0, previousPending - 1)
+            : data.pending_count,
         diagnostics: {
             ...diagnostics,
             candidate_count: removed && Number.isFinite(previousTotal)
@@ -553,7 +607,11 @@ function removePreferenceSuggestion(path) {
 }
 
 function preferenceReviewRow(path) {
-    return [...document.querySelectorAll('.model-review-row')]
+    const reviewElements = [
+        ...document.querySelectorAll('.model-review-row'),
+        ...document.querySelectorAll('.model-review-card'),
+    ];
+    return reviewElements
         .find(row => row.dataset.path === path) || null;
 }
 
@@ -571,6 +629,7 @@ function focusPreferenceReviewCandidate(path, selector = '.model-review-preview'
     const row = preferenceReviewRow(path);
     if (!row) return false;
     const candidates = [
+        row.matches?.('.model-review-card') ? row : null,
         row.querySelector?.(selector),
         ...(row.querySelectorAll ? [...row.querySelectorAll('button')] : []),
         row,
@@ -615,6 +674,16 @@ function refreshPreferenceSuggestionDiagnostics() {
 }
 
 function preferenceReviewEmptyText(data) {
+    if (modelReviewModeActive()) {
+        if (data?.filter_strategy === 'rules') {
+            return 'Automatic model filtering is off. Choose Model or Rules + model in Settings.';
+        }
+        const filterStatus = data?.model_filter;
+        if (filterStatus && filterStatus.ready === false && filterStatus.reason) {
+            return filterStatus.reason;
+        }
+        return 'No automatically filtered images are waiting for review.';
+    }
     const diagnostics = data?.diagnostics || {};
     const bestReviewScore = Number(
         diagnostics.best_review_score ?? diagnostics.best_feature_score,
@@ -728,9 +797,9 @@ function setPreferenceReviewActionBusy(row, busy) {
 function previewPreferenceSuggestion(item, event) {
     event?.preventDefault();
     event?.stopPropagation();
-    // Model candidates are live pool images even while the surrounding view is Trash.
-    // Review mode exposes deliberate Keep (A) and Ban (X) actions plus the Wallhaven link;
-    // it never exposes Set, Favorite, Restore, or gallery navigation.
+    // Quarantine candidates and legacy ranked candidates share the lightbox
+    // preview, but the review surface exposes only deliberate Keep (A) and
+    // Ban (X) decisions plus the Wallhaven link.
     showLightbox({ ...item, isTrash: false, reviewOnly: true });
 }
 
@@ -980,6 +1049,11 @@ function handleModelReviewRowKeyboard(event) {
 }
 
 async function keepPreferenceSuggestion(item, row) {
+    // The dedicated deck resolves both ranked pool recommendations and
+    // automatically held files through its source-aware decision handler.
+    if (modelReviewModeActive()) {
+        return resolveModelReviewDecision(item, 'keep');
+    }
     const restoreFocus = Boolean(
         row
         && typeof document !== 'undefined'
@@ -993,10 +1067,20 @@ async function keepPreferenceSuggestion(item, row) {
         }
         removePreferenceSuggestion(item.path);
         refreshPreferenceSuggestionDiagnostics();
-        // Keeping a model-review candidate only changes the local preference
-        // ledger.  It is still a live pool image, so the blocklist image list,
-        // counts, and pagination do not need a full refresh.
+        // A quarantine item is moved into the pool by the compatibility
+        // endpoint; an old ranked candidate only changes the preference
+        // ledger.  Both paths remove one review row in place.
+        if (modelReviewModeActive() && result?.review?.new_path) {
+            appState.status.pool_count = Number(appState.status.pool_count || 0) + 1;
+        }
         updatePreferenceReviewPanelAfterRemoval(item.path, { restoreFocus });
+        if (modelReviewModeActive()) {
+            appState.status.model_review_count = Math.max(
+                0,
+                Number(appState.status.model_review_count || 0) - 1,
+            );
+            updateStatusUI();
+        }
         return true;
     } catch (e) {
         console.error('Failed to record model review feedback:', e);
@@ -1027,6 +1111,9 @@ async function keepLightboxReviewSuggestion() {
 
 async function banPreferenceSuggestion(item, row, { restoreFocus: requestedFocus = null } = {}) {
     if (!item?.path || preferenceBanInFlight.has(item.path)) return false;
+    if (modelReviewModeActive()) {
+        return resolveModelReviewDecision(item, 'ban');
+    }
     preferenceBanInFlight.add(item.path);
     const restoreFocus = requestedFocus ?? Boolean(
         row
@@ -1035,19 +1122,33 @@ async function banPreferenceSuggestion(item, row, { restoreFocus: requestedFocus
     );
     setPreferenceReviewActionBusy(row, true);
     try {
-        // Keep all ban behavior (including trash and replacement wallpaper handling) in one path.
-        // Suppress the empty-grid fallback here: the review panel is a separate live
-        // surface and should lose one row, not rebuild the entire Blocklist view.
-        const banned = await banImage(item.path, {
-            preserveView: true,
-            preferenceContext: 'model_review',
-            refreshSuggestionsInPlace: true,
-        });
+        // Auto-filtered files have not entered the pool yet, so resolve them
+        // through the dedicated queue endpoint. Legacy ranked candidates keep
+        // the normal ban/trash path.
+        let banned;
+        if (item.auto_filtered) {
+            const result = await WayperApi.modelReviewAction(item.path, 'ban');
+            banned = result?.status === 'ok';
+        } else {
+            banned = await banImage(item.path, {
+                preserveView: true,
+                preferenceContext: 'model_review',
+                refreshSuggestionsInPlace: true,
+            });
+        }
         if (!banned) return false;
         removePreferenceSuggestion(item.path);
         refreshPreferenceSuggestionDiagnostics();
-        updateBlocklistStateAfterBan(item);
+        if (!item.auto_filtered) updateBlocklistStateAfterBan(item);
         updatePreferenceReviewPanelAfterRemoval(item.path, { restoreFocus });
+        if (item.auto_filtered) {
+            appState.status.model_review_count = Math.max(
+                0,
+                Number(appState.status.model_review_count || 0) - 1,
+            );
+            appState.status.blocklist_count = Number(appState.status.blocklist_count || 0) + 1;
+            updateStatusUI();
+        }
         return true;
     } catch (e) {
         console.error('Failed to ban model review suggestion:', e);
@@ -1124,12 +1225,15 @@ function createPreferenceReviewRow(item) {
     const rank = document.createElement('span');
     rank.className = 'model-review-rank';
     rank.textContent = formatPreferenceRank(item);
-    rank.title = `Hybrid rank ${formatPreferenceScore(item.hybrid_score ?? item.review_score ?? item.feature_score)}`
-        + ` · review score ${formatPreferenceScore(item.review_score ?? item.feature_score)}`
-        + (item.semantic_available
-            ? ` · semantic ${formatPreferenceScore(item.semantic_score)}`
-            : '')
-        + ` · net feature score ${formatPreferenceScore(item.feature_score)}`;
+    rank.title = item.auto_filtered
+        ? `Review score ${formatPreferenceScore(item.decision_score ?? item.review_score)}`
+            + ` · boundary ${formatPreferenceScore(item.threshold)}`
+        : `Hybrid rank ${formatPreferenceScore(item.hybrid_score ?? item.review_score ?? item.feature_score)}`
+            + ` · review score ${formatPreferenceScore(item.review_score ?? item.feature_score)}`
+            + (item.semantic_available
+                ? ` · semantic ${formatPreferenceScore(item.semantic_score)}`
+                : '')
+            + ` · net feature score ${formatPreferenceScore(item.feature_score)}`;
     itemHeader.appendChild(rank);
     body.appendChild(itemHeader);
 
@@ -1218,7 +1322,12 @@ function syncPreferenceReviewRows(panel) {
     let list = panel.querySelector('.model-review-list');
     const items = preferenceReviewVisibleItems(list);
     const count = panel.querySelector('.model-review-count');
-    if (count) count.textContent = preferenceReviewCountText(items.length);
+    if (count) {
+        const pending = Number(appState.preferenceSuggestions?.pending_count);
+        count.textContent = preferenceReviewCountText(
+            modelReviewModeActive() && Number.isFinite(pending) ? pending : items.length,
+        );
+    }
     panel.dataset.visibleLimit = String(preferenceReviewDisplayLimit(list));
 
     if (!items.length) {
@@ -1263,7 +1372,8 @@ function preferenceReviewCandidateTotal() {
 function refillPreferenceReviewCandidates() {
     const data = appState.preferenceSuggestions;
     if (
-        appState.mode !== 'trash'
+        modelReviewModeActive()
+        || appState.mode !== 'trash'
         || !data
         || (data.status && data.status !== 'ready')
         || typeof fetchPreferenceSuggestions !== 'function'
@@ -1304,11 +1414,948 @@ function refillPreferenceReviewCandidates() {
     return promise;
 }
 
+function modelReviewStrategy(data = appState.modelReviewData) {
+    const value = data?.filter_strategy
+        || appState.config?.wallhaven?.filter_strategy
+        || appState.config?.wallhaven?.filter_mode
+        || 'rules';
+    return ['rules', 'model', 'rules+model'].includes(value) ? value : 'rules';
+}
+
+function sanitizeModelReviewItems(source) {
+    if (!Array.isArray(source)) return [];
+    const resolved = appState.modelReviewResolvedPaths instanceof Set
+        ? appState.modelReviewResolvedPaths
+        : new Set();
+    const seen = new Set();
+    return source.filter(item => {
+        const path = typeof item?.path === 'string' ? item.path : '';
+        if (!path || resolved.has(path) || seen.has(path)) return false;
+        seen.add(path);
+        return true;
+    });
+}
+
+function modelReviewHeldItems(data = appState.modelReviewData) {
+    const source = typeof modelReviewItems === 'function'
+        ? modelReviewItems(data)
+        : data?.items;
+    return sanitizeModelReviewItems(source);
+}
+
+function modelReviewRecommendationItems(data = appState.modelReviewData) {
+    return sanitizeModelReviewItems(data?.recommendations);
+}
+
+function modelReviewQueueItems(data = appState.modelReviewData) {
+    const seen = new Set();
+    return [
+        ...modelReviewRecommendationItems(data),
+        ...modelReviewHeldItems(data),
+    ].filter(item => {
+        if (seen.has(item.path)) return false;
+        seen.add(item.path);
+        return true;
+    });
+}
+
+function modelReviewSourceItems(source, data = appState.modelReviewData) {
+    return source === 'held'
+        ? modelReviewHeldItems(data)
+        : modelReviewRecommendationItems(data);
+}
+
+function modelReviewSourceCount(source, data = appState.modelReviewData) {
+    const reported = Number(
+        source === 'held' ? data?.pending_count : data?.recommendation_count,
+    );
+    return Number.isFinite(reported)
+        ? Math.max(modelReviewSourceItems(source, data).length, reported)
+        : modelReviewSourceItems(source, data).length;
+}
+
+function activeModelReviewSource(data = appState.modelReviewData) {
+    const current = appState.modelReviewSource;
+    if (['held', 'recommended'].includes(current) && modelReviewSourceItems(current, data).length) {
+        return current;
+    }
+    const selectedPath = appState.modelReviewSelectedPath;
+    const selectedSource = modelReviewHeldItems(data).some(item => item.path === selectedPath)
+        ? 'held'
+        : modelReviewRecommendationItems(data).some(item => item.path === selectedPath)
+            ? 'recommended'
+            : null;
+    const source = selectedSource
+        || (modelReviewHeldItems(data).length ? 'held' : 'recommended');
+    appState.modelReviewSource = source;
+    return source;
+}
+
+function modelReviewVisibleItems(
+    data = appState.modelReviewData,
+    source = activeModelReviewSource(data),
+) {
+    return modelReviewSourceItems(source, data);
+}
+
+function modelReviewMakeButton(label, className, onClick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = className;
+    button.textContent = label;
+    button.onclick = onClick;
+    return button;
+}
+
+function decorateModelReviewDecisionButton(button, action) {
+    const isKeep = action === 'keep';
+    const label = document.createElement('span');
+    label.className = 'model-review-decision-label';
+    label.textContent = isKeep ? 'Keep' : 'Ban';
+    const key = document.createElement('kbd');
+    key.className = 'review-keycap model-review-keycap';
+    key.textContent = isKeep ? 'A' : 'X';
+    button.textContent = '';
+    button.append(label, key);
+}
+
+function decorateModelReviewNavButton(button, direction) {
+    button.textContent = '';
+    button.innerHTML = direction < 0
+        ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>';
+}
+
+function selectedModelReviewItem(data = appState.modelReviewData) {
+    const items = modelReviewVisibleItems(data);
+    if (!items.length) return null;
+    const selected = items.find(item => item.path === appState.modelReviewSelectedPath);
+    if (selected) return selected;
+    appState.modelReviewSelectedPath = items[0].path;
+    return items[0];
+}
+
+function modelReviewCardSelector(path) {
+    return '.model-review-card[data-path="' + CSS.escape(path) + '"]';
+}
+
+function markActiveModelReviewCard(carousel, path, { force = false } = {}) {
+    if (!carousel) return;
+    const deckBusy = carousel.classList?.contains?.('is-resolving-card') === true;
+    if (carousel.dataset?.activePath === path && !deckBusy && !force) return;
+    if (carousel.dataset) carousel.dataset.activePath = path;
+    const cards = [...carousel.querySelectorAll('.model-review-card')];
+    const activeIndex = cards.findIndex(card => card.dataset.path === path);
+    cards.forEach((card, index) => {
+        const active = card.dataset.path === path;
+        card.classList.toggle('active', active);
+        card.classList.toggle('before-active', activeIndex >= 0 && index < activeIndex);
+        card.classList.toggle('after-active', activeIndex >= 0 && index > activeIndex);
+        card.setAttribute('aria-current', String(active));
+        card.tabIndex = active ? 0 : -1;
+        const distance = activeIndex >= 0 ? Math.abs(index - activeIndex) : cards.length;
+        if (card.style) {
+            card.style.zIndex = String(Math.max(1, 20 - distance));
+            card.style.setProperty?.('--review-card-depth', `${Math.min(distance, 4) * 4 + 10}px`);
+            card.style.setProperty?.(
+                '--review-card-scale',
+                String(Math.max(0.88, 0.95 - Math.min(distance, 4) * 0.012)),
+            );
+        }
+        if (distance <= 1) {
+            hydrateModelReviewCardImages(card, { priority: active });
+        }
+        const busy = card.classList.contains('is-busy');
+        for (const button of card.querySelectorAll('.model-review-card-decision')) {
+            button.disabled = !active || busy || deckBusy;
+        }
+    });
+    const deck = carousel.closest?.('.model-review-deck');
+    const previous = deck?.querySelector?.('.model-review-deck-nav.previous');
+    const next = deck?.querySelector?.('.model-review-deck-nav.next');
+    if (previous) previous.disabled = cards.length < 2 || activeIndex <= 0;
+    if (next) next.disabled = cards.length < 2 || activeIndex < 0 || activeIndex >= cards.length - 1;
+}
+
+function scrollModelReviewCardIntoView(carousel, card, behavior = 'smooth') {
+    if (!carousel || !card) return false;
+    const geometry = [card.offsetLeft, card.offsetWidth, carousel.clientWidth];
+    if (geometry.every(Number.isFinite) && card.offsetWidth > 0 && carousel.clientWidth > 0) {
+        const target = Math.max(
+            0,
+            card.offsetLeft - (carousel.clientWidth - card.offsetWidth) / 2,
+        );
+        if (Number.isFinite(carousel.scrollLeft) && Math.abs(carousel.scrollLeft - target) <= 2) {
+            return false;
+        }
+        if (typeof carousel.scrollTo === 'function') {
+            carousel.scrollTo({ left: target, behavior });
+            return true;
+        }
+    }
+    card.scrollIntoView?.({ behavior, block: 'nearest', inline: 'center' });
+    return true;
+}
+
+function selectModelReviewItem(
+    path,
+    { focus = false, behavior = 'smooth' } = {},
+) {
+    const item = modelReviewVisibleItems().find(candidate => candidate.path === path);
+    if (!item) return false;
+    appState.modelReviewSelectedPath = path;
+    const carousel = els.wallpaperGrid?.querySelector('.model-review-carousel');
+    markActiveModelReviewCard(carousel, path);
+    const card = carousel?.querySelector(modelReviewCardSelector(path));
+    scrollModelReviewCardIntoView(carousel, card, behavior);
+    if (focus && card) {
+        card?.focus?.({ preventScroll: true });
+    }
+    return true;
+}
+
+function moveModelReviewSelection(direction, { focus = true } = {}) {
+    const items = modelReviewVisibleItems();
+    if (items.length < 2 || ![-1, 1].includes(direction)) return false;
+    const current = items.findIndex(item => item.path === appState.modelReviewSelectedPath);
+    const start = current >= 0 ? current : direction > 0 ? -1 : items.length;
+    const nextIndex = start + direction;
+    if (nextIndex < 0 || nextIndex >= items.length) return false;
+    return selectModelReviewItem(items[nextIndex].path, { focus });
+}
+
+function nearestModelReviewCard(carousel) {
+    const cards = [...(carousel?.querySelectorAll('.model-review-card') || [])];
+    if (!cards.length) return null;
+    if (Number.isFinite(carousel.scrollLeft) && Number.isFinite(carousel.clientWidth)) {
+        const center = carousel.scrollLeft + carousel.clientWidth / 2;
+        const nearest = cards.reduce((match, card) => {
+            if (!Number.isFinite(card.offsetLeft) || !Number.isFinite(card.offsetWidth)) {
+                return match;
+            }
+            const distance = Math.abs(card.offsetLeft + card.offsetWidth / 2 - center);
+            return !match || distance < match.distance ? { card, distance } : match;
+        }, null);
+        if (nearest) return nearest.card;
+    }
+    if (typeof carousel.getBoundingClientRect !== 'function') return null;
+    const bounds = carousel.getBoundingClientRect();
+    const center = bounds.left + bounds.width / 2;
+    return cards.reduce((nearest, card) => {
+        const cardBounds = card.getBoundingClientRect();
+        const distance = Math.abs(cardBounds.left + cardBounds.width / 2 - center);
+        return !nearest || distance < nearest.distance ? { card, distance } : nearest;
+    }, null)?.card || null;
+}
+
+function syncModelReviewSelectionFromScroll(carousel) {
+    const card = nearestModelReviewCard(carousel);
+    if (!card?.dataset.path) return false;
+    if (appState.modelReviewSelectedPath !== card.dataset.path) {
+        appState.modelReviewSelectedPath = card.dataset.path;
+    }
+    markActiveModelReviewCard(carousel, card.dataset.path);
+    return true;
+}
+
+function requestModelReviewFrame(callback) {
+    if (typeof requestAnimationFrame === 'function') return requestAnimationFrame(callback);
+    return setTimeout(callback, 0);
+}
+
+function snapToNearestModelReviewCard(carousel) {
+    const card = nearestModelReviewCard(carousel);
+    if (!card) return false;
+    appState.modelReviewSelectedPath = card.dataset.path;
+    markActiveModelReviewCard(carousel, card.dataset.path);
+    scrollModelReviewCardIntoView(carousel, card, 'smooth');
+    return true;
+}
+
+function setupModelReviewCarousel(carousel) {
+    let framePending = false;
+    let pointerId = null;
+    let startX = 0;
+    let startScrollLeft = 0;
+    let dragged = false;
+    carousel.addEventListener('scroll', () => {
+        if (carousel.classList.contains('is-resolving-card')) return;
+        if (framePending) return;
+        framePending = true;
+        requestModelReviewFrame(() => {
+            framePending = false;
+            syncModelReviewSelectionFromScroll(carousel);
+        });
+    }, { passive: true });
+    carousel.addEventListener('scrollend', () => {
+        if (
+            carousel.classList.contains('is-dragging')
+            || carousel.classList.contains('is-wheel-scrolling')
+            || carousel.classList.contains('is-resolving-card')
+        ) return;
+        snapToNearestModelReviewCard(carousel);
+    });
+
+    let wheelTarget = 0;
+    let wheelFramePending = false;
+    let lastWheelAt = 0;
+    const animateWheel = () => {
+        if (carousel.isConnected === false || pointerId !== null) {
+            wheelFramePending = false;
+            carousel.classList.remove('is-wheel-scrolling');
+            return;
+        }
+        const maximum = Math.max(0, carousel.scrollWidth - carousel.clientWidth);
+        wheelTarget = Math.min(maximum, Math.max(0, wheelTarget));
+        const distance = wheelTarget - carousel.scrollLeft;
+        if (Math.abs(distance) > 0.45) {
+            carousel.scrollLeft += distance * 0.22;
+        } else {
+            carousel.scrollLeft = wheelTarget;
+        }
+        if (Date.now() - lastWheelAt > 72 && Math.abs(distance) < 0.8) {
+            wheelFramePending = false;
+            carousel.classList.remove('is-wheel-scrolling');
+            snapToNearestModelReviewCard(carousel);
+            return;
+        }
+        requestModelReviewFrame(animateWheel);
+    };
+    carousel.addEventListener('wheel', event => {
+        if (carousel.classList.contains('is-resolving-card')) return;
+        if (event.ctrlKey) return;
+        const delta = Math.abs(event.deltaY) > Math.abs(event.deltaX)
+            ? event.deltaY
+            : event.deltaX;
+        if (!delta) return;
+        event.preventDefault();
+        const unit = event.deltaMode === 1
+            ? 28
+            : event.deltaMode === 2 ? carousel.clientWidth : 1;
+        if (!wheelFramePending) wheelTarget = carousel.scrollLeft;
+        wheelTarget += delta * unit;
+        lastWheelAt = Date.now();
+        carousel.classList.add('is-wheel-scrolling');
+        if (!wheelFramePending) {
+            wheelFramePending = true;
+            requestModelReviewFrame(animateWheel);
+        }
+    }, { passive: false });
+
+    carousel.addEventListener('pointerdown', event => {
+        if (carousel.classList.contains('is-resolving-card')) return;
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        if (event.target?.closest?.('.model-review-card-decision')) return;
+        pointerId = event.pointerId;
+        startX = event.clientX;
+        startScrollLeft = carousel.scrollLeft;
+        dragged = false;
+        wheelTarget = carousel.scrollLeft;
+        carousel.classList.remove('is-wheel-scrolling');
+        carousel.setPointerCapture?.(pointerId);
+        carousel.classList.add('is-dragging');
+    });
+    carousel.addEventListener('pointermove', event => {
+        if (pointerId !== event.pointerId) return;
+        const distance = event.clientX - startX;
+        if (Math.abs(distance) > 4) dragged = true;
+        if (!dragged) return;
+        event.preventDefault();
+        carousel.scrollLeft = startScrollLeft - distance;
+    });
+    const finishPointer = event => {
+        if (pointerId !== event.pointerId) return;
+        carousel.releasePointerCapture?.(pointerId);
+        pointerId = null;
+        carousel.classList.remove('is-dragging');
+        if (!dragged) return;
+        carousel.dataset.suppressClick = 'true';
+        setTimeout(() => { delete carousel.dataset.suppressClick; }, 120);
+        snapToNearestModelReviewCard(carousel);
+    };
+    carousel.addEventListener('pointerup', finishPointer);
+    carousel.addEventListener('pointercancel', finishPointer);
+}
+
+function setModelReviewCardBusy(path, busy) {
+    if (!path || typeof els === 'undefined') return;
+    const card = els.wallpaperGrid?.querySelector(modelReviewCardSelector(path));
+    if (!card) return;
+    card.classList.toggle('is-busy', busy);
+    card.setAttribute('aria-busy', String(busy));
+    const active = card.dataset.path === appState.modelReviewSelectedPath;
+    for (const button of card.querySelectorAll('.model-review-card-decision')) {
+        button.disabled = busy || !active;
+    }
+}
+
+function hydrateModelReviewCardImages(card, { priority = false } = {}) {
+    for (const image of card?.querySelectorAll?.(
+        '.model-review-card-backdrop, .model-review-card-image',
+    ) || []) {
+        image.loading = priority ? 'eager' : 'lazy';
+        image.fetchPriority = priority ? 'high' : 'low';
+        if (!image.src && image.dataset?.src) {
+            image.src = image.dataset.src;
+        }
+    }
+}
+
+function createModelReviewCard(item, index, total) {
+    const automaticallyHeld = item.auto_filtered === true;
+    const selected = item.path === appState.modelReviewSelectedPath;
+    const card = document.createElement('article');
+    card.className = 'model-review-card' + (selected ? ' active' : '');
+    card.dataset.path = item.path;
+    card.tabIndex = selected ? 0 : -1;
+    card.setAttribute('role', 'listitem');
+    card.setAttribute('aria-current', String(selected));
+    card.setAttribute('aria-posinset', String(index + 1));
+    card.setAttribute('aria-setsize', String(total));
+    card.setAttribute(
+        'aria-label',
+        (automaticallyHeld ? 'Automatically held image. ' : 'Model recommendation. ')
+            + (item.name || item.path) + '. Card ' + (index + 1) + ' of ' + total + '.',
+    );
+    card.setAttribute(
+        'aria-keyshortcuts',
+        'ArrowLeft ArrowRight ArrowUp ArrowDown Enter Space A X Delete',
+    );
+
+    const preview = document.createElement('button');
+    preview.type = 'button';
+    preview.className = 'model-review-card-preview';
+    preview.tabIndex = -1;
+    preview.title = 'Open full preview (Enter / Space)';
+    preview.setAttribute('aria-label', 'Open full preview of ' + (item.name || 'wallpaper'));
+    preview.setAttribute('aria-keyshortcuts', 'Enter Space');
+    preview.onclick = event => {
+        const carousel = preview.closest('.model-review-carousel');
+        if (carousel?.dataset.suppressClick === 'true') {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+        }
+        if (appState.modelReviewSelectedPath !== item.path) {
+            event.preventDefault();
+            event.stopPropagation();
+            selectModelReviewItem(item.path);
+            return;
+        }
+        previewPreferenceSuggestion(item, event);
+    };
+    const sourceUrl = imageUrl(item.path);
+    const backdrop = document.createElement('img');
+    backdrop.className = 'model-review-card-backdrop';
+    backdrop.dataset.src = sourceUrl;
+    backdrop.loading = 'lazy';
+    backdrop.decoding = 'async';
+    backdrop.fetchPriority = 'low';
+    backdrop.alt = '';
+    backdrop.draggable = false;
+    backdrop.setAttribute('aria-hidden', 'true');
+    const image = document.createElement('img');
+    image.className = 'model-review-card-image';
+    image.dataset.src = sourceUrl;
+    image.alt = item.name || 'Model review candidate';
+    image.decoding = 'async';
+    image.loading = 'lazy';
+    image.fetchPriority = 'low';
+    image.draggable = false;
+    image.onerror = () => image.classList.add('missing');
+    preview.append(backdrop, image);
+    card.appendChild(preview);
+
+    const actions = document.createElement('div');
+    actions.className = 'model-review-card-actions';
+    const busy = appState.modelReviewActionInFlight instanceof Set
+        && appState.modelReviewActionInFlight.has(item.path);
+    const ban = modelReviewMakeButton(
+        'Ban',
+        'model-review-card-decision model-review-card-ban',
+        () => { void resolveModelReviewDecision(item, 'ban'); },
+    );
+    ban.disabled = busy || !selected;
+    ban.title = automaticallyHeld
+        ? 'Confirm the block and send to trash (X / Delete)'
+        : 'Move from your pool to Blocklist (X / Delete)';
+    ban.setAttribute('aria-keyshortcuts', 'X Delete');
+    decorateModelReviewDecisionButton(ban, 'ban');
+    actions.appendChild(ban);
+
+    const keep = modelReviewMakeButton(
+        'Keep',
+        'model-review-card-decision model-review-card-keep',
+        () => { void resolveModelReviewDecision(item, 'keep'); },
+    );
+    keep.disabled = busy || !selected;
+    keep.title = automaticallyHeld
+        ? 'Release into your pool (A)'
+        : 'Keep in your pool and teach the model (A)';
+    keep.setAttribute('aria-keyshortcuts', 'A');
+    decorateModelReviewDecisionButton(keep, 'keep');
+    actions.appendChild(keep);
+    card.appendChild(actions);
+    return card;
+}
+
+function createModelReviewCarousel(items, source) {
+    const carousel = document.createElement('div');
+    carousel.className = 'model-review-carousel';
+    carousel.dataset.source = source;
+    carousel.setAttribute('role', 'list');
+    carousel.setAttribute(
+        'aria-label',
+        source === 'held'
+            ? 'Automatically held model review cards'
+            : 'Model recommendation cards',
+    );
+    items.forEach((item, index) => {
+        carousel.appendChild(createModelReviewCard(item, index, items.length));
+    });
+    setupModelReviewCarousel(carousel);
+    return carousel;
+}
+
+function syncModelReviewSourceControl(deck, data = appState.modelReviewData) {
+    const active = activeModelReviewSource(data);
+    for (const button of deck?.querySelectorAll?.('.model-review-source-btn') || []) {
+        const source = button.dataset.source;
+        const count = modelReviewSourceCount(source, data);
+        const selected = source === active;
+        button.classList.toggle('active', selected);
+        button.setAttribute('aria-selected', String(selected));
+        button.tabIndex = selected ? 0 : -1;
+        button.disabled = modelReviewSourceItems(source, data).length === 0;
+        const countElement = button.querySelector('.model-review-source-count');
+        if (countElement) countElement.textContent = String(count);
+    }
+}
+
+function createModelReviewSourceControl(data) {
+    const control = document.createElement('div');
+    control.className = 'model-review-source-control';
+    control.setAttribute('role', 'tablist');
+    control.setAttribute('aria-label', 'Review source');
+    const active = activeModelReviewSource(data);
+    const sources = [
+        ['held', 'Auto-held'],
+        ['recommended', 'Recommended'],
+    ];
+    sources.forEach(([source, label], index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'model-review-source-btn' + (source === active ? ' active' : '');
+        button.dataset.source = source;
+        button.setAttribute('role', 'tab');
+        button.setAttribute('aria-selected', String(source === active));
+        button.tabIndex = source === active ? 0 : -1;
+        const text = document.createElement('span');
+        text.textContent = label;
+        const count = document.createElement('span');
+        count.className = 'model-review-source-count';
+        count.textContent = String(modelReviewSourceCount(source, data));
+        button.append(text, count);
+        button.disabled = modelReviewSourceItems(source, data).length === 0;
+        button.onclick = () => switchModelReviewSource(source);
+        button.onkeydown = event => {
+            if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+            const direction = event.key === 'ArrowLeft' ? -1 : 1;
+            const target = sources[(index + direction + sources.length) % sources.length][0];
+            if (!modelReviewSourceItems(target).length) return;
+            event.preventDefault();
+            event.stopPropagation();
+            switchModelReviewSource(target);
+            control.querySelector(`[data-source="${target}"]`)?.focus?.();
+        };
+        control.appendChild(button);
+    });
+    return control;
+}
+
+function replaceModelReviewCarousel(deck, source, { focus = false } = {}) {
+    const items = modelReviewSourceItems(source);
+    if (!deck || !items.length) return false;
+    appState.modelReviewSource = source;
+    const selected = items.find(item => item.path === appState.modelReviewSelectedPath)
+        || items[0];
+    appState.modelReviewSelectedPath = selected.path;
+    const previous = deck.querySelector('.model-review-carousel');
+    const carousel = createModelReviewCarousel(items, source);
+    carousel.classList.add('is-lane-entering');
+    if (previous) {
+        previous.replaceWith(carousel);
+    } else {
+        deck.insertBefore(carousel, deck.querySelector('.model-review-deck-nav.next'));
+    }
+    markActiveModelReviewCard(carousel, selected.path);
+    syncModelReviewSourceControl(deck);
+    requestModelReviewFrame(() => {
+        const card = carousel.querySelector(modelReviewCardSelector(selected.path));
+        scrollModelReviewCardIntoView(carousel, card, 'auto');
+        requestModelReviewFrame(() => carousel.classList.remove('is-lane-entering'));
+        if (focus) card?.focus?.({ preventScroll: true });
+    });
+    return true;
+}
+
+function switchModelReviewSource(source) {
+    if (!['held', 'recommended'].includes(source)) return false;
+    if (source === activeModelReviewSource()) return false;
+    const deck = els.wallpaperGrid?.querySelector('.model-review-deck');
+    return replaceModelReviewCarousel(deck, source);
+}
+
+function applyModelReviewDecisionResult(item, action, result) {
+    const automaticallyHeld = item?.auto_filtered === true;
+    const itemsBefore = modelReviewVisibleItems();
+    const indexBefore = itemsBefore.findIndex(candidate => candidate.path === item.path);
+    if (!(appState.modelReviewResolvedPaths instanceof Set)) {
+        appState.modelReviewResolvedPaths = new Set();
+    }
+    appState.modelReviewResolvedPaths.add(item.path);
+    if (typeof invalidateModelReviewRecommendationCache === 'function') {
+        invalidateModelReviewRecommendationCache(item.path);
+    }
+    if (appState.modelReviewData) {
+        const data = appState.modelReviewData;
+        const sourceKey = automaticallyHeld ? 'items' : 'recommendations';
+        const sourceItems = Array.isArray(data[sourceKey]) ? data[sourceKey] : [];
+        const remaining = sourceItems.filter(candidate => candidate?.path !== item.path);
+        const removed = remaining.length < sourceItems.length;
+        const updated = {
+            ...data,
+            learning: result?.learning || data.learning,
+            [sourceKey]: remaining,
+        };
+        if (automaticallyHeld) {
+            const pending = Number(data.pending_count);
+            updated.pending_count = removed && Number.isFinite(pending)
+                ? Math.max(0, pending - 1)
+                : data.pending_count;
+            updated.model_filter = result?.model_filter || data.model_filter;
+        } else {
+            const recommendationCount = Number(data.recommendation_count);
+            updated.recommendation_count = removed && Number.isFinite(recommendationCount)
+                ? Math.max(0, recommendationCount - 1)
+                : data.recommendation_count;
+            updated.recommendation_learning = result?.learning
+                || data.recommendation_learning;
+        }
+        appState.modelReviewData = updated;
+    }
+
+    const next = modelReviewVisibleItems();
+    appState.modelReviewSelectedPath = next[indexBefore]?.path
+        || next[indexBefore - 1]?.path
+        || next[0]?.path
+        || null;
+
+    if (automaticallyHeld) {
+        if (!appState.status || typeof appState.status !== 'object') appState.status = {};
+        appState.status.model_review_count = Math.max(
+            0,
+            Number(appState.status.model_review_count || 0) - 1,
+        );
+        if (action === 'keep' && result?.review?.new_path) {
+            appState.status.pool_count = Number(appState.status.pool_count || 0) + 1;
+        }
+        if (action === 'ban') {
+            appState.status.blocklist_count = Number(appState.status.blocklist_count || 0) + 1;
+        }
+    }
+    return appState.modelReviewSelectedPath;
+}
+
+function syncModelReviewCarouselPositions(carousel) {
+    const cards = [...(carousel?.querySelectorAll('.model-review-card') || [])];
+    const total = cards.length;
+    cards.forEach((card, index) => {
+        card.setAttribute('aria-posinset', String(index + 1));
+        card.setAttribute('aria-setsize', String(total));
+    });
+}
+
+function removeResolvedModelReviewCard(path, action) {
+    const carousel = els.wallpaperGrid?.querySelector('.model-review-carousel');
+    const card = carousel?.querySelector(modelReviewCardSelector(path));
+    const remaining = modelReviewVisibleItems();
+    if (!carousel || !card) {
+        renderModelReviewView();
+        return;
+    }
+
+    const nextSource = activeModelReviewSource();
+    const deck = carousel.closest?.('.model-review-deck');
+    const nextPath = appState.modelReviewSelectedPath || remaining[0]?.path || null;
+    const nextCard = carousel.dataset.source === nextSource && nextPath
+        ? carousel.querySelector(modelReviewCardSelector(nextPath))
+        : null;
+
+    // Activate the following card before collapsing the outgoing card. Its
+    // flex space then shrinks to zero, so the rest of the stack naturally
+    // slides into place without a second scroll animation.
+    carousel.classList.add('is-resolving-card');
+    if (nextCard) markActiveModelReviewCard(carousel, nextPath);
+    card.classList.add('is-resolving', action === 'keep' ? 'resolve-keep' : 'resolve-ban');
+    let finished = false;
+    const finish = () => {
+        if (finished) return;
+        finished = true;
+        card.removeEventListener('transitionend', finishTransition);
+        card.remove();
+        carousel.classList.remove('is-resolving-card');
+        if (!remaining.length) {
+            const queuedRecommendations = Number(
+                appState.modelReviewData?.recommendation_count,
+            );
+            if (
+                nextSource === 'recommended'
+                && Number.isFinite(queuedRecommendations)
+                && queuedRecommendations > 0
+                && typeof fetchModelReview === 'function'
+            ) {
+                fetchModelReview({ orient: appState.currentOrient })
+                    .catch(error => console.debug('Could not load the next review batch:', error));
+                return;
+            }
+            renderModelReviewView();
+            return;
+        }
+        if (carousel.dataset.source !== nextSource) {
+            replaceModelReviewCarousel(deck, nextSource, { focus: true });
+            return;
+        }
+        syncModelReviewCarouselPositions(carousel);
+        syncModelReviewSourceControl(deck);
+        const selectedPath = nextPath || remaining[0].path;
+        appState.modelReviewSelectedPath = selectedPath;
+        markActiveModelReviewCard(carousel, selectedPath, { force: true });
+        carousel.querySelector(modelReviewCardSelector(selectedPath))
+            ?.focus?.({ preventScroll: true });
+    };
+    const finishTransition = event => {
+        if (event.target !== card || event.propertyName !== 'flex-basis') return;
+        finish();
+    };
+    card.addEventListener('transitionend', finishTransition);
+    setTimeout(finish, 440);
+}
+
+async function resolveModelReviewDecision(item, action) {
+    if (!item?.path || !['keep', 'ban'].includes(action)) return false;
+    if (!(appState.modelReviewActionInFlight instanceof Set)) {
+        appState.modelReviewActionInFlight = new Set();
+    }
+    if (appState.modelReviewActionInFlight.has(item.path)) return false;
+    appState.modelReviewActionInFlight.add(item.path);
+    setModelReviewCardBusy(item.path, true);
+    try {
+        let result;
+        if (item.auto_filtered === true) {
+            result = await WayperApi.modelReviewAction(item.path, action);
+        } else if (action === 'keep') {
+            result = await WayperApi.preferenceFeedback(item.path, 'keep');
+        } else {
+            result = await banImage(item.path, {
+                preserveView: true,
+                preferenceContext: 'model_review',
+                returnResult: true,
+            });
+            if (!result) return false;
+        }
+        applyModelReviewDecisionResult(item, action, result);
+        updateStatusUI();
+        removeResolvedModelReviewCard(item.path, action);
+        return true;
+    } catch (error) {
+        console.error('Failed to ' + action + ' model review item:', error);
+        alert('Could not ' + action + ' ' + (item.name || 'this wallpaper')
+            + ': ' + error.message);
+        return false;
+    } finally {
+        appState.modelReviewActionInFlight.delete(item.path);
+        setModelReviewCardBusy(item.path, false);
+    }
+}
+
+function modelReviewZeroStatePresentation(data) {
+    const strategy = modelReviewStrategy(data);
+    const modelFilter = data?.model_filter || {};
+    const recommendationStatus = data?.recommendation_status || data?.status || 'untrained';
+    const unavailable = data?.status === 'error'
+        || recommendationStatus === 'error'
+        || modelFilter.status === 'error';
+
+    if (unavailable) {
+        return {
+            variant: 'unavailable',
+            eyebrow: 'Needs attention',
+            title: 'Review is temporarily unavailable',
+            detail: data?.error
+                || modelFilter.reason
+                || 'Wayper could not update the review queue. Your wallpapers are unchanged.',
+            action: 'retry',
+            actionLabel: 'Try again',
+        };
+    }
+    if (recommendationStatus !== 'ready' || modelFilter.status === 'calibration_pending') {
+        return {
+            variant: 'learning',
+            eyebrow: 'Getting ready',
+            title: 'The model is still learning',
+            detail: modelFilter.reason
+                || 'Keep or Ban a few wallpapers in Pool to build enough preference feedback.',
+            action: 'pool',
+            actionLabel: 'Browse Pool',
+        };
+    }
+    return {
+        variant: 'complete',
+        eyebrow: 'Queue clear',
+        title: 'You’re all caught up',
+        detail: strategy === 'rules'
+            ? 'There are no model recommendations waiting. Rules continue to filter new downloads.'
+            : 'There are no auto-held images or recommendations waiting for this monitor.',
+        action: 'pool',
+        actionLabel: 'Back to Pool',
+    };
+}
+
+function createModelReviewZeroState(data) {
+    const presentation = modelReviewZeroStatePresentation(data);
+    const section = document.createElement('section');
+    section.className = `model-review-zero-state is-${presentation.variant}`;
+    section.setAttribute('role', presentation.variant === 'unavailable' ? 'alert' : 'status');
+
+    const icon = document.createElement('div');
+    icon.className = 'model-review-zero-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    const icons = {
+        complete: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 12 3 3 7-7"/><circle cx="12" cy="12" r="9"/></svg>',
+        learning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 1.15 3.35L16.5 7.5l-3.35 1.15L12 12l-1.15-3.35L7.5 7.5l3.35-1.15L12 3Z"/><path d="m18.5 13 .7 2.3 2.3.7-2.3.7-.7 2.3-.7-2.3-2.3-.7 2.3-.7.7-2.3Z"/><path d="M5.5 13.5 6.3 16l2.2.7-2.2.8L5.5 20l-.8-2.5-2.2-.8 2.2-.7.8-2.5Z"/></svg>',
+        unavailable: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6"/><path d="M12 17h.01"/></svg>',
+    };
+    icon.innerHTML = icons[presentation.variant];
+    section.appendChild(icon);
+
+    const eyebrow = document.createElement('span');
+    eyebrow.className = 'model-review-zero-eyebrow';
+    eyebrow.textContent = presentation.eyebrow;
+    section.appendChild(eyebrow);
+
+    const title = document.createElement('h2');
+    title.textContent = presentation.title;
+    const detail = document.createElement('p');
+    detail.textContent = presentation.detail;
+    section.appendChild(title);
+    section.appendChild(detail);
+
+    const actions = document.createElement('div');
+    actions.className = 'model-review-zero-actions';
+    actions.appendChild(modelReviewMakeButton(
+        presentation.actionLabel,
+        `model-review-zero-action is-${presentation.action}`,
+        () => presentation.action === 'retry' ? refreshImages() : setViewMode('pool'),
+    ));
+    section.appendChild(actions);
+    return section;
+}
+
+function createModelReviewWorkspace(data) {
+    const source = activeModelReviewSource(data);
+    const items = modelReviewVisibleItems(data);
+    const workspace = document.createElement('div');
+    workspace.className = 'model-review-workspace';
+    workspace.setAttribute('role', 'region');
+    workspace.setAttribute('aria-label', 'Model review');
+    workspace.setAttribute(
+        'aria-keyshortcuts',
+        'ArrowLeft ArrowRight ArrowUp ArrowDown Enter Space A X Delete',
+    );
+
+    if (!items.length && data?.recommendation_status === 'pending') {
+        return workspace;
+    }
+    if (!items.length) {
+        workspace.appendChild(createModelReviewZeroState(data));
+        return workspace;
+    }
+
+    selectedModelReviewItem(data);
+    const deck = document.createElement('section');
+    deck.className = 'model-review-deck';
+    deck.setAttribute('aria-label', 'Model review card deck');
+    deck.appendChild(createModelReviewSourceControl(data));
+
+    const previous = modelReviewMakeButton(
+        '←',
+        'model-review-deck-nav previous',
+        () => moveModelReviewSelection(-1),
+    );
+    previous.disabled = items.length < 2;
+    previous.title = 'Previous card (Left arrow)';
+    previous.setAttribute('aria-label', 'Previous review card');
+    decorateModelReviewNavButton(previous, -1);
+    deck.appendChild(previous);
+
+    const carousel = createModelReviewCarousel(items, source);
+    deck.appendChild(carousel);
+
+    const next = modelReviewMakeButton(
+        '→',
+        'model-review-deck-nav next',
+        () => moveModelReviewSelection(1),
+    );
+    next.disabled = items.length < 2;
+    next.title = 'Next card (Right arrow)';
+    next.setAttribute('aria-label', 'Next review card');
+    decorateModelReviewNavButton(next, 1);
+    deck.appendChild(next);
+
+    markActiveModelReviewCard(carousel, appState.modelReviewSelectedPath);
+    syncModelReviewSourceControl(deck, data);
+
+    workspace.appendChild(deck);
+    return workspace;
+}
+function renderModelReviewView() {
+    if (!modelReviewModeActive()) return;
+    removeBlocklistSentinel();
+    if (sentinel?.parentNode) sentinel.remove();
+    observer?.unobserve?.(sentinel);
+    els.wallpaperGrid.innerHTML = '';
+    appState.currentBatchIndex = 0;
+    if (!appState.modelReviewData) return;
+    const data = appState.modelReviewData;
+    els.wallpaperGrid.appendChild(createModelReviewWorkspace(data));
+    const selectedPath = appState.modelReviewSelectedPath;
+    if (selectedPath) {
+        requestModelReviewFrame(() => {
+            const carousel = els.wallpaperGrid.querySelector('.model-review-carousel');
+            const card = carousel?.querySelector(modelReviewCardSelector(selectedPath));
+            if (!carousel || !card) return;
+            const previousBehavior = carousel.style.scrollBehavior;
+            carousel.style.scrollBehavior = 'auto';
+            scrollModelReviewCardIntoView(carousel, card, 'auto');
+            markActiveModelReviewCard(carousel, selectedPath);
+            requestModelReviewFrame(() => {
+                carousel.style.scrollBehavior = previousBehavior;
+            });
+        });
+    }
+}
+
 function syncPreferenceReviewLayout() {
+    // The card deck sizes itself from the viewport and needs no legacy grid
+    // reconciliation on resize.
+    if (modelReviewModeActive()) {
+        return;
+    }
     const panel = typeof els !== 'undefined'
         ? els.wallpaperGrid?.querySelector('.model-review-panel')
         : null;
-    if (!panel || appState.mode !== 'trash') return;
+    if (!panel || (appState.mode !== 'trash' && !modelReviewModeActive())) return;
     const list = panel.querySelector('.model-review-list');
     const limit = preferenceReviewDisplayLimit(list);
     if (Number(panel.dataset.visibleLimit) !== limit) {
@@ -1335,16 +2382,21 @@ function createPreferenceReviewPanel() {
     heading.className = 'model-review-heading';
     const title = document.createElement('span');
     title.className = 'model-review-title';
-    title.textContent = 'Model review';
+    title.textContent = 'Review';
     heading.appendChild(title);
     const subtitle = document.createElement('span');
     subtitle.className = 'model-review-subtitle';
-    subtitle.textContent = 'Ranked by local tag/context evidence · Tab/Arrows · Enter/Space · A/X';
+    subtitle.textContent = modelReviewModeActive()
+        ? 'Automatically held by the model · inspect, Keep or Ban · Enter/Space · A/X'
+        : 'Ranked by local tag/context evidence · Tab/Arrows · Enter/Space · A/X';
     heading.appendChild(subtitle);
     const count = document.createElement('span');
     count.className = 'model-review-count';
+    const pending = Number(data.pending_count);
     count.textContent = preferenceReviewCountText(
-        preferenceReviewVisibleItems().length,
+        modelReviewModeActive() && Number.isFinite(pending)
+            ? pending
+            : preferenceReviewVisibleItems().length,
     );
     heading.appendChild(count);
     header.appendChild(heading);
@@ -1525,7 +2577,8 @@ function renderBlocklistView() {
             label.textContent = 'Refine with';
             refBar.appendChild(label);
             for (const r of appState.comboRefinements) {
-                const chip = document.createElement('span');
+                const chip = document.createElement('button');
+                chip.type = 'button';
                 chip.className = 'suggestion-chip';
                 chip.title = `Add "${r.tag}" to combo — banned / kept / favorites`;
                 chip.onclick = async () => {
@@ -1596,14 +2649,6 @@ function renderBlocklistView() {
     } else {
         const suggestionsBar = createBlocklistSuggestionsBar();
         if (suggestionsBar) els.wallpaperGrid.appendChild(suggestionsBar);
-    }
-
-    if (!appState.reviewingTag && !appState.reviewingUploader && !appState.searchQuery) {
-        const modelReview = createPreferenceReviewPanel();
-        if (modelReview) els.wallpaperGrid.appendChild(modelReview);
-        // Re-read the mounted list width so the first render uses the exact
-        // responsive column count (the fallback estimate is only for creation).
-        syncPreferenceReviewLayout();
     }
 
     // AI analysis results panel

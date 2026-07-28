@@ -5,7 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import HTTPException
@@ -14,11 +14,14 @@ from wayper.config import MonitorConfig, WallhavenConfig, WayperConfig, load_con
 from wayper.pool import load_metadata, save_metadata
 from wayper.server.api import (
     ActionRequest,
+    ModelReviewActionRequest,
     PreferenceFeedbackRequest,
     UnblockRequest,
     app,
     ban_image_route,
     get_config_route,
+    model_review_action_route,
+    model_review_route,
     preference_suggestion_feedback,
     preference_suggestions,
     remove_blocklist_entry,
@@ -75,6 +78,22 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual(config.wallhaven.batch_size, 9)
         save_config.assert_called_once_with(config)
 
+    def test_config_route_exposes_and_normalizes_filter_strategy(self) -> None:
+        config = WayperConfig(wallhaven=WallhavenConfig(filter_strategy="rules"))
+
+        with (
+            patch("wayper.server.api.get_config", return_value=config),
+            patch("wayper.server.api.save_config"),
+            patch("wayper.server.api.request_config_reload"),
+            patch("wayper.server.api._cached_config", None),
+            patch("wayper.server.api._cached_mtime", 0),
+        ):
+            update_config_route({"wallhaven": {"filter_mode": "both"}})
+            response = get_config_route()
+
+        self.assertEqual(config.wallhaven.filter_strategy, "rules+model")
+        self.assertEqual(response["wallhaven"]["filter_strategy"], "rules+model")
+
     def test_config_load_clamps_wallhaven_batch_size_to_one(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "config.toml"
@@ -105,6 +124,61 @@ class RegressionTest(unittest.TestCase):
             asyncio.run(client.close())
 
         self.assertEqual(max_page, 3)
+
+    def test_model_filter_quarantines_hits_without_validation_gate(self) -> None:
+        from wayper.model_review import list_model_review_items
+        from wayper.preference_model import PreferenceModel, save_preference_model
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(
+                download_dir=Path(td),
+                wallhaven=WallhavenConfig(filter_strategy="model", batch_size=1),
+            )
+            model = PreferenceModel(
+                bias=-2.0,
+                prior_log_odds=0.0,
+                tag_weights={"likely block": 3.0},
+                combo_weights={},
+                context_weights={},
+                threshold=0.98,
+                trained_at="test",
+                training_summary={},
+                validation={"available": False, "calibrated": False},
+                combo_min_support=20,
+                max_combo_features=0,
+            )
+            save_preference_model(model, config.preference_model_file)
+            item = {
+                "id": "candidate",
+                "path": "https://wallhaven.test/candidate.jpg",
+                "favorites": 10,
+            }
+            detail = {
+                **item,
+                "tags": [{"name": "likely block"}],
+                "purity": "sfw",
+                "category": "general",
+            }
+            client = WallhavenClient(config)
+            client.search = AsyncMock(return_value=[item])
+            client.wallpaper_info = AsyncMock(return_value=detail)
+
+            async def download(_url: str, destination: Path) -> bool:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"candidate")
+                return True
+
+            client.download_image = AsyncMock(side_effect=download)
+            try:
+                asyncio.run(client.download_for("landscape", "sfw"))
+            finally:
+                asyncio.run(client.close())
+
+            held = list_model_review_items(config)
+
+        self.assertEqual(len(held), 1)
+        self.assertEqual(held[0]["name"], "candidate.jpg")
+        self.assertTrue(held[0]["auto_filtered"])
 
     def test_metadata_load_tolerates_trailing_data_and_save_repairs_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -200,6 +274,83 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual(feedback["revision"], 1)
         self.assertEqual(feedback["events"][0]["action"], "keep")
         self.assertEqual(feedback["events"][0]["context"], "model_review")
+
+    def test_automatic_model_review_keep_moves_quarantine_to_pool_and_records_label(self) -> None:
+        from wayper.model_review import queue_model_review_item
+        from wayper.preference_model import load_preference_feedback
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(
+                download_dir=Path(td),
+                wallhaven=WallhavenConfig(filter_strategy="model"),
+            )
+            image = config.model_review_dir / "sfw" / "landscape" / "candidate.jpg"
+            image.parent.mkdir(parents=True)
+            image.touch()
+            queue_model_review_item(
+                config,
+                image,
+                purity="sfw",
+                orientation="landscape",
+                prediction={"probability": 0.99, "threshold": 0.98},
+                strategy="model",
+            )
+
+            with patch("wayper.server.api.get_config", return_value=config):
+                pending = model_review_route(purity="sfw", orient="landscape")
+                response = model_review_action_route(
+                    ModelReviewActionRequest(
+                        path=".model-review/sfw/landscape/candidate.jpg",
+                        action="keep",
+                    )
+                )
+
+            feedback = load_preference_feedback(config)
+
+        self.assertEqual(len(pending["items"]), 1)
+        self.assertTrue(pending["items"][0]["auto_filtered"])
+        self.assertEqual(response["review"]["new_path"], "sfw/landscape/candidate.jpg")
+        self.assertEqual(feedback["events"][0]["action"], "keep")
+        self.assertEqual(feedback["events"][0]["source"], "model_filter")
+
+    def test_model_review_queue_keeps_same_named_files_and_scopes_counts(self) -> None:
+        from wayper.model_review import (
+            list_model_review_items,
+            pending_model_review_count,
+            queue_model_review_item,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            for purity, orientation in (("sfw", "landscape"), ("nsfw", "portrait")):
+                image = config.model_review_dir / purity / orientation / "same.jpg"
+                image.parent.mkdir(parents=True)
+                image.touch()
+                queue_model_review_item(
+                    config,
+                    image,
+                    purity=purity,
+                    orientation=orientation,
+                    prediction={"probability": 0.99},
+                    strategy="model",
+                )
+
+            self.assertEqual(pending_model_review_count(config), 2)
+            self.assertEqual(
+                pending_model_review_count(config, purities=("sfw",)),
+                1,
+            )
+            self.assertEqual(
+                pending_model_review_count(config, orientation="portrait"),
+                1,
+            )
+            self.assertEqual(
+                {item["path"] for item in list_model_review_items(config)},
+                {
+                    ".model-review/sfw/landscape/same.jpg",
+                    ".model-review/nsfw/portrait/same.jpg",
+                },
+            )
 
     def test_preference_keep_feedback_rejects_non_candidates_and_unblock_paths(self) -> None:
         with tempfile.TemporaryDirectory() as td:

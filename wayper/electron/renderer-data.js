@@ -1,5 +1,6 @@
 function switchView(view) {
     appState.view = view;
+    document.body?.setAttribute?.('data-view', view);
 
     if (view === 'grid') {
         els.wallpaperGrid.classList.remove('hidden');
@@ -16,6 +17,87 @@ function switchView(view) {
         populateSettingsForm();
     }
 }
+
+const FILTER_STRATEGY_LABELS = {
+    rules: 'Rules',
+    model: 'Model',
+    'rules+model': 'Rules + model',
+};
+const MODEL_REVIEW_RECOMMENDATION_CACHE_MS = 60_000;
+const MODEL_REVIEW_RECOMMENDATION_LIMIT = 24;
+
+function currentFilterStrategy() {
+    const strategy = appState.config?.wallhaven?.filter_strategy
+        || appState.config?.wallhaven?.filter_mode
+        || 'rules';
+    return Object.hasOwn(FILTER_STRATEGY_LABELS, strategy) ? strategy : 'rules';
+}
+
+function filterStrategySummary(strategy = currentFilterStrategy()) {
+    if (strategy === 'model') return 'Model decisions only';
+    if (strategy === 'rules+model') return 'Rules first, then model';
+    return 'Rule exclusions only';
+}
+
+function updateFilterStrategyUI() {
+    const strategy = currentFilterStrategy();
+    const buttons = [els.btnFilterRules, els.btnFilterModel, els.btnFilterBoth];
+    for (const button of buttons) {
+        if (!button) continue;
+        const active = button.dataset.strategy === strategy;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-checked', String(active));
+        button.tabIndex = active ? 0 : -1;
+        button.disabled = !!appState.modelReviewStrategySaving;
+    }
+    if (els.filterStrategySummary) {
+        els.filterStrategySummary.textContent = filterStrategySummary(strategy);
+    }
+}
+
+function handleFilterStrategyKeydown(event) {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    const buttons = [els.btnFilterRules, els.btnFilterModel, els.btnFilterBoth]
+        .filter(Boolean);
+    if (!buttons.length) return;
+    const current = Math.max(0, buttons.indexOf(event.currentTarget));
+    const direction = ['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1;
+    const next = buttons[(current + direction + buttons.length) % buttons.length];
+    event.preventDefault();
+    next.focus();
+    void setFilterStrategy(next.dataset.strategy);
+}
+
+async function setFilterStrategy(strategy) {
+    if (!Object.hasOwn(FILTER_STRATEGY_LABELS, strategy)) return false;
+    const previous = currentFilterStrategy();
+    if (strategy === previous || appState.modelReviewStrategySaving) return true;
+
+    appState.modelReviewStrategySaving = true;
+    if (!appState.config) appState.config = { wallhaven: {} };
+    if (!appState.config.wallhaven) appState.config.wallhaven = {};
+    appState.config.wallhaven.filter_strategy = strategy;
+    updateFilterStrategyUI();
+    try {
+        await WayperApi.patchConfig({ wallhaven: { filter_strategy: strategy } });
+        await fetchConfig();
+        await fetchStatus();
+        if (isModelReviewMode()) {
+            await refreshImages();
+        }
+        return true;
+    } catch (error) {
+        console.error('Failed to update automatic filter strategy:', error);
+        appState.config.wallhaven.filter_strategy = previous;
+        updateFilterStrategyUI();
+        alert(`Could not change automatic filter: ${error.message}`);
+        return false;
+    } finally {
+        appState.modelReviewStrategySaving = false;
+        updateFilterStrategyUI();
+    }
+}
+
 // --- Settings Logic ---
 
 function populateSettingsForm() {
@@ -201,10 +283,119 @@ function preferenceReviewContextKey(orient = appState.currentOrient) {
     });
 }
 
+function libraryViewContextKey(
+    mode = appState.mode,
+    orient = appState.currentOrient,
+) {
+    return JSON.stringify({
+        mode: String(mode || ''),
+        purities: [...appState.purity].map(String).sort(),
+        orient: String(orient || ''),
+    });
+}
+
+function modelReviewRecommendationCaches() {
+    if (!(appState.modelReviewRecommendationCache instanceof Map)) {
+        appState.modelReviewRecommendationCache = new Map();
+    }
+    if (!(appState.modelReviewRecommendationRequests instanceof Map)) {
+        appState.modelReviewRecommendationRequests = new Map();
+    }
+    return {
+        cache: appState.modelReviewRecommendationCache,
+        requests: appState.modelReviewRecommendationRequests,
+    };
+}
+
+function cachedModelReviewRecommendations(orient = appState.currentOrient) {
+    const { cache } = modelReviewRecommendationCaches();
+    return cache.get(preferenceReviewContextKey(orient)) || null;
+}
+
+function requestModelReviewRecommendations(
+    orient = appState.currentOrient,
+    { force = false } = {},
+) {
+    const purities = [...appState.purity];
+    const key = preferenceReviewContextKey(orient);
+    const { cache, requests } = modelReviewRecommendationCaches();
+    const cached = cache.get(key);
+    if (
+        !force
+        && cached
+        && Date.now() - Number(cached.loadedAt || 0) < MODEL_REVIEW_RECOMMENDATION_CACHE_MS
+    ) {
+        return Promise.resolve(cached.data);
+    }
+    if (requests.has(key)) return requests.get(key);
+
+    const request = WayperApi.preferenceSuggestions(
+        purities,
+        orient,
+        MODEL_REVIEW_RECOMMENDATION_LIMIT,
+    )
+        .then(data => {
+            cache.set(key, { data, loadedAt: Date.now() });
+            return data;
+        })
+        .finally(() => {
+            if (requests.get(key) === request) requests.delete(key);
+        });
+    requests.set(key, request);
+    return request;
+}
+
+function invalidateModelReviewRecommendationCache(path = null) {
+    const { cache } = modelReviewRecommendationCaches();
+    if (!path) {
+        cache.clear();
+        return;
+    }
+    for (const [key, entry] of cache) {
+        const data = entry?.data;
+        const items = Array.isArray(data?.items)
+            ? data.items.filter(item => item?.path !== path)
+            : [];
+        cache.set(key, {
+            data: { ...(data || {}), items },
+            loadedAt: 0,
+        });
+    }
+}
+
+function scheduleModelReviewPrefetch() {
+    if (!appState.selectedMonitor || appState.status?.model_filter_ready === false) return;
+    const monitor = appState.monitors.find(item => item.name === appState.selectedMonitor);
+    const orient = monitor?.orientation || appState.currentOrient || 'landscape';
+    const run = () => {
+        requestModelReviewRecommendations(orient)
+            .catch(error => console.debug('Model review prefetch unavailable:', error));
+    };
+    if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(run, { timeout: 1200 });
+    } else {
+        setTimeout(run, 400);
+    }
+}
+
 function preferenceSuggestionItems(data) {
     if (!Array.isArray(data?.items)) return [];
     const resolved = appState.preferenceReviewResolvedPaths instanceof Set
         ? appState.preferenceReviewResolvedPaths
+        : new Set();
+    const seen = new Set();
+    return data.items.filter(item => {
+        const path = typeof item?.path === 'string' ? item.path : '';
+        if (!path || resolved.has(path) || seen.has(path)) return false;
+        seen.add(path);
+        return true;
+    });
+}
+
+function modelReviewItems(data = appState.modelReviewData) {
+    if (!Array.isArray(data?.items)) return [];
+    const resolved = appState.modelReviewResolvedPaths instanceof Set
+        ? appState.modelReviewResolvedPaths
         : new Set();
     const seen = new Set();
     return data.items.filter(item => {
@@ -326,6 +517,143 @@ async function fetchPreferenceSuggestions({
             appState.preferenceSuggestions = null;
         }
         console.error('Failed to fetch model review suggestions:', e);
+        return false;
+    }
+}
+
+function modelReviewRecommendationFields(recommendations) {
+    const items = Array.isArray(recommendations?.items) ? recommendations.items : [];
+    return {
+        recommendations: items,
+        recommendation_count: Number(recommendations?.diagnostics?.candidate_count)
+            || items.length,
+        recommendation_status: recommendations?.status || 'untrained',
+        recommendation_learning: recommendations?.learning || null,
+    };
+}
+
+function reconcileModelReviewSelection(data, { preferHeld = false } = {}) {
+    const held = modelReviewItems(data);
+    const resolved = appState.modelReviewResolvedPaths instanceof Set
+        ? appState.modelReviewResolvedPaths
+        : new Set();
+    const recommendations = (Array.isArray(data?.recommendations) ? data.recommendations : [])
+        .filter(item => item?.path && !resolved.has(item.path));
+    const selectedPath = appState.modelReviewSelectedPath;
+    const selectedHeld = held.find(item => item.path === selectedPath);
+    const selectedRecommendation = recommendations.find(item => item.path === selectedPath);
+    if (!preferHeld && (selectedHeld || selectedRecommendation)) {
+        appState.modelReviewSource = selectedHeld ? 'held' : 'recommended';
+        return;
+    }
+    appState.modelReviewSource = held.length ? 'held' : 'recommended';
+    appState.modelReviewSelectedPath = held[0]?.path || recommendations[0]?.path || null;
+}
+
+function modelReviewRequestIsCurrent(request, requestId, contextKey, orient) {
+    return request === appState.preferenceSuggestionRequestId
+        && isModelReviewMode()
+        && (requestId === null || requestId === appState.imageRequestId)
+        && appState.modelReviewContextKey === contextKey
+        && preferenceReviewContextKey(orient) === contextKey;
+}
+
+function renderProgressiveModelReview() {
+    if (isModelReviewMode() && typeof renderModelReviewView === 'function') {
+        renderModelReviewView();
+    }
+}
+
+async function fetchModelReview({ orient = appState.currentOrient, requestId = null } = {}) {
+    const request = ++appState.preferenceSuggestionRequestId;
+    const contextKey = preferenceReviewContextKey(orient);
+    const contextChanged = appState.modelReviewContextKey !== contextKey;
+    const hadCurrentData = !contextChanged && Boolean(appState.modelReviewData);
+    const cachedRecommendations = cachedModelReviewRecommendations(orient)?.data || null;
+
+    appState.modelReviewContextKey = contextKey;
+    if (contextChanged) {
+        appState.modelReviewData = null;
+        appState.modelReviewSelectedPath = null;
+        appState.modelReviewSource = null;
+        appState.modelReviewResolvedPaths = new Set();
+    }
+    if (!appState.modelReviewData && cachedRecommendations) {
+        appState.modelReviewData = {
+            status: 'ready',
+            items: [],
+            pending_count: 0,
+            filter_strategy: currentFilterStrategy(),
+            ...modelReviewRecommendationFields(cachedRecommendations),
+        };
+        reconcileModelReviewSelection(appState.modelReviewData);
+    }
+    renderProgressiveModelReview();
+
+    // Held files are cheap to read and render first. Ranking Recommended can
+    // scan the full library, so it continues independently and patches the
+    // mounted deck only when ready.
+    const heldPromise = WayperApi.modelReview([...appState.purity], orient, 200)
+        .catch(error => ({
+            status: 'error',
+            items: [],
+            pending_count: 0,
+            filter_strategy: currentFilterStrategy(),
+            model_filter: {
+                status: 'error',
+                ready: false,
+                reason: error.message,
+            },
+            error: error.message,
+        }));
+    const recommendationsPromise = requestModelReviewRecommendations(orient)
+        .catch(error => {
+            console.debug('Model recommendations unavailable:', error);
+            return { items: [], status: 'error', error: error.message };
+        });
+
+    try {
+        const heldData = await heldPromise;
+        if (!modelReviewRequestIsCurrent(request, requestId, contextKey, orient)) return false;
+        const previousReviewData = appState.modelReviewData;
+        const previousRecommendations = previousReviewData?.recommendations || [];
+        const recommendationSnapshot = cachedRecommendations || {
+            items: previousRecommendations,
+            status: previousReviewData?.recommendation_status || 'pending',
+            learning: previousReviewData?.recommendation_learning || null,
+            diagnostics: {
+                candidate_count: previousReviewData?.recommendation_count
+                    || previousRecommendations.length,
+            },
+        };
+        appState.modelReviewData = {
+            ...heldData,
+            ...modelReviewRecommendationFields(recommendationSnapshot),
+        };
+        reconcileModelReviewSelection(appState.modelReviewData, {
+            preferHeld: contextChanged || !hadCurrentData,
+        });
+        renderProgressiveModelReview();
+
+        const recommendations = await recommendationsPromise;
+        if (!modelReviewRequestIsCurrent(request, requestId, contextKey, orient)) return false;
+        appState.modelReviewData = {
+            ...(appState.modelReviewData || {}),
+            ...modelReviewRecommendationFields(recommendations),
+        };
+        reconcileModelReviewSelection(appState.modelReviewData);
+        renderProgressiveModelReview();
+        return true;
+    } catch (e) {
+        if (modelReviewRequestIsCurrent(request, requestId, contextKey, orient)) {
+            appState.modelReviewData = {
+                status: 'error', items: [], recommendations: [], error: e.message,
+            };
+            appState.modelReviewSelectedPath = null;
+            appState.modelReviewSource = null;
+            renderProgressiveModelReview();
+        }
+        console.error('Failed to fetch automatic model review queue:', e);
         return false;
     }
 }
@@ -548,6 +876,7 @@ async function saveSettings() {
         top_range: document.getElementById('input-top-range').value,
         sorting: document.getElementById('input-sorting').value,
         ai_art_filter: parseInt(document.getElementById('input-ai-art').value),
+        filter_strategy: currentFilterStrategy(),
         batch_size: Math.max(1, parseInt(document.getElementById('input-batch-size').value) || 5),
         min_favorites: Math.max(0, parseInt(document.getElementById('input-min-favorites').value) || 0),
         exclude_tags: getExcludeTags(),
@@ -592,10 +921,26 @@ async function controlAction(action) {
 }
 
 async function setViewMode(mode) {
+    const previousMode = appState.mode;
     appState.mode = mode;
     switchView('grid'); // Ensure we are in grid view
     updateUI();
-    debouncedRefreshImages();
+    if (mode === 'model-review' && typeof renderModelReviewView === 'function') {
+        // Replace the library synchronously, using the last deck when it is
+        // still valid. A first visit remains visually quiet until held cards
+        // or prefetched recommendations arrive.
+        renderModelReviewView();
+    } else if (previousMode === 'model-review') {
+        const cachedLibraryIsCurrent = appState.loadedImageMode === mode
+            && appState.loadedImageContextKey === libraryViewContextKey(mode);
+        if (cachedLibraryIsCurrent && typeof renderImages === 'function') {
+            renderImages();
+        } else {
+            // Never leave cards mounted under a Pool/Favorites/Blocklist nav state.
+            els.wallpaperGrid.innerHTML = '';
+        }
+    }
+    void refreshImages();
 }
 
 function shakeButton(btn) {
@@ -749,6 +1094,7 @@ async function banImage(
         preserveView = false,
         preferenceContext = null,
         refreshSuggestionsInPlace = false,
+        returnResult = false,
     } = {},
 ) {
     // Model-review bans change the exclusion evidence, but removing the existing
@@ -781,7 +1127,7 @@ async function banImage(
             invalidateBlocklistSuggestions({ keepVisible: true });
             void fetchTagSuggestions({ render: true });
         }
-        return true;
+        return returnResult ? data : true;
     } catch (e) {
         console.error("Ban failed", e);
         refreshImages();
@@ -1416,7 +1762,8 @@ async function fetchStatus() {
             || data.running !== prev.running
             || data.pool_count !== prev.pool_count
             || data.favorites_count !== prev.favorites_count
-            || data.blocklist_count !== prev.blocklist_count;
+            || data.blocklist_count !== prev.blocklist_count
+            || data.model_review_count !== prev.model_review_count;
 
         appState.status = data;
         if (appState.mode === 'trash' && appState.blocklistData) {
@@ -1429,7 +1776,9 @@ async function fetchStatus() {
             // Refresh grid when current mode's count changes externally
             if (prev && !appState.refreshing) {
                 const countKey = appState.mode === 'favorites' ? 'favorites_count'
-                    : appState.mode === 'trash' ? 'blocklist_count' : 'pool_count';
+                    : appState.mode === 'trash' ? 'blocklist_count'
+                    : isModelReviewMode() ? 'model_review_count'
+                    : 'pool_count';
                 if (data[countKey] !== prev[countKey]) {
                     console.log('[status] triggering refreshImages for', countKey);
                     refreshImages(true);
@@ -1481,17 +1830,28 @@ async function refreshImages(preserveFocus = false) {
     appState.currentOrient = orient;
     console.log('[refresh] start', appState.mode, orient);
 
-    if (appState.mode === 'trash') {
-        // Never leave candidates from a previous monitor/purity filter actionable while
-        // the matching model-review request is in flight.
+    if (isModelReviewMode()) {
+        appState.preferenceSuggestions = null;
+        renderModelReviewView();
+        try {
+            const [statusData] = await Promise.all([
+                fetch(`${API_URL}/api/status?orient=${orient}&include_recoverable=false`).then(r => r.json()),
+                fetchModelReview({ orient, requestId }),
+            ]);
+            if (requestId === appState.imageRequestId && isModelReviewMode()) {
+                appState.status = statusData;
+                updateStatusUI();
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    } else if (appState.mode === 'trash') {
+        // Blocklist is intentionally limited to recoverable/blocked files and
+        // exclusion-rule suggestions.  Automatic model hits have their own
+        // inbox and must not be fetched or rendered in this view.
         appState.preferenceSuggestions = null;
         els.wallpaperGrid.querySelector('.model-review-panel')?.remove();
         const suggestionsPromise = fetchTagSuggestions({ render: true, requestId });
-        const preferenceSuggestionsPromise = fetchPreferenceSuggestions({
-            orient,
-            requestId,
-            reset: true,
-        });
         try {
             resetImagePaging();
             const [statusData, blocklistData, pageData] = await Promise.all([
@@ -1504,17 +1864,14 @@ async function refreshImages(preserveFocus = false) {
                 appState.totalImages = pageData.total ?? appState.allImages.length;
                 appState.nextOffset = pageData.next_offset;
                 appState.imagesComplete = pageData.next_offset === null || pageData.next_offset === undefined;
+                appState.loadedImageMode = appState.mode;
+                appState.loadedImageContextKey = libraryViewContextKey(appState.mode, orient);
                 statusData.recoverable_count = blocklistData.recoverable_count || 0;
                 appState.status = statusData;
                 updateStatusUI();
                 await applySearchFilter(preserveFocus);
                 renderBlocklistSuggestionsBar();
                 suggestionsPromise.catch(() => {});
-                preferenceSuggestionsPromise.then(updated => {
-                    if (updated && requestId === appState.imageRequestId && appState.mode === 'trash') {
-                        renderBlocklistView();
-                    }
-                });
             }
         } catch (e) { console.error(e); }
     } else {
@@ -1530,6 +1887,8 @@ async function refreshImages(preserveFocus = false) {
                 appState.totalImages = pageData.total ?? appState.allImages.length;
                 appState.nextOffset = pageData.next_offset;
                 appState.imagesComplete = pageData.next_offset === null || pageData.next_offset === undefined;
+                appState.loadedImageMode = appState.mode;
+                appState.loadedImageContextKey = libraryViewContextKey(appState.mode, orient);
                 appState.status = statusData;
                 while (
                     preserveFocus

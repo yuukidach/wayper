@@ -8,6 +8,9 @@ let backendProcess = null
 let mainWindow = null
 let backendPathResolved = false
 let backendPath = null
+let captureInProgress = false
+
+const CAPTURE_SWITCH = '--wayper-capture'
 
 // Platform specific binary name
 const BACKEND_BINARY = process.platform === 'win32' ? 'wayper-backend.exe' : 'wayper-backend'
@@ -106,6 +109,81 @@ function killBackend() {
   }
 }
 
+function capturePathFromCommandLine(commandLine = []) {
+  for (let index = 0; index < commandLine.length; index += 1) {
+    const argument = String(commandLine[index] || '')
+    if (argument.startsWith(`${CAPTURE_SWITCH}=`)) {
+      const value = argument.slice(CAPTURE_SWITCH.length + 1).trim()
+      return value ? path.resolve(value) : null
+    }
+    if (argument === CAPTURE_SWITCH) {
+      const value = String(commandLine[index + 1] || '').trim()
+      return value ? path.resolve(value) : null
+    }
+  }
+  return null
+}
+
+async function settleRendererForCapture(webContents) {
+  await webContents.executeJavaScript(`
+    (async () => {
+      if (document.fonts && document.fonts.ready) await document.fonts.ready;
+      const visibleImages = [...document.images].filter(image => {
+        const rect = image.getBoundingClientRect();
+        return rect.bottom > 0 && rect.right > 0
+          && rect.top < window.innerHeight && rect.left < window.innerWidth;
+      });
+      await Promise.all(visibleImages.map(image => Promise.race([
+        image.decode ? image.decode().catch(() => undefined) : Promise.resolve(),
+        new Promise(resolve => setTimeout(resolve, 1500)),
+      ])));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()
+  `, true)
+}
+
+async function captureCurrentWindow(outputPath) {
+  if (captureInProgress || !mainWindow || mainWindow.isDestroyed()) return
+  if (path.extname(outputPath).toLowerCase() !== '.png') {
+    console.error(`Capture path must end in .png: ${outputPath}`)
+    return
+  }
+  const parent = path.dirname(outputPath)
+  try {
+    if (!fs.statSync(parent).isDirectory()) throw new Error('parent is not a directory')
+  } catch (error) {
+    console.error(`Capture directory is unavailable: ${parent} (${error.message})`)
+    return
+  }
+
+  captureInProgress = true
+  const webContents = mainWindow.webContents
+  let insertedCss = null
+  try {
+    await settleRendererForCapture(webContents)
+    insertedCss = await webContents.insertCSS(`
+      *, *::before, *::after {
+        animation-play-state: paused !important;
+        transition: none !important;
+        caret-color: transparent !important;
+      }
+    `)
+    await settleRendererForCapture(webContents)
+    const image = await webContents.capturePage()
+    if (image.isEmpty()) throw new Error('Electron returned an empty image')
+    await fs.promises.writeFile(outputPath, image.toPNG(), { flag: 'wx' })
+    console.log(`Captured renderer to ${outputPath}`)
+  } catch (error) {
+    console.error(`Could not capture renderer: ${error.message}`)
+  } finally {
+    if (insertedCss) {
+      await webContents.removeInsertedCSS(insertedCss).catch(() => {})
+    }
+    captureInProgress = false
+  }
+}
+
 function buildMenu() {
   const isMac = process.platform === 'darwin'
   const template = [
@@ -177,13 +255,28 @@ function createWindow () {
   mainWindow.webContents.on('will-navigate', (e) => e.preventDefault())
 }
 
-const gotTheLock = app.requestSingleInstanceLock()
+const initialCapturePath = capturePathFromCommandLine(process.argv)
+// Pass the capture destination through Electron's single-instance payload as
+// well as the command line.  Some Linux launchers normalize/strip arguments
+// before delivering the `second-instance` event, which otherwise leaves the
+// capture helper waiting even though the request reached the running app.
+const gotTheLock = app.requestSingleInstanceLock({
+  capturePath: initialCapturePath,
+})
 
 if (!gotTheLock) {
   app.quit()
+} else if (initialCapturePath) {
+  console.error('Internal capture requires an existing wayper-gui instance')
+  app.quit()
 } else {
-  app.on('second-instance', (event, commandLine, workingDirectory) => {
-    // Someone tried to run a second instance, we should focus our window.
+  app.on('second-instance', (event, commandLine, workingDirectory, additionalData) => {
+    const capturePath = additionalData?.capturePath || capturePathFromCommandLine(commandLine)
+    if (capturePath) {
+      void captureCurrentWindow(capturePath)
+      return
+    }
+    // Someone tried to run a second interactive instance, so focus the window.
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()

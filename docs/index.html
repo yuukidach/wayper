@@ -298,7 +298,7 @@ footer .links a { color: var(--subtext); }
     </div>
     <div class="feature">
       <strong>Wallhaven client</strong>
-      <p>Auto-downloads wallpapers to your chosen folder based on your preferences, with minimum-favorite filtering. Browse and search Wallhaven directly from the GUI.</p>
+      <p>Auto-downloads wallpapers with minimum-favorite filtering and rules/model strategy controls. Browse and search Wallhaven directly from the GUI.</p>
     </div>
     <div class="feature">
       <strong>Auto orientation</strong>
@@ -379,19 +379,26 @@ wayper --json status        # machine-readable output</code></pre>
   color/category/purity context); it never opens image files or inspects pixels. The base model uses
   the standard library. Install <code>uv pip install -e '.[semantic]'</code> to enable the optional
   FastEmbed <code>BAAI/bge-small-en-v1.5</code> text head, which encodes metadata only and keeps a
-  persistent local embedding cache. Before any Model review decisions exist, an installation may
+  persistent local embedding cache. Before any Review decisions exist, an installation may
   temporarily bootstrap from its older blacklist/favorite data. Once a review Ban or Keep is recorded,
   only those explicit review decisions become new training labels; ordinary gallery actions remain
   outside the label stream. The semantic head learns related metadata patterns from those examples,
   without a manually configured person or region rule. Tag pairs remain opt-in with <code>--max-combos</code>.
-  Live pool images are background controls unless explicitly kept. The review queue ranks by explainable
-  learned evidence plus a bounded boost for the strongest specific dislike signal and diversifies repeated
-  reasons. This score is not a calibrated probability.
-  Open Blocklist to review candidates:
-  Ban uses the normal system-trash flow and records review context, while Keep becomes explicit
-  positive feedback. Both dislike and counter-evidence are shown; in the Preview lightbox, press
-  <code>A</code> to keep or <code>X</code> to ban. Automatic skipping remains disabled until its validation gate
-  is met; Wayper refreshes locally after enough new feedback.</p>
+  Live pool images are background controls unless explicitly kept. Wayper reserves the most recent
+  part of each explicit Keep/Ban class to learn an accuracy-first Review boundary that weights
+  precision more than recall. Recommended and Auto-held use the same binary decision: scores below
+  the learned boundary are omitted, and the page size is a maximum rather than a target to fill.
+  Exact and semantic evidence only rank images that have already crossed the boundary.
+  Open the dedicated Review view to control this loop. The sidebar chooses Rules, Model, or
+  Rules + model for new downloads without disabling recommendations. Two explicit card lanes keep
+  automatically quarantined downloads (Auto-held) separate from likely blocks already in the pool
+  (Recommended); pending Auto-held cards open first. Drag, scroll, or use the side arrows to move through
+  the full-window card stack. Press <code>Enter</code>/<code>Space</code> for the full preview,
+  <code>A</code> to keep, or <code>X</code>/<code>Delete</code> to ban. An Auto-held Keep releases the
+  file into the pool, while a recommendation Keep records a positive correction without moving it.
+  Because Auto-held files are recoverable and require a human decision, a current trained model can
+  quarantine likely blocks without the separate validation gate used for unattended deletion. Wayper
+  refreshes the model locally after enough new feedback.</p>
 </section>
 
 <section id="browse">
@@ -404,7 +411,9 @@ wayper --json status        # machine-readable output</code></pre>
   </p>
   <p class="kbd-label">Grid view</p>
   <div class="kbd-grid kbd-grid-gap">
-    <div><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <span class="label">pool / fav / blocklist</span></div>
+    <div><kbd>p</kbd> <kbd>v</kbd> <span class="label">pool / fav</span></div>
+    <div><kbd>m</kbd> <span class="label">Model</span></div>
+    <div><kbd>b</kbd> <span class="label">Blocklist</span></div>
     <div><kbd>Enter</kbd> / <kbd>Space</kbd> <span class="label">preview (lightbox)</span></div>
     <div><kbd>h</kbd> / <kbd>l</kbd> <span class="label">prev / next wallpaper</span></div>
     <div><kbd>f</kbd> <span class="label">favorite</span></div>
@@ -417,11 +426,11 @@ wayper --json status        # machine-readable output</code></pre>
     <div><kbd>Esc</kbd> <span class="label">clear search / unfocus</span></div>
     <div><kbd>Arrow keys</kbd> <span class="label">navigate grid</span></div>
     <div><kbd>[</kbd> / <kbd>]</kbd> <span class="label">blocklist: recoverable / all</span></div>
-    <div><kbd>4</kbd>–<kbd>9</kbd> <span class="label">switch monitor</span></div>
-    <div><kbd>Tab</kbd> / <kbd>Arrow keys</kbd> <span class="label">enter and move through Model review candidates</span></div>
-    <div><kbd>Enter</kbd> / <kbd>Space</kbd> <span class="label">preview focused Model review candidate</span></div>
-    <div><kbd>←</kbd> / <kbd>→</kbd> <span class="label">switch candidates in Model review preview</span></div>
-    <div><kbd>a</kbd> / <kbd>x</kbd> / <kbd>Del</kbd> <span class="label">keep / ban focused Model review candidate</span></div>
+    <div><kbd>1</kbd>–<kbd>9</kbd> <span class="label">switch monitor</span></div>
+    <div><kbd>Tab</kbd> / <kbd>Arrow keys</kbd> <span class="label">enter and move through Review candidates</span></div>
+    <div><kbd>Enter</kbd> / <kbd>Space</kbd> <span class="label">preview focused Review candidate</span></div>
+    <div><kbd>←</kbd> / <kbd>→</kbd> <span class="label">switch candidates in Review preview</span></div>
+    <div><kbd>a</kbd> / <kbd>x</kbd> / <kbd>Del</kbd> <span class="label">keep / ban focused Review candidate</span></div>
   </div>
   <p class="kbd-label">Lightbox preview</p>
   <div class="kbd-grid">
@@ -429,7 +438,7 @@ wayper --json status        # machine-readable output</code></pre>
     <div><kbd>Enter</kbd> <span class="label">set as wallpaper</span></div>
     <div><kbd>f</kbd> <span class="label">favorite</span></div>
     <div><kbd>x</kbd> / <kbd>Del</kbd> <span class="label">ban</span></div>
-    <div><kbd>a</kbd> <span class="label">keep Model review candidate</span></div>
+    <div><kbd>a</kbd> <span class="label">keep Review candidate</span></div>
     <div><kbd>o</kbd> <span class="label">open on Wallhaven</span></div>
     <div><kbd>Space</kbd> / <kbd>Esc</kbd> <span class="label">close lightbox</span></div>
   </div>

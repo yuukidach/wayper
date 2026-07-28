@@ -77,6 +77,7 @@ uv pip install -e ".[browser]"  # optional: browser cookie extraction for Wallha
 - **Tag search** — search by Wallhaven tags, category, or filename with autocomplete
 - **Smart suggestions** — analyzes ban patterns to recommend tags to exclude; co-occurrence mining finds common descriptors across excluded individuals; drill into combo exclusions (e.g., "tattoo + nude") for precise filtering
 - **AI analysis** — Codex-powered deep analysis of ban patterns with iterative feedback. Identifies uploader patterns and suggests Wallhaven user blacklist candidates. Click suggested tags to preview matching images
+- **Adaptive filtering** — choose `rules`, `model`, or `rules + model` from the always-visible sidebar control. **Review** keeps automatically held downloads and ordinary model recommendations in separate card lanes, so neither is hidden by the other
 - **Settings** — configure the download folder, Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI. Changes apply to the running daemon instantly
 - **Keyboard-driven** — every action has a shortcut: grid navigation, tab switching, lightbox, favorites, ban, undo
 
@@ -84,15 +85,16 @@ uv pip install -e ".[browser]"  # optional: browser cookie extraction for Wallha
 
 | Key | Action | Key | Action |
 |-----|--------|-----|--------|
-| `1` `2` `3` | Pool / Favorites / Blocklist | `F1` `F2` `F3` | Toggle SFW / Sketchy / NSFW |
+| `p` / `v` | Pool / Favorites | `m` / `b` | Model / Blocklist |
+| `s` | Settings | `F1` `F2` `F3` | Toggle SFW / Sketchy / NSFW |
 | `h` / `l` | Prev / Next wallpaper | `f` | Favorite (focused card or current) |
 | `x` / `Del` | Ban / Remove | `u` | Undo ban |
-| `o` | Open on Wallhaven | `s` | Settings |
+| `o` | Open on Wallhaven | | |
 | `/` | Focus search bar | `Esc` | Clear search / Unfocus |
 | `Enter` / `Space` | Preview (lightbox) | Arrow keys | Navigate grid |
 | `[` / `]` | Blocklist: Recoverable / All | `a` | AI analysis (Blocklist) |
 | `g` | Locate current wallpaper | `gg` / `G` | Jump to first / last |
-| `4`–`9` | Switch monitor | | |
+| `1`–`9` | Switch monitor | | |
 
 **Lightbox preview:**
 
@@ -100,7 +102,7 @@ uv pip install -e ".[browser]"  # optional: browser cookie extraction for Wallha
 |-----|--------|-----|--------|
 | `←` / `→` | Previous / Next image (pan when zoomed) | `Enter` | Set as wallpaper |
 | `f` | Favorite | `x` / `Del` | Dislike |
-| `a` (Model review) | Keep reviewed candidate | `o` | Open on Wallhaven |
+| `a` (Review) | Keep reviewed candidate | `o` | Open on Wallhaven |
 | `Space` / `Esc` | Close lightbox | | |
 | Scroll | Zoom at cursor (0.5×–8×) | Drag | Pan when zoomed in |
 | `0` | Reset to fit | `+` / `-` | Zoom in / out |
@@ -142,28 +144,42 @@ an opt-in experiment (`--max-combos`). For a stronger local text head, install
 FastEmbed to encode the metadata text only, with a persistent local embedding
 cache. The first semantic training run may take longer while that cache is
 filled. Before any review decisions exist, an installation may use its older
-blacklist/favorite data as a temporary bootstrap. Once a **Model review** Ban or
+blacklist/favorite data as a temporary bootstrap. Once a **Review** Ban or
 Keep has been recorded, only those explicit review decisions are used as new
 training labels; ordinary gallery actions are not silently promoted to labels.
 The optional semantic head learns related metadata patterns from the same review
 examples, without a manually configured person/region rule. A live image that
 has never been explicitly kept is treated as a background control, not as proof
-that you like it. The review queue ranks by learned evidence plus a bounded
-boost for the strongest specific dislike signal and diversifies repeated
-reasons. The score is not a calibrated probability, and automatic skipping
-remains disabled until a separate validation/calibration gate is met.
+that you like it. Wayper reserves the most recent part of each explicit Keep/Ban
+class to learn an accuracy-first Review boundary, weighting precision more than
+recall so weak guesses do not create a large manual queue. **Recommended** and
+**Auto-held** use that same binary decision: scores below the learned boundary
+are omitted, and the page size is only a maximum rather than a target to fill.
+Semantic and exact evidence rank the images that already passed the boundary;
+rank alone cannot make an image a candidate. Because model hits require a human
+decision, a current trained model can filter without passing the separate
+high-precision gate used for unattended deletion. Model hits never enter the
+blacklist automatically.
 
-In the GUI's Blocklist view, **Model review** shows ranked pool candidates with
-both dislike and counter-evidence chips: **Ban** uses the normal blacklist +
-system-trash flow and records that it came from review, while **Keep** records
-explicit positive feedback. Use **Preview** to inspect the full image; in that
-review queue, focus a candidate with `Tab` (or press `ArrowUp` from the first
-gallery row), then use the arrow keys to move between candidates (the up/down
-keys follow the visible rows). Press
-`Enter`/`Space` to preview, use the left/right keys in the preview to switch
-candidates, `A` to keep, or `X`/`Delete` to ban. Feedback is appended to a local JSONL event log (the older JSON log
+The GUI's dedicated **Review** view is the control center for this loop.
+The sidebar control chooses `Rules`, `Model`, or `Both` (`Rules + model`) for
+new downloads; it does not turn recommendations on or off. The review view has
+two explicit lanes: **Auto-held** for downloads quarantined by the model, and
+**Recommended** for likely blocks already in the pool. Pending
+Auto-held items open first, so an automatic model decision is never buried
+behind recommendations. Each lane uses a full-window, horizontally scrolling
+card stack: drag or scroll through cards, use the side arrows, and click the
+current image (or press `Enter`/`Space`) for the full preview. `A` keeps the
+current card; `X`/`Delete` bans it. For Auto-held cards, Keep releases the file
+into the pool and Ban sends it to system trash plus the blacklist. For
+recommendations, Keep records a positive correction without moving the file,
+while Ban follows the normal pool-to-trash/blocklist flow. The Blocklist view
+therefore remains reserved for recoverable/blocked files and tag/uploader
+exclusion rules. Feedback is appended to a local JSONL event log (the older JSON log
 is still read), and after 10 new events Wayper queues a local full-batch refresh;
-`wayper model status` shows the pending count and model schema.
+`wayper model status` shows the pending count and model schema. The strategy is
+stored as `wallhaven.filter_strategy` in TOML and defaults to `rules` for
+existing installations.
 
 ### Keybindings
 

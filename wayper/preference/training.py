@@ -15,6 +15,7 @@ from .model import (
     DEFAULT_EPOCHS,
     DEFAULT_FEATURE_NORMALIZATION,
     DEFAULT_MAX_COMBO_FEATURES,
+    DEFAULT_REVIEW_THRESHOLD,
     DEFAULT_THRESHOLD,
     MIN_TRAINING_PER_CLASS,
     MIN_VALIDATION_PER_CLASS,
@@ -31,7 +32,185 @@ from .model import (
     _pair_keys,
     _sigmoid,
     _storage_feature_key,
+    preference_review_decision_score,
+    preference_review_has_dislike_evidence,
 )
+
+REVIEW_CALIBRATION_FRACTION = 0.20
+REVIEW_TARGET_PRECISION = 0.80
+REVIEW_CALIBRATION_VERSION = 2
+REVIEW_CALIBRATION_OBJECTIVE = "precision_at_least_0_80"
+
+
+def _attach_semantic_head(
+    model: PreferenceModel,
+    examples: list[PreferenceExample],
+    semantic_model: str | None,
+) -> tuple[str, object | None]:
+    """Fit and attach the optional semantic head without making it mandatory."""
+    if semantic_model is None:
+        return "disabled", None
+    try:
+        from .semantic import fit_semantic_head
+
+        semantic_head = fit_semantic_head(examples, model_name=semantic_model)
+    except Exception as exc:  # pragma: no cover - optional runtime/environment dependent
+        return f"unavailable: {type(exc).__name__}", None
+    if semantic_head is None:
+        return "insufficient_feedback", None
+    model.semantic_model = semantic_head.model_name
+    model.semantic_bias = semantic_head.bias
+    model.semantic_weights = semantic_head.weights
+    model.semantic_blend = semantic_head.blend
+    model.semantic_rank_weight = semantic_head.rank_weight
+    return "trained", semantic_head
+
+
+def _review_calibration_split(
+    examples: list[PreferenceExample],
+) -> tuple[list[PreferenceExample], list[PreferenceExample]]:
+    """Reserve the most recent 20% of each explicit class for Review calibration."""
+    explicit = [
+        example
+        for example in examples
+        if example.is_explicit_ban or example.is_explicit_keep or example.is_favorite
+    ]
+    grouped = {
+        label: [example for example in explicit if example.label == label] for label in (0, 1)
+    }
+    if any(len(group) < MIN_TRAINING_PER_CLASS * 2 for group in grouped.values()):
+        return [], []
+
+    training: list[PreferenceExample] = []
+    holdout: list[PreferenceExample] = []
+    for label in (0, 1):
+        ordered = sorted(
+            grouped[label],
+            key=lambda example: (example.timestamp, example.filename),
+        )
+        holdout_count = max(
+            MIN_VALIDATION_PER_CLASS,
+            round(len(ordered) * REVIEW_CALIBRATION_FRACTION),
+        )
+        holdout_count = min(holdout_count, len(ordered) - MIN_TRAINING_PER_CLASS)
+        training.extend(ordered[:-holdout_count])
+        holdout.extend(ordered[-holdout_count:])
+    return training, holdout
+
+
+def _calibrate_review_boundary(
+    model: PreferenceModel,
+    holdout: list[PreferenceExample],
+) -> dict[str, object]:
+    """Select a precision-weighted binary boundary from unseen decisions."""
+    predictions = model.predict_many(
+        [(example.tags, None, example.context_features) for example in holdout],
+        top_n=12,
+    )
+    scored = [
+        (
+            preference_review_decision_score(model, prediction),
+            preference_review_has_dislike_evidence(prediction),
+            example.label,
+        )
+        for example, prediction in zip(holdout, predictions, strict=True)
+    ]
+    values = sorted({score for score, _, _ in scored})
+    if not values:
+        return {
+            "version": REVIEW_CALIBRATION_VERSION,
+            "available": False,
+            "reason": "holdout produced no scores",
+            "threshold": DEFAULT_REVIEW_THRESHOLD,
+            "objective": REVIEW_CALIBRATION_OBJECTIVE,
+        }
+
+    thresholds = [
+        max(values) + 1e-9,
+        *((lower + upper) / 2 for lower, upper in zip(values, values[1:])),
+        min(values) - 1e-9,
+    ]
+    positives = sum(label == 1 for _, _, label in scored)
+    minimum_predictions = min(MIN_VALIDATION_PER_CLASS, positives)
+    rows: list[tuple[float, float, float, int, dict[str, object]]] = []
+    for boundary in thresholds:
+        classified = [evidence and score >= boundary for score, evidence, _ in scored]
+        true_positive = sum(
+            candidate and label == 1
+            for candidate, (_, _, label) in zip(classified, scored, strict=True)
+        )
+        false_positive = sum(
+            candidate and label == 0
+            for candidate, (_, _, label) in zip(classified, scored, strict=True)
+        )
+        true_negative = sum(
+            not candidate and label == 0
+            for candidate, (_, _, label) in zip(classified, scored, strict=True)
+        )
+        false_negative = sum(
+            not candidate and label == 1
+            for candidate, (_, _, label) in zip(classified, scored, strict=True)
+        )
+        predicted = true_positive + false_positive
+        if predicted < minimum_predictions:
+            continue
+        precision = true_positive / predicted
+        recall = true_positive / max(1, true_positive + false_negative)
+        accuracy = (true_positive + true_negative) / len(scored)
+        f_half = (
+            1.25 * precision * recall / (0.25 * precision + recall) if precision and recall else 0.0
+        )
+        payload: dict[str, object] = {
+            "version": REVIEW_CALIBRATION_VERSION,
+            "available": True,
+            "source": "stratified_recent_holdout",
+            "objective": REVIEW_CALIBRATION_OBJECTIVE,
+            "target_precision": REVIEW_TARGET_PRECISION,
+            "threshold": round(boundary, 6),
+            "examples": len(scored),
+            "banned": positives,
+            "retained": len(scored) - positives,
+            "predicted": predicted,
+            "true_positive": true_positive,
+            "false_positive": false_positive,
+            "precision": round(precision, 3),
+            "precision_lower_bound": round(
+                _wilson_lower_bound(true_positive, predicted),
+                3,
+            ),
+            "recall": round(recall, 3),
+            "accuracy": round(accuracy, 3),
+            "f0_5": round(f_half, 3),
+        }
+        rows.append((precision, recall, accuracy, false_positive, payload))
+
+    if not rows:
+        return {
+            "version": REVIEW_CALIBRATION_VERSION,
+            "available": False,
+            "reason": "holdout had too few positive predictions",
+            "threshold": DEFAULT_REVIEW_THRESHOLD,
+            "objective": REVIEW_CALIBRATION_OBJECTIVE,
+        }
+    precise = [row for row in rows if row[0] >= REVIEW_TARGET_PRECISION]
+    if not precise:
+        # Do not manufacture a review queue when held-out decisions cannot
+        # support the requested precision. A later retrain can reopen the gate.
+        return {
+            "version": REVIEW_CALIBRATION_VERSION,
+            "available": False,
+            "reason": "held-out precision target was not reached",
+            "threshold": round(max(values) + 1e-6, 6),
+            "objective": REVIEW_CALIBRATION_OBJECTIVE,
+            "target_precision": REVIEW_TARGET_PRECISION,
+            "examples": len(scored),
+        }
+    # Among boundaries that meet the precision target, retain as much recall
+    # as possible. Accuracy and fewer false positives settle exact ties.
+    return max(
+        precise,
+        key=lambda row: (row[1], row[2], row[0], -row[3]),
+    )[4]
 
 
 def _training_example_payload(example: PreferenceExample, *, include_weight: bool) -> str:
@@ -149,6 +328,28 @@ def train_preference_model(
             }
         )
 
+    calibration_training, calibration_holdout = _review_calibration_split(examples)
+    review_calibration: dict[str, object] = {
+        "version": REVIEW_CALIBRATION_VERSION,
+        "available": False,
+        "reason": "not enough explicit Keep/Ban decisions",
+        "threshold": DEFAULT_REVIEW_THRESHOLD,
+        "objective": REVIEW_CALIBRATION_OBJECTIVE,
+    }
+    if calibration_training and calibration_holdout:
+        calibration_model = _fit(
+            calibration_training,
+            combo_min_support=combo_min_support,
+            max_combo_features=max_combo_features,
+            threshold=threshold,
+            epochs=epochs,
+        )
+        _attach_semantic_head(calibration_model, calibration_training, semantic_model)
+        review_calibration = _calibrate_review_boundary(
+            calibration_model,
+            calibration_holdout,
+        )
+
     model = _fit(
         examples,
         combo_min_support=combo_min_support,
@@ -156,30 +357,16 @@ def train_preference_model(
         threshold=threshold,
         epochs=epochs,
     )
-    semantic_status = "disabled" if semantic_model is None else "insufficient_feedback"
-    if semantic_model is not None:
-        try:
-            from .semantic import fit_semantic_head
-
-            semantic_head = fit_semantic_head(examples, model_name=semantic_model)
-        except Exception as exc:  # pragma: no cover - optional runtime/environment dependent
-            semantic_head = None
-            semantic_status = f"unavailable: {type(exc).__name__}"
-        if semantic_head is not None:
-            model.semantic_model = semantic_head.model_name
-            model.semantic_bias = semantic_head.bias
-            model.semantic_weights = semantic_head.weights
-            model.semantic_blend = semantic_head.blend
-            model.semantic_rank_weight = semantic_head.rank_weight
-            semantic_status = "trained"
-            model.training_summary.update(
-                {
-                    "semantic_examples": semantic_head.examples,
-                    "semantic_positives": semantic_head.positives,
-                    "semantic_negatives": semantic_head.negatives,
-                    "semantic_dimension": semantic_head.dimension,
-                }
-            )
+    semantic_status, semantic_head = _attach_semantic_head(model, examples, semantic_model)
+    if semantic_head is not None:
+        model.training_summary.update(
+            {
+                "semantic_examples": semantic_head.examples,
+                "semantic_positives": semantic_head.positives,
+                "semantic_negatives": semantic_head.negatives,
+                "semantic_dimension": semantic_head.dimension,
+            }
+        )
     model.validation = validation
     model.training_summary.update(
         {
@@ -194,6 +381,8 @@ def train_preference_model(
             "semantic_model": semantic_model or "",
             "semantic_status": semantic_status,
             "label_source": label_source,
+            "review_threshold": review_calibration["threshold"],
+            "review_calibration": review_calibration,
         }
     )
     return model

@@ -65,6 +65,13 @@ class PreferenceFeedbackRequest(BaseModel):
     action: str
 
 
+class ModelReviewActionRequest(BaseModel):
+    """Explicit decision for an image quarantined by automatic filtering."""
+
+    path: str
+    action: str
+
+
 class WallhavenConfigModel(BaseModel):
     categories: str
     top_range: str

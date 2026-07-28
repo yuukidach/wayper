@@ -66,6 +66,25 @@
         });
     }
 
+    function modelReview(purities = [], orient = '', limit = 100) {
+        const params = new URLSearchParams();
+        const activePurities = Array.isArray(purities) ? purities : [purities];
+        const cleanedPurities = activePurities.map(String).filter(Boolean);
+        if (cleanedPurities.length) params.set('purity', cleanedPurities.join(','));
+        if (orient) params.set('orient', orient);
+        if (limit !== null && limit !== undefined) params.set('limit', String(limit));
+        const query = params.toString();
+        return request(`/api/model-review${query ? `?${query}` : ''}`);
+    }
+
+    function modelReviewAction(path, action) {
+        return request('/api/model-review/resolve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, action }),
+        });
+    }
+
     function updateCheck(force = false) {
         const query = force ? '?force=true' : '';
         return request(`/api/update-check${query}`);
@@ -81,6 +100,8 @@
         aiSuggestions,
         preferenceSuggestions,
         preferenceFeedback,
+        modelReview,
+        modelReviewAction,
         updateCheck,
     };
 })();

@@ -218,7 +218,7 @@ function restoreLightboxFocus(previous, reviewPath) {
     if (
         reviewPath
         && typeof document !== 'undefined'
-        && document.activeElement?.closest?.('.model-review-panel')
+        && document.activeElement?.closest?.('.model-review-workspace, .model-review-panel')
     ) {
         return;
     }
@@ -243,13 +243,17 @@ function restoreLightboxFocus(previous, reviewPath) {
     if (!reviewPath) return;
     // A candidate may have been removed while the review lightbox was open.
     // Keep keyboard users in the review surface whenever a replacement exists.
-    const reviewFallback = document.querySelector?.('.model-review-row button:not(:disabled)')
+    const reviewFallback = document.querySelector?.('.model-review-card.active')
+        || document.querySelector?.('.model-review-card:not(.is-busy)')
+        || document.querySelector?.('.model-review-row button:not(:disabled)')
         || document.querySelector?.('.model-review-row:not(.is-busy)');
     if (reviewFallback?.focus) {
         reviewFallback.focus({ preventScroll: true });
         return;
     }
-    const reviewPanel = document.querySelector?.('.model-review-panel');
+    const reviewPanel = document.querySelector?.(
+        '.model-review-workspace, .model-review-panel',
+    );
     if (reviewPanel?.focus) {
         reviewPanel.focus({ preventScroll: true });
     }
@@ -286,7 +290,7 @@ function showLightbox(img) {
     }
 
     lightboxEl = document.createElement('div');
-    lightboxEl.className = 'lightbox';
+    lightboxEl.className = reviewOnly ? 'lightbox review-lightbox' : 'lightbox';
     lightboxEl.tabIndex = -1;
     lightboxEl.setAttribute?.('role', 'dialog');
     lightboxEl.setAttribute?.('aria-modal', 'true');
@@ -309,11 +313,11 @@ function showLightbox(img) {
         </div>
         <div class="lightbox-toolbar">
             ${reviewOnly ? `
-                <button class="lb-btn" data-action="keep" title="Keep (A)">
-                    ${ICONS.favorite(18)}<span>Keep</span><kbd>A</kbd>
+                <button class="lb-btn review-lightbox-decision review-lightbox-ban" data-action="ban" title="Ban (X)">
+                    <span>Ban</span><kbd class="review-keycap">X</kbd>
                 </button>
-                <button class="lb-btn" data-action="ban" title="Ban (X)">
-                    ${ICONS.ban(18)}<span>Ban</span><kbd>X</kbd>
+                <button class="lb-btn review-lightbox-decision review-lightbox-keep" data-action="keep" title="Keep (A)">
+                    <span>Keep</span><kbd class="review-keycap">A</kbd>
                 </button>
             ` : isTrash ? `
                 <button class="lb-btn" data-action="restore" title="Restore to Pool">
@@ -335,7 +339,7 @@ function showLightbox(img) {
                 ${ICONS.externalLink(18)}<span>Wallhaven</span><kbd>O</kbd>
             </button>
         </div>
-        <button class="lightbox-close" title="Close (Esc)">${ICONS.ban(20)}</button>
+        <button class="lightbox-close" title="Close (Esc)">${ICONS.close(20)}</button>
         ${reviewOnly ? '' : `
             <button class="lightbox-nav prev" title="Previous image">${ICONS.chevronLeft()}</button>
             <button class="lightbox-nav next" title="Next image">${ICONS.chevronRight()}</button>

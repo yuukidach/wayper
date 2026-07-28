@@ -9,7 +9,7 @@ from pathlib import Path
 
 import httpx
 
-from .config import WayperConfig
+from .config import WayperConfig, normalize_filter_strategy
 from .image import resize_crop, validate_image
 from .pool import extract_tag_names, favorites_dir, is_blacklisted, pool_dir, save_metadata
 from .tags import normalize_tag
@@ -73,6 +73,9 @@ class WallhavenClient:
         Tags already on Wallhaven's cloud tag_blacklist are skipped entirely
         (they're filtered server-side).
         """
+        if not self._rules_enabled:
+            self._local_exclude_tags = []
+            return [], []
         tags = [t for t in self.config.wallhaven.exclude_tags if t.lower() not in self._cloud_tags]
         if not tags:
             return [], []
@@ -101,6 +104,18 @@ class WallhavenClient:
         if not api_tags:
             return ""
         return " ".join(f'-"{t}"' if " " in t else f"-{t}" for t in api_tags)
+
+    @property
+    def _filter_strategy(self) -> str:
+        return normalize_filter_strategy(self.config.wallhaven.filter_strategy)
+
+    @property
+    def _rules_enabled(self) -> bool:
+        return self._filter_strategy in {"rules", "rules+model"}
+
+    @property
+    def _model_enabled(self) -> bool:
+        return self._filter_strategy in {"model", "rules+model"}
 
     def _download_sorting(self) -> str:
         """Return sorting used for daemon downloads.
@@ -299,6 +314,30 @@ class WallhavenClient:
         target_dir = pool_dir(config, mode, orientation)
         fav_dir = favorites_dir(config, mode, orientation)
 
+        # Loading the model once per batch keeps the normal rules-only path
+        # cheap. Model hits go to a recoverable review queue, so a current model
+        # can participate without passing the unattended-deletion safety gate.
+        model = None
+        model_filter_ready = False
+        model_filter_status: dict[str, object] = {}
+        if self._model_enabled:
+            try:
+                from .preference_model import auto_filter_status, load_preference_model
+
+                model = load_preference_model(config.preference_model_file)
+                model_filter_status = auto_filter_status(config, model)
+                model_filter_ready = bool(model_filter_status.get("ready"))
+                if not model_filter_ready:
+                    log.info(
+                        "Model filter selected for %s/%s but no compatible model is ready; "
+                        "downloads remain eligible until the model is trained",
+                        mode,
+                        orientation,
+                    )
+            except Exception:
+                log.warning("Could not load the model filter; failing open", exc_info=True)
+                model = None
+
         items = await self.search(orientation, mode)
         skipped = {
             "dup": 0,
@@ -307,6 +346,7 @@ class WallhavenClient:
             "uploader": 0,
             "combo": 0,
             "local_tag": 0,
+            "model": 0,
             "min_favorites": 0,
             "fail": 0,
         }
@@ -359,21 +399,95 @@ class WallhavenClient:
                     if detail:
                         item = {**item, **detail}
 
-                    # Skip excluded uploaders (local-only — Wallhaven API has no uploader filter)
-                    uploader = item.get("uploader", "")
-                    if isinstance(uploader, dict):
-                        uploader = uploader.get("username", "")
-                    if uploader and uploader.lower() in excluded_uploaders_lower:
-                        skipped["uploader"] += 1
-                        continue
-
                     tag_names = extract_tag_names(item.get("tags", []))
-                    if self._matches_exclude_combo(tag_names):
-                        skipped["combo"] += 1
-                        continue
-                    if self._matches_local_exclude(tag_names):
-                        skipped["local_tag"] += 1
-                        continue
+                    if self._rules_enabled:
+                        # Skip excluded uploaders (local-only — Wallhaven API
+                        # has no uploader filter).
+                        uploader = item.get("uploader", "")
+                        if isinstance(uploader, dict):
+                            uploader = uploader.get("username", "")
+                        if uploader and uploader.lower() in excluded_uploaders_lower:
+                            skipped["uploader"] += 1
+                            continue
+
+                        if self._matches_exclude_combo(tag_names):
+                            skipped["combo"] += 1
+                            continue
+                        if self._matches_local_exclude(tag_names):
+                            skipped["local_tag"] += 1
+                            continue
+
+                    if model_filter_ready and model is not None:
+                        try:
+                            from .model_review import queue_model_review_item
+                            from .preference_model import (
+                                auto_filter_prediction,
+                                preference_review_decision_score,
+                                preference_review_score,
+                            )
+
+                            model_hit, prediction = auto_filter_prediction(model, item)
+                        except Exception:
+                            log.warning(
+                                "Model filter scoring failed for %s; keeping download eligible",
+                                filename,
+                                exc_info=True,
+                            )
+                            model_hit = False
+                            prediction = None
+                        if model_hit and prediction is not None:
+                            review_dir = config.model_review_dir / mode / orientation
+                            review_dir.mkdir(parents=True, exist_ok=True)
+                            review_dest = review_dir / filename
+                            if review_dest.exists():
+                                skipped["dup"] += 1
+                                continue
+                            if not await self.download_image(url, review_dest):
+                                skipped["fail"] += 1
+                                continue
+                            if mon and not resize_crop(review_dest, mon.width, mon.height):
+                                review_dest.unlink(missing_ok=True)
+                                skipped["fail"] += 1
+                                continue
+                            save_metadata(config, filename, item)
+                            try:
+                                prediction_payload = prediction.to_dict()
+                                prediction_payload.update(
+                                    {
+                                        "review_score": preference_review_score(prediction),
+                                        "decision_score": preference_review_decision_score(
+                                            model,
+                                            prediction,
+                                        ),
+                                        "threshold": model_filter_status.get("threshold"),
+                                        "threshold_kind": model_filter_status.get("threshold_kind"),
+                                        "semantic_threshold": model_filter_status.get(
+                                            "semantic_threshold"
+                                        ),
+                                        "probability_threshold": model.threshold,
+                                        "schema_version": model.schema_version,
+                                        "trained_at": model.trained_at,
+                                    }
+                                )
+                                queue_model_review_item(
+                                    config,
+                                    review_dest,
+                                    purity=mode,
+                                    orientation=orientation,
+                                    prediction=prediction_payload,
+                                    strategy=self._filter_strategy,
+                                )
+                            except Exception:
+                                review_dest.unlink(missing_ok=True)
+                                skipped["fail"] += 1
+                                log.warning(
+                                    "Could not register model review item %s",
+                                    filename,
+                                    exc_info=True,
+                                )
+                                continue
+                            skipped["model"] += 1
+                            continue
 
                     if not await self.download_image(url, dest):
                         skipped["fail"] += 1
@@ -389,7 +503,7 @@ class WallhavenClient:
             "Download[%(mode)s/%(orient)s] results=%(results)d sampled=%(sampled)d "
             "skipped(dup=%(dup)d,fav=%(fav)d,blacklist=%(blacklist)d,"
             "uploader=%(uploader)d,combo=%(combo)d,local_tag=%(local_tag)d,"
-            "min_favorites=%(min_favorites)d,fail=%(fail)d) "
+            "model=%(model)d,min_favorites=%(min_favorites)d,fail=%(fail)d) "
             "downloaded=%(downloaded)d",
             {
                 "mode": mode,

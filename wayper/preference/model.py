@@ -17,6 +17,11 @@ DEFAULT_MAX_COMBO_FEATURES = 0
 DEFAULT_UPLOADER_MIN_SUPPORT = 10
 DEFAULT_EPOCHS = 6
 DEFAULT_THRESHOLD = 0.98
+# Review decisions are recoverable, but false positives still create manual
+# work.  New models replace this fallback with a boundary learned from held-out
+# Keep/Ban decisions.
+DEFAULT_REVIEW_THRESHOLD = 0.20
+DEFAULT_REVIEW_DISLIKE_BOOST = 1.5
 DEFAULT_FAVORITE_WEIGHT = 4.0
 DEFAULT_RECENCY_HALF_LIFE_DAYS = 90
 DEFAULT_FEATURE_NORMALIZATION = "field_l2"
@@ -130,6 +135,59 @@ class PreferencePrediction:
             ),
             "semantic_available": self.semantic_available,
         }
+
+
+def preference_review_score(prediction: PreferencePrediction) -> float:
+    """Return the sparse review margin after a guarded dislike boost.
+
+    Several individually mild keep signals may otherwise erase one learned
+    veto.  The strongest comparable keep signal reduces the boost first, so a
+    stronger keep pattern still protects the image.
+    """
+    dislike = prediction.strongest_review_dislike_score
+    keep = prediction.strongest_review_keep_score
+    boost = DEFAULT_REVIEW_DISLIKE_BOOST * max(0.0, dislike - keep)
+    return prediction.feature_score + boost
+
+
+def preference_review_decision_score(
+    model: PreferenceModel,
+    prediction: PreferencePrediction,
+) -> float:
+    """Return the model margin used by the binary Review decision."""
+    semantic = (
+        model.semantic_blend * prediction.semantic_score
+        if prediction.semantic_available and prediction.semantic_score is not None
+        else 0.0
+    )
+    return preference_review_score(prediction) + semantic
+
+
+def preference_review_threshold(model: PreferenceModel) -> float:
+    """Return a finite learned Review boundary, or the conservative fallback."""
+    value = model.training_summary.get("review_threshold")
+    if isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value):
+        return float(value)
+    return DEFAULT_REVIEW_THRESHOLD
+
+
+def preference_review_has_dislike_evidence(prediction: PreferencePrediction) -> bool:
+    """Require a concrete sparse or semantic dislike signal."""
+    return prediction.strongest_review_dislike_score > 0 or bool(
+        prediction.semantic_available
+        and prediction.semantic_score is not None
+        and prediction.semantic_score > 0
+    )
+
+
+def preference_review_candidate(
+    model: PreferenceModel,
+    prediction: PreferencePrediction,
+) -> bool:
+    """Classify one prediction with the model-specific Review boundary."""
+    return preference_review_has_dislike_evidence(prediction) and (
+        preference_review_decision_score(model, prediction) >= preference_review_threshold(model)
+    )
 
 
 def _contribution_direction(value: object) -> str | None:

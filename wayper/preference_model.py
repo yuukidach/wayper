@@ -30,6 +30,8 @@ from .preference.model import (
     DEFAULT_FEATURE_NORMALIZATION,
     DEFAULT_MAX_COMBO_FEATURES,
     DEFAULT_RECENCY_HALF_LIFE_DAYS,
+    DEFAULT_REVIEW_DISLIKE_BOOST,
+    DEFAULT_REVIEW_THRESHOLD,
     DEFAULT_THRESHOLD,
     DEFAULT_UPLOADER_MIN_SUPPORT,
     LEGACY_MODEL_SCHEMA_VERSION,
@@ -57,6 +59,10 @@ from .preference.model import (
     _pair_keys,
     _sigmoid,
     _storage_feature_key,
+    preference_review_candidate,
+    preference_review_decision_score,
+    preference_review_score,
+    preference_review_threshold,
 )
 from .preference.semantic import (
     DEFAULT_SEMANTIC_BLEND,
@@ -64,6 +70,7 @@ from .preference.semantic import (
     DEFAULT_SEMANTIC_RANK_WEIGHT,
 )
 from .preference.training import (
+    REVIEW_CALIBRATION_VERSION,
     _build_feature_space,
     _evaluate,
     _fit,
@@ -107,6 +114,7 @@ __all__ = [
     "AUTO_SKIP_MIN_PREDICTIONS",
     "AUTO_SKIP_MIN_PRECISION_LOWER_BOUND",
     "DEFAULT_REVIEW_MIN_FEATURE_SCORE",
+    "DEFAULT_REVIEW_MIN_SEMANTIC_SCORE",
     "DEFAULT_REVIEW_DISLIKE_BOOST",
     "DEFAULT_REVIEW_THRESHOLD",
     "DEFAULT_REVIEW_LIMIT",
@@ -164,6 +172,8 @@ __all__ = [
     "train_and_save_local_preference_model",
     "model_report",
     "auto_skip_ready",
+    "auto_filter_status",
+    "auto_filter_prediction",
     "preference_learning_status",
     "preference_deletion_suggestions",
     "schedule_preference_model_retrain",
@@ -173,12 +183,11 @@ __all__ = [
 AUTO_SKIP_MIN_PRECISION = 0.95
 AUTO_SKIP_MIN_PREDICTIONS = 20
 AUTO_SKIP_MIN_PRECISION_LOWER_BOUND = 0.80
-DEFAULT_REVIEW_MIN_FEATURE_SCORE = 0.0
-# Model review is human-confirmed and should retain more recall than automatic
-# filtering. Boost the part of the strongest non-color/non-purity dislike
-# contribution that is not matched by the strongest comparable keep signal.
-DEFAULT_REVIEW_DISLIKE_BOOST = 1.5
-DEFAULT_REVIEW_THRESHOLD = 0.82
+# Legacy diagnostic exports retained for callers that inspected the former
+# two-part recall gate. Binary Review decisions now use the learned combined
+# boundary exposed as ``DEFAULT_REVIEW_THRESHOLD``.
+DEFAULT_REVIEW_MIN_FEATURE_SCORE = -0.2
+DEFAULT_REVIEW_MIN_SEMANTIC_SCORE = 0.006
 DEFAULT_REVIEW_LIMIT = 24
 DEFAULT_REVIEW_REASON_LIMIT = 2
 AUTO_RETRAIN_MIN_FEEDBACK = 10
@@ -366,9 +375,14 @@ def _clean_model_feedback(model: dict[str, object] | None) -> dict[str, object] 
         "schema_version",
         "feature_normalization",
         "trained_at",
+        "threshold",
+        "review_threshold",
+        "semantic_threshold",
+        "filter_strategy",
         "score",
         "feature_score",
         "review_score",
+        "decision_score",
         "strongest_review_dislike_score",
         "strongest_review_keep_score",
         "hybrid_score",
@@ -822,6 +836,8 @@ def model_report(
         "semantic_model": model.semantic_model or None,
         "semantic_dimension": len(model.semantic_weights) or None,
         "semantic_blend": model.semantic_blend if model.semantic_enabled else None,
+        "review_threshold": preference_review_threshold(model),
+        "review_calibration": model.training_summary.get("review_calibration"),
         "label_source": model.training_summary.get("label_source", "legacy"),
         "training": training,
         "validation": model.validation,
@@ -856,6 +872,79 @@ def auto_skip_ready(model: PreferenceModel) -> bool:
     )
 
 
+def auto_filter_status(
+    config: WayperConfig,
+    model: PreferenceModel | None = None,
+) -> dict[str, object]:
+    """Describe whether the model can quarantine downloads for human review.
+
+    A model hit is recoverable: it is downloaded into the Model review queue
+    and requires an explicit Keep or Ban decision.  The high-precision
+    validation gate therefore remains relevant only to unattended deletion,
+    not to this human-reviewed boundary.
+    """
+    path = preference_model_path(config)
+    model = model or load_preference_model(path)
+    if model is None:
+        return {
+            "status": "untrained",
+            "ready": False,
+            "reason": "Train a preference model and review enough candidates first.",
+            "threshold": None,
+            "model": None,
+        }
+    review_calibration = model.training_summary.get("review_calibration")
+    calibration_ready = not isinstance(review_calibration, dict) or (
+        review_calibration.get("available") is True
+    )
+    schema_ready = model.schema_version == MODEL_SCHEMA_VERSION
+    ready = schema_ready and calibration_ready
+    unattended_skip_ready = auto_skip_ready(model)
+    if ready:
+        status = "ready"
+        reason = "Model filtering is active. Likely blocks are held for your review."
+    elif schema_ready:
+        status = "calibration_pending"
+        reason = "More Keep/Ban decisions are needed before accurate model filtering can start."
+    else:
+        status = "upgrade_pending"
+        reason = "Retrain the local model before using it to filter new downloads."
+    return {
+        "status": status,
+        "ready": ready,
+        "reason": reason,
+        "threshold": preference_review_threshold(model),
+        "threshold_kind": "calibrated_review_score",
+        "review_calibration": review_calibration,
+        "unattended_skip_ready": unattended_skip_ready,
+        "model": model_report(model, path),
+    }
+
+
+def auto_filter_prediction(
+    model: PreferenceModel,
+    metadata: dict[str, object],
+) -> tuple[bool, PreferencePrediction]:
+    """Score one download for the recoverable, human-reviewed quarantine."""
+    raw_tags = metadata.get("tags", [])
+    if isinstance(raw_tags, str):
+        tags: list[object] = [raw_tags]
+    elif isinstance(raw_tags, list | tuple | set):
+        tags = [tag.get("name", "") if isinstance(tag, dict) else tag for tag in raw_tags]
+    else:
+        tags = []
+    model_metadata = dict(metadata)
+    model_metadata["tags"] = tags
+    uploader = model_metadata.get("uploader")
+    if isinstance(uploader, dict):
+        model_metadata["uploader"] = uploader.get("username", "")
+    prediction = model.predict(tags, metadata=model_metadata, top_n=12)
+    is_candidate = model.schema_version == MODEL_SCHEMA_VERSION and preference_review_candidate(
+        model, prediction
+    )
+    return is_candidate, prediction
+
+
 def preference_learning_status(
     config: WayperConfig,
     model: PreferenceModel | None = None,
@@ -880,10 +969,20 @@ def preference_learning_status(
     summary = model.training_summary
     stored_label_source = summary.get("label_source", "legacy")
     label_source_changed = stored_label_source != snapshot.label_source
+    review_threshold = summary.get("review_threshold")
+    review_calibration = summary.get("review_calibration")
+    review_boundary_upgrade_due = (
+        not isinstance(review_threshold, int | float)
+        or isinstance(review_threshold, bool)
+        or not math.isfinite(review_threshold)
+        or not isinstance(review_calibration, dict)
+        or review_calibration.get("version") != REVIEW_CALIBRATION_VERSION
+    )
     upgrade_due = (
         model.schema_version != MODEL_SCHEMA_VERSION
         or model.feature_normalization != DEFAULT_FEATURE_NORMALIZATION
         or label_source_changed
+        or review_boundary_upgrade_due
     )
     previous_revision = summary.get("feedback_revision", 0)
     if not isinstance(previous_revision, int):
@@ -909,6 +1008,7 @@ def preference_learning_status(
         "upgrade_due": upgrade_due,
         "label_source": snapshot.label_source,
         "label_source_changed": label_source_changed,
+        "review_boundary_upgrade_due": review_boundary_upgrade_due,
         "pending_feedback": pending_feedback,
         "changed_examples": changed_examples,
         "weight_refresh_due": weight_refresh_due,
@@ -924,17 +1024,8 @@ def preference_learning_status(
 
 
 def _preference_review_score(prediction: PreferencePrediction) -> float:
-    """Return a human-review score with one guarded dislike boost.
-
-    Several individually mild keep signals may otherwise erase a learned veto
-    when summed. The strongest comparable keep signal first reduces the boost,
-    and a signal at least as strong suppresses it entirely. This protects clear
-    counter-patterns instead of blindly chasing every positive coefficient.
-    """
-    dislike = prediction.strongest_review_dislike_score
-    keep = prediction.strongest_review_keep_score
-    boost = DEFAULT_REVIEW_DISLIKE_BOOST * max(0.0, dislike - keep)
-    return prediction.feature_score + boost
+    """Compatibility wrapper for the shared Review score implementation."""
+    return preference_review_score(prediction)
 
 
 def _diversify_preference_review_rank(
@@ -1082,8 +1173,10 @@ def preference_deletion_suggestions(
     scored_images = len(records)
     positive_evidence_images = 0
     semantic_evidence_images = 0
+    semantic_scored_images = 0
     best_score: float | None = None
     best_review_score: float | None = None
+    best_decision_score: float | None = None
     best_semantic_score: float | None = None
     scored: list[dict[str, object]] = []
     for (image, filename, _meta), prediction in zip(records, predictions, strict=True):
@@ -1092,23 +1185,18 @@ def preference_deletion_suggestions(
             if best_score is None or prediction.feature_score > best_score:
                 best_score = prediction.feature_score
         if prediction.semantic_available and prediction.semantic_score is not None:
+            semantic_scored_images += 1
             if prediction.semantic_score > 0:
                 semantic_evidence_images += 1
             if best_semantic_score is None or prediction.semantic_score > best_semantic_score:
                 best_semantic_score = prediction.semantic_score
-        review_score = _preference_review_score(prediction)
+        review_score = preference_review_score(prediction)
+        decision_score = preference_review_decision_score(model, prediction)
         if best_review_score is None or review_score > best_review_score:
             best_review_score = review_score
-        exact_candidate = (
-            review_score > DEFAULT_REVIEW_MIN_FEATURE_SCORE
-            and prediction.positive_evidence_count > 0
-        )
-        semantic_candidate = bool(
-            prediction.semantic_available
-            and prediction.semantic_score is not None
-            and prediction.semantic_score >= 0
-        )
-        if not exact_candidate and not semantic_candidate:
+        if best_decision_score is None or decision_score > best_decision_score:
+            best_decision_score = decision_score
+        if not preference_review_candidate(model, prediction):
             continue
         scored.append(
             {
@@ -1116,15 +1204,12 @@ def preference_deletion_suggestions(
                 "name": filename,
                 "prediction": prediction,
                 "review_score": review_score,
+                "decision_score": decision_score,
                 "semantic_score": prediction.semantic_score or 0.0,
             }
         )
 
-    semantic_enabled = any(
-        isinstance(item["prediction"], PreferencePrediction)
-        and item["prediction"].semantic_available
-        for item in scored
-    )
+    semantic_enabled = model.semantic_enabled and semantic_scored_images > 0
     if semantic_enabled:
         base_percentiles = _descending_percentiles(
             [{"name": item["name"], "review_score": item["review_score"]} for item in scored],
@@ -1145,13 +1230,16 @@ def preference_deletion_suggestions(
             scored,
             key=lambda item: (
                 -float(item["hybrid_score"]),
+                -float(item["decision_score"]),
                 -item["prediction"].feature_score,
                 str(item["name"]),
             ),
         ),
     )
+    ranked_pool_count = len(ranked_all)
+    ranked_page = ranked_all[: max(1, limit)]
     candidates: list[dict[str, object]] = []
-    for rank, item in enumerate(ranked_all, 1):
+    for rank, item in enumerate(ranked_page, 1):
         prediction = item["prediction"]
         all_rank = rank
         candidates.append(
@@ -1161,6 +1249,7 @@ def preference_deletion_suggestions(
                 "score": round(prediction.score, 4),
                 "feature_score": round(prediction.feature_score, 4),
                 "review_score": round(float(item["review_score"]), 4),
+                "decision_score": round(float(item["decision_score"]), 4),
                 "hybrid_score": round(float(item["hybrid_score"]), 4),
                 "semantic_score": (
                     round(prediction.semantic_score, 4)
@@ -1207,9 +1296,10 @@ def preference_deletion_suggestions(
     candidates.sort(key=lambda item: (int(item["rank"]), str(item["name"])))
     return {
         "status": "ready",
-        "items": candidates[: max(1, limit)],
+        "items": candidates,
         "learning": learning,
         "model": model_report(model, model_path, learning=learning),
+        "review_threshold": preference_review_threshold(model),
         "review_strategy": "hybrid_semantic_rank" if semantic_enabled else "boosted_dislike_rank",
         "diagnostics": {
             "pool_images": pool_images,
@@ -1217,11 +1307,18 @@ def preference_deletion_suggestions(
             "scored_images": scored_images,
             "positive_evidence_images": positive_evidence_images,
             "semantic_evidence_images": semantic_evidence_images,
-            "candidate_count": len(candidates),
+            "semantic_scored_images": semantic_scored_images,
+            "candidate_count": ranked_pool_count,
+            "returned_count": len(candidates),
+            "ranked_pool_count": ranked_pool_count,
             "best_feature_score": round(best_score, 4) if best_score is not None else None,
             "best_review_score": round(best_review_score, 4)
             if best_review_score is not None
             else None,
+            "best_decision_score": round(best_decision_score, 4)
+            if best_decision_score is not None
+            else None,
+            "review_threshold": preference_review_threshold(model),
             "best_semantic_score": round(best_semantic_score, 4)
             if best_semantic_score is not None
             else None,
@@ -1482,15 +1579,24 @@ def _save_automatic_preference_model(
             ):
                 return False
             current_model = load_preference_model(path)
+            current_summary = current_model.training_summary if current_model is not None else {}
+            current_threshold = current_summary.get("review_threshold")
+            current_calibration = current_summary.get("review_calibration")
+            review_boundary_current = (
+                isinstance(current_threshold, int | float)
+                and not isinstance(current_threshold, bool)
+                and math.isfinite(current_threshold)
+                and isinstance(current_calibration, dict)
+                and current_calibration.get("version") == REVIEW_CALIBRATION_VERSION
+            )
             if (
                 current_model is not None
-                and current_model.training_summary.get("training_data_signature")
-                == current.data_signature
-                and current_model.training_summary.get("label_source", "legacy")
-                == current.label_source
+                and current_summary.get("training_data_signature") == current.data_signature
+                and current_summary.get("label_source", "legacy") == current.label_source
+                and review_boundary_current
             ):
                 # A manual fit (or another worker) already covered exactly the
-                # same snapshot. Preserve its chosen hyperparameters.
+                # same snapshot and calibration. Preserve its hyperparameters.
                 return True
             _write_preference_model_unlocked(model, path)
             return True

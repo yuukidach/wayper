@@ -18,7 +18,8 @@ function createTypeBadge(type) {
 const ICONS = {
     setWallpaper: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`,
     favorite: (s = 16, filled = false) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`,
-    ban: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`,
+    ban: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg>`,
+    close: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>`,
     restore: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path></svg>`,
     externalLink: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`,
     chevronLeft: (s = 24) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>`,
@@ -43,7 +44,7 @@ function focusedCardImage() {
 
 // State
 let appState = {
-    mode: 'pool', // pool, favorites, trash
+    mode: 'pool', // pool, favorites, trash, model-review
     purity: ['sfw'], // active purities: subset of ['sfw', 'sketchy', 'nsfw']
     monitors: [],
     selectedMonitor: null, // monitor name
@@ -68,6 +69,15 @@ let appState = {
     aiStartTime: null,             // Timestamp when AI analysis started
     aiTimer: null,                 // Interval ID for elapsed time updates
     preferenceSuggestions: null,   // Local metadata-model image review candidates
+    modelReviewData: null,          // Auto-filter quarantine queue
+    modelReviewContextKey: null,    // Purity/orientation represented by modelReviewData
+    modelReviewRecommendationCache: new Map(), // Makes repeat entry immediate
+    modelReviewRecommendationRequests: new Map(), // Coalesces background ranking work
+    modelReviewSelectedPath: null,  // Item currently inspected in the review workspace
+    modelReviewSource: null,        // Visible review lane: held or recommended
+    modelReviewActionInFlight: new Set(), // Paths being resolved from the workspace
+    modelReviewStrategySaving: false, // Prevent concurrent strategy toggles
+    modelReviewResolvedPaths: new Set(), // Decisions made during the current queue view
     preferenceSuggestionRequestId: 0, // Invalidates stale model-review responses
     preferenceReviewContextKey: null, // Purity/orientation context for the candidate queue
     preferenceReviewResolvedPaths: new Set(), // Candidates already acted on in this view
@@ -90,6 +100,8 @@ let appState = {
     loadingMoreImages: false,
     imageRequestId: 0,
     currentOrient: 'landscape',
+    loadedImageMode: null,          // Library mode represented by images/allImages
+    loadedImageContextKey: null,    // Purity/orientation represented by the cached library
 
     // Layout
     gridColumns: 1
@@ -153,6 +165,11 @@ const els = {
     btnPool: document.getElementById('btn-pool'),
     btnFavorites: document.getElementById('btn-favorites'),
     btnBlocklist: document.getElementById('btn-blocklist'),
+    btnModelReview: document.getElementById('btn-model-review'),
+    btnFilterRules: document.getElementById('btn-filter-rules'),
+    btnFilterModel: document.getElementById('btn-filter-model'),
+    btnFilterBoth: document.getElementById('btn-filter-both'),
+    filterStrategySummary: document.getElementById('filter-strategy-summary'),
 
     btnPuritySfw: document.getElementById('btn-purity-sfw'),
     btnPuritySketchy: document.getElementById('btn-purity-sketchy'),
@@ -180,6 +197,7 @@ const els = {
     countPool: document.getElementById('count-pool'),
     countFavorites: document.getElementById('count-favorites'),
     countBlocklist: document.getElementById('count-blocklist'),
+    countModelReview: document.getElementById('count-model-review'),
 
     // Search
     searchInput: document.getElementById('search-input'),
@@ -187,6 +205,10 @@ const els = {
     searchClear: document.getElementById('search-clear'),
     searchDropdown: document.getElementById('search-dropdown'),
 };
+
+function isModelReviewMode() {
+    return appState.mode === 'model-review';
+}
 
 // Init
 document.addEventListener('DOMContentLoaded', init);
@@ -218,6 +240,9 @@ async function init() {
     await Promise.all([fetchConfig(), fetchMonitors(), ensureDaemon()]);
     // Phase 2: all depend on config/monitors being ready
     await Promise.all([fetchStatus(), fetchDiskUsage(), refreshImages()]);
+    if (typeof scheduleModelReviewPrefetch === 'function') {
+        scheduleModelReviewPrefetch();
+    }
 
     // Initial metrics update after images loaded (or attempted)
     setTimeout(updateGridMetrics, 500);
@@ -249,6 +274,20 @@ function setupEventListeners() {
     els.btnPool.onclick = () => setViewMode('pool');
     els.btnFavorites.onclick = () => setViewMode('favorites');
     els.btnBlocklist.onclick = () => setViewMode('trash');
+    if (els.btnModelReview) els.btnModelReview.onclick = () => setViewMode('model-review');
+
+    // The filtering strategy is a first-class workflow control rather than a
+    // buried setting.  It is persisted immediately so the sidebar always
+    // reflects the boundary used by the daemon.
+    for (const button of [els.btnFilterRules, els.btnFilterModel, els.btnFilterBoth]) {
+        if (!button) continue;
+        button.onclick = () => setFilterStrategy(button.dataset.strategy);
+        button.onkeydown = event => {
+            if (typeof handleFilterStrategyKeydown === 'function') {
+                handleFilterStrategyKeydown(event);
+            }
+        };
+    }
 
     // Sidebar: Purity toggles
     els.btnPuritySfw.onclick = () => toggleSinglePurity('sfw');
@@ -321,6 +360,16 @@ function handleGlobalKeydown(e) {
     if (e.target.tagName === 'INPUT' && e.target.id !== 'search-input') return;
     if (e.target.id === 'search-input') return; // handled by handleSearchKeydown
 
+    // Settings hides the gallery toolbar, so its shortcuts must not mutate a
+    // wallpaper behind the form. Escape/S is the only global action here.
+    if (appState.view === 'settings') {
+        if (e.key === 'Escape' || e.key === 's' || e.key === 'S') {
+            e.preventDefault();
+            switchView('grid');
+        }
+        return;
+    }
+
     // Model-review rows have their own keyboard actions.  Keep this guard
     // before the gallery shortcuts: otherwise X/Delete would ban the current
     // wallpaper and Enter/Space would open an unrelated focused card.
@@ -336,6 +385,47 @@ function handleGlobalKeydown(e) {
             // Even if a stale row is between data refreshes, never let a
             // review key fall through to a destructive gallery shortcut.
             if (handled || reviewKeys.includes(e.key)) return;
+        }
+
+        // The whole card deck owns the same shortcuts as the full preview.
+        // Consume review keys even when the deck is empty so X/Delete can
+        // never fall through to the unrelated current-wallpaper action.
+        if (isModelReviewMode() && appState.view === 'grid') {
+            const selected = typeof selectedModelReviewItem === 'function'
+                ? selectedModelReviewItem()
+                : null;
+            const focusedButton = e.target?.closest?.('button');
+            if ((e.key === 'Enter' || e.key === ' ') && focusedButton) return;
+            if (['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight'].includes(e.key)) {
+                e.preventDefault();
+                const direction = ['ArrowUp', 'ArrowLeft'].includes(e.key) ? -1 : 1;
+                if (typeof moveModelReviewSelection === 'function') {
+                    moveModelReviewSelection(direction);
+                }
+                return;
+            }
+            if ((e.key === 'Enter' || e.key === ' ') && selected) {
+                e.preventDefault();
+                if (typeof previewPreferenceSuggestion === 'function') {
+                    previewPreferenceSuggestion(selected, e);
+                }
+                return;
+            }
+            if ((e.key === 'a' || e.key === 'A') && selected) {
+                e.preventDefault();
+                void resolveModelReviewDecision(selected, 'keep');
+                return;
+            }
+            if ((e.key === 'x' || e.key === 'X' || e.key === 'Delete') && selected) {
+                e.preventDefault();
+                void resolveModelReviewDecision(selected, 'ban');
+                return;
+            }
+            if (['Enter', ' ', 'a', 'A', 'x', 'X', 'Delete'].includes(e.key)) return;
+            if (['/', 'h', 'l', 'f', 'o', 'u', 'g', 'G'].includes(e.key)) {
+                e.preventDefault();
+                return;
+            }
         }
     }
 
@@ -437,6 +527,20 @@ function handleGlobalKeydown(e) {
     // Check if a card is focused
     const focusedCard = document.activeElement && document.activeElement.classList.contains('wallpaper-card') ? document.activeElement : null;
 
+    // Number keys select monitors in their rendered order (1 = first monitor,
+    // 2 = second monitor, etc.).  Keep this ahead of the view shortcuts so
+    // monitor navigation remains predictable as the sidebar evolves.
+    if (/^[1-9]$/.test(e.key)) {
+        const monitor = appState.monitors[Number(e.key) - 1];
+        if (monitor) {
+            e.preventDefault();
+            appState.selectedMonitor = monitor.name;
+            renderMonitors();
+            refreshImages();
+        }
+        return;
+    }
+
     switch(e.key) {
         case 'Escape':
             if (appState.reviewingTag) {
@@ -490,14 +594,21 @@ function handleGlobalKeydown(e) {
             if (_pendingG) { clearTimeout(_pendingG); _pendingG = null; }
             scrollToLast();
             break;
-        case '1':
+        case 'p':
+        case 'P':
             setViewMode('pool');
             break;
-        case '2':
+        case 'v':
+        case 'V':
             setViewMode('favorites');
             break;
-        case '3':
+        case 'b':
+        case 'B':
             setViewMode('trash');
+            break;
+        case 'm':
+        case 'M':
+            setViewMode('model-review');
             break;
         case '/':
             e.preventDefault();
@@ -534,15 +645,6 @@ function handleGlobalKeydown(e) {
         navigateGrid(e.key);
     }
 
-    // Monitor shortcuts (4-9)
-    if (e.key >= '4' && e.key <= '9') {
-        const idx = parseInt(e.key) - 4;
-        if (appState.monitors[idx]) {
-            appState.selectedMonitor = appState.monitors[idx].name;
-            renderMonitors();
-            refreshImages();
-        }
-    }
 }
 
 // Debounce helper

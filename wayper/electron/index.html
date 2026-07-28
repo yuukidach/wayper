@@ -9,7 +9,7 @@
     <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap"></noscript>
     <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body data-view="grid" data-mode="pool">
     <header>
         <div class="header-brand">
             <h1>Wayper</h1>
@@ -80,14 +80,39 @@
                 <h3>Library</h3>
                 <div class="nav-group">
                      <button id="btn-pool" class="nav-item active">
-                        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span> Pool <span id="count-pool" class="badge"></span><kbd>1</kbd>
+                        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span> Pool <span id="count-pool" class="badge"></span><kbd>P</kbd>
                      </button>
                      <button id="btn-favorites" class="nav-item">
-                        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></span> Favorites <span id="count-favorites" class="badge"></span><kbd>2</kbd>
+                        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></span> Favorites <span id="count-favorites" class="badge"></span><kbd>V</kbd>
                      </button>
-                     <button id="btn-blocklist" class="nav-item">
-                        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg></span> Blocklist <span id="count-blocklist" class="badge"></span><kbd>3</kbd>
-                     </button>
+                </div>
+            </div>
+
+            <div class="sidebar-section filtering-sidebar-section">
+                <h3>Filtering</h3>
+                <div class="filtering-panel">
+                    <div class="nav-group filtering-nav-group" aria-label="Filtering workflows">
+                        <button id="btn-model-review" class="nav-item filter-nav-item model-review-nav" title="Model review queue" aria-label="Model review">
+                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="13" height="16" rx="2"/><path d="M4 7v12a2 2 0 0 0 2 2h10"/></svg></span>
+                            <span class="filter-nav-copy"><span class="filter-nav-title">Model</span></span>
+                            <span id="count-model-review" class="badge"></span><kbd>M</kbd>
+                        </button>
+                        <button id="btn-blocklist" class="nav-item filter-nav-item" title="Blocklist and tag rules" aria-label="Blocklist and tag rules">
+                            <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg></span>
+                            <span class="filter-nav-copy"><span class="filter-nav-title">Blocklist</span></span>
+                            <span id="count-blocklist" class="badge"></span><kbd>B</kbd>
+                        </button>
+                    </div>
+                    <div class="filter-mode-block">
+                        <div class="filter-mode-heading">
+                            <span class="model-filter-label">Automatic filtering</span>
+                        </div>
+                        <div id="filter-strategy-control" class="filter-strategy-control" role="radiogroup" aria-label="Automatic filter strategy">
+                            <button id="btn-filter-rules" class="filter-strategy-btn" data-strategy="rules" role="radio" aria-label="Rules only">Rules</button>
+                            <button id="btn-filter-model" class="filter-strategy-btn" data-strategy="model" role="radio" aria-label="Model only">Model</button>
+                            <button id="btn-filter-both" class="filter-strategy-btn" data-strategy="rules+model" role="radio" aria-label="Rules and model">Both</button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -165,29 +190,29 @@
                         </div>
                         <div class="field">
                             <label for="input-pause-on-lock">Pause on Lock</label>
-                            <div class="toggle-label">
-                                <div class="toggle-switch">
+                            <label class="toggle-label" for="input-pause-on-lock">
+                                <span class="toggle-switch">
                                     <input type="checkbox" id="input-pause-on-lock">
                                     <span class="toggle-slider"></span>
-                                </div>
-                            </div>
+                                </span>
+                            </label>
                             <small class="hint">Pause wallpaper rotation when screen is locked</small>
                         </div>
                         <div class="field">
                             <label for="input-safe-mode">Safe Mode</label>
-                            <div class="toggle-label">
-                                <div class="toggle-switch">
+                            <label class="toggle-label" for="input-safe-mode">
+                                <span class="toggle-switch">
                                     <input type="checkbox" id="input-safe-mode">
                                     <span class="toggle-slider"></span>
-                                </div>
-                            </div>
+                                </span>
+                            </label>
                             <small class="hint">Lock purity to SFW only</small>
                         </div>
                         <div class="field">
                             <label for="input-blacklist-ttl">Blacklist Expiry (days)</label>
-                            <div style="display:flex;align-items:center;gap:8px">
-                                <input type="number" id="input-blacklist-ttl" min="1" value="30" style="flex:1">
-                                <label style="white-space:nowrap;font-size:0.85em;display:flex;align-items:center;gap:4px;cursor:pointer">
+                            <div class="settings-inline-row">
+                                <input class="settings-inline-grow" type="number" id="input-blacklist-ttl" min="1" value="30">
+                                <label class="settings-checkbox-option">
                                     <input type="checkbox" id="input-blacklist-never"> Never expire
                                 </label>
                             </div>

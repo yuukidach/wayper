@@ -30,6 +30,8 @@ from wayper.preference_model import (
     _save_manual_preference_model,
     _temporal_split,
     _training_data_signature,
+    auto_filter_prediction,
+    auto_filter_status,
     auto_skip_ready,
     build_training_examples,
     collect_preference_training_snapshot,
@@ -487,6 +489,44 @@ class PreferenceModelTest(unittest.TestCase):
         self.assertTrue(model.validation["available"])
         self.assertIn("precision_at_threshold", model.validation)
 
+    def test_review_boundary_is_learned_from_recent_explicit_holdout(self) -> None:
+        examples = [
+            *[
+                PreferenceExample(
+                    filename=f"ban-{index}.jpg",
+                    tags=("bad", "detail"),
+                    label=1,
+                    base_weight=1.0,
+                    timestamp=1_700_000_000 + index,
+                    is_explicit_ban=True,
+                )
+                for index in range(30)
+            ],
+            *[
+                PreferenceExample(
+                    filename=f"keep-{index}.jpg",
+                    tags=("good", "detail"),
+                    label=0,
+                    base_weight=1.0,
+                    timestamp=1_700_001_000 + index,
+                    is_explicit_keep=True,
+                )
+                for index in range(30)
+            ],
+        ]
+
+        model = train_preference_model(examples, epochs=8, validation_days=0)
+        calibration = model.training_summary["review_calibration"]
+        held, _ = auto_filter_prediction(model, {"tags": ["bad", "detail"]})
+        kept, _ = auto_filter_prediction(model, {"tags": ["good", "detail"]})
+
+        self.assertTrue(calibration["available"])
+        self.assertEqual(calibration["source"], "stratified_recent_holdout")
+        self.assertGreaterEqual(calibration["precision"], 0.8)
+        self.assertEqual(model.training_summary["review_threshold"], calibration["threshold"])
+        self.assertTrue(held)
+        self.assertFalse(kept)
+
     def test_explicit_keep_uses_feedback_time_and_strong_weight(self) -> None:
         examples = build_training_examples(
             {"kept.jpg": {"tags": ["calm"], "downloaded_at": 1}},
@@ -708,6 +748,87 @@ class PreferenceModelTest(unittest.TestCase):
             item["strongest_review_dislike_score"],
         )
 
+    def test_semantic_rank_does_not_promote_scores_below_the_review_boundary(self) -> None:
+        model = PreferenceModel(
+            bias=0.0,
+            prior_log_odds=0.0,
+            tag_weights={},
+            combo_weights={},
+            context_weights={},
+            threshold=0.98,
+            trained_at="test",
+            training_summary={},
+            validation={},
+            combo_min_support=20,
+            max_combo_features=0,
+            semantic_model="test-semantic-model",
+            semantic_weights=(1.0,),
+            semantic_blend=0.65,
+            semantic_rank_weight=1.0,
+        )
+        predictions = (
+            PreferencePrediction(
+                probability=0.49,
+                score=-0.1,
+                feature_score=-0.1,
+                contributions=(),
+                semantic_score=-0.01,
+                semantic_probability=0.4975,
+                semantic_available=True,
+            ),
+            PreferencePrediction(
+                probability=0.48,
+                score=-0.2,
+                feature_score=-0.2,
+                contributions=(),
+                semantic_score=-0.02,
+                semantic_probability=0.495,
+                semantic_available=True,
+            ),
+            PreferencePrediction(
+                probability=0.47,
+                score=-0.3,
+                feature_score=-0.3,
+                contributions=(),
+                semantic_score=-0.03,
+                semantic_probability=0.4925,
+                semantic_available=True,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            pool = config.download_dir / "sfw" / "landscape"
+            pool.mkdir(parents=True)
+            (pool / "higher.jpg").touch()
+            (pool / "lower.jpg").touch()
+            (pool / "lowest.jpg").touch()
+            config.metadata_file.write_text(
+                json.dumps(
+                    {
+                        "higher.jpg": {"tags": ["first"]},
+                        "lower.jpg": {"tags": ["second"]},
+                        "lowest.jpg": {"tags": ["third"]},
+                    }
+                )
+            )
+            save_preference_model(model, config.preference_model_file)
+
+            with patch.object(PreferenceModel, "predict_many", return_value=predictions):
+                suggestions = preference_deletion_suggestions(
+                    config,
+                    purities=("sfw",),
+                    orientation="landscape",
+                    limit=2,
+                )
+
+        self.assertEqual(suggestions["review_strategy"], "hybrid_semantic_rank")
+        self.assertEqual(suggestions["items"], [])
+        self.assertEqual(suggestions["diagnostics"]["candidate_count"], 0)
+        self.assertEqual(suggestions["diagnostics"]["returned_count"], 0)
+        self.assertEqual(suggestions["diagnostics"]["ranked_pool_count"], 0)
+        self.assertEqual(suggestions["diagnostics"]["semantic_scored_images"], 3)
+        self.assertEqual(suggestions["diagnostics"]["semantic_evidence_images"], 0)
+
     def test_review_boost_ignores_broad_color_and_purity_signals(self) -> None:
         model = PreferenceModel(
             bias=0.0,
@@ -790,6 +911,32 @@ class PreferenceModelTest(unittest.TestCase):
 
         self.assertTrue(status["stale"])
         self.assertEqual(status["pending_feedback"], 10)
+        self.assertTrue(status["due"])
+
+    def test_model_without_review_calibration_is_scheduled_for_upgrade(self) -> None:
+        examples = [
+            *_examples("ban", 10, ("bad", "detail"), 1),
+            *_examples("keep", 10, ("good", "detail"), 0, start=1_700_001_000),
+        ]
+        model = train_preference_model(examples, validation_days=0)
+        model.training_summary.pop("review_threshold")
+        model.training_summary.pop("review_calibration")
+        snapshot = PreferenceTrainingSnapshot(
+            examples=tuple(examples),
+            feedback_revision=0,
+            data_signature=_training_data_signature(examples),
+            favorite_files=0,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            status = preference_learning_status(
+                WayperConfig(download_dir=Path(td)),
+                model,
+                snapshot,
+            )
+
+        self.assertTrue(status["review_boundary_upgrade_due"])
+        self.assertTrue(status["upgrade_due"])
         self.assertTrue(status["due"])
 
     def test_snapshot_switches_to_model_review_labels_after_first_review_event(self) -> None:
@@ -1058,6 +1205,125 @@ class PreferenceModelTest(unittest.TestCase):
             "precision_lower_bound": 0.2,
         }
         self.assertFalse(auto_skip_ready(model))
+
+    def test_human_review_filter_does_not_require_unattended_skip_validation(self) -> None:
+        model = PreferenceModel(
+            bias=-2.0,
+            prior_log_odds=0.0,
+            tag_weights={"likely block": 1.0, "likely keep": -1.0},
+            combo_weights={},
+            context_weights={"uploader:blocked user": 3.0},
+            threshold=0.98,
+            trained_at="test",
+            training_summary={},
+            validation={"available": False, "calibrated": False},
+            combo_min_support=20,
+            max_combo_features=0,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            status = auto_filter_status(WayperConfig(download_dir=Path(td)), model)
+
+        held, held_prediction = auto_filter_prediction(
+            model,
+            {"tags": [{"name": "likely block"}]},
+        )
+        kept, _ = auto_filter_prediction(model, {"tags": ["likely keep"]})
+        uploader_held, _ = auto_filter_prediction(
+            model,
+            {"tags": ["unknown"], "uploader": {"username": "blocked user"}},
+        )
+
+        self.assertTrue(status["ready"])
+        self.assertEqual(status["status"], "ready")
+        self.assertEqual(status["threshold_kind"], "calibrated_review_score")
+        self.assertEqual(status["threshold"], 0.2)
+        self.assertFalse(status["unattended_skip_ready"])
+        self.assertTrue(held)
+        self.assertLess(held_prediction.probability, model.threshold)
+        self.assertTrue(uploader_held)
+        self.assertFalse(kept)
+
+    def test_human_review_filter_rejects_weak_dislike_evidence_below_boundary(self) -> None:
+        model = PreferenceModel(
+            bias=0.0,
+            prior_log_odds=0.0,
+            tag_weights={
+                "risk": 0.1,
+                "clear risk": 0.5,
+                "counter": -0.25,
+                "strong counter": -0.5,
+            },
+            combo_weights={},
+            context_weights={},
+            threshold=0.98,
+            trained_at="test",
+            training_summary={},
+            validation={},
+            combo_min_support=20,
+            max_combo_features=0,
+        )
+
+        weak, weak_prediction = auto_filter_prediction(
+            model,
+            {"tags": ["risk", "counter"]},
+        )
+        clear, _ = auto_filter_prediction(model, {"tags": ["clear risk"]})
+        protected, _ = auto_filter_prediction(
+            model,
+            {"tags": ["risk", "strong counter"]},
+        )
+
+        self.assertFalse(weak)
+        self.assertLess(weak_prediction.feature_score, 0)
+        self.assertTrue(clear)
+        self.assertFalse(protected)
+
+    def test_human_review_filter_accepts_semantic_evidence_only_above_shared_boundary(self) -> None:
+        model = PreferenceModel(
+            bias=0.0,
+            prior_log_odds=0.0,
+            tag_weights={},
+            combo_weights={},
+            context_weights={},
+            threshold=0.98,
+            trained_at="test",
+            training_summary={},
+            validation={},
+            combo_min_support=20,
+            max_combo_features=0,
+            semantic_model="test-semantic-model",
+            semantic_weights=(1.0,),
+            semantic_blend=0.65,
+        )
+        semantic_hit = PreferencePrediction(
+            probability=0.5,
+            score=0.0,
+            feature_score=0.0,
+            contributions=(),
+            semantic_score=0.8,
+            semantic_probability=0.69,
+            semantic_available=True,
+        )
+        semantic_keep = PreferencePrediction(
+            probability=0.5,
+            score=0.0,
+            feature_score=0.0,
+            contributions=(),
+            semantic_score=-0.8,
+            semantic_probability=0.31,
+            semantic_available=True,
+        )
+
+        with patch.object(
+            PreferenceModel,
+            "predict",
+            side_effect=(semantic_hit, semantic_keep),
+        ):
+            held, _ = auto_filter_prediction(model, {"tags": ["unseen dislike"]})
+            kept, _ = auto_filter_prediction(model, {"tags": ["unseen keep"]})
+
+        self.assertTrue(held)
+        self.assertFalse(kept)
 
     def test_score_without_input_preserves_json_output(self) -> None:
         examples = [
