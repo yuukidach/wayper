@@ -1541,7 +1541,11 @@ def run():
     atexit.register(lambda: pf.unlink(missing_ok=True))
 
     log.info("API server starting on port %d", port)
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    # PyInstaller's windowed Windows executable has no stdout/stderr streams.
+    # Uvicorn's default formatter probes sys.stdout.isatty(), which crashes the
+    # backend before it starts listening. Wayper already configured its file
+    # logger above, so avoid Uvicorn's console-oriented logging configuration.
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info", log_config=None)
 
 
 if __name__ == "__main__":

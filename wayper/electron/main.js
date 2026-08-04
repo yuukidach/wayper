@@ -1,8 +1,8 @@
 const { app, BrowserWindow, Menu, shell, ipcMain, dialog, screen } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
-const http = require('http')
 const fs = require('fs')
+const { waitForApi } = require('./backend-readiness')
 
 let backendProcess = null
 let mainWindow = null
@@ -93,29 +93,15 @@ function startBackend() {
   return true
 }
 
-function waitForPortFile(timeout = 10000) {
-  return new Promise((resolve) => {
-    const portFile = getPortFilePath()
-    const deadline = Date.now() + timeout
-    const check = () => {
-      try {
-        const port = parseInt(fs.readFileSync(portFile, 'utf-8').trim(), 10)
-        if (port > 0) {
-          console.log(`API port: ${port}`)
-          process.env.WAYPER_API_PORT = String(port)
-          resolve(port)
-          return
-        }
-      } catch (_) { /* not ready */ }
-      if (Date.now() < deadline) {
-        setTimeout(check, 200)
-      } else {
-        console.warn('Port file not found within timeout')
-        resolve(0)
-      }
-    }
-    check()
-  })
+async function waitForBackend(timeout = 10000) {
+  const port = await waitForApi(getPortFilePath(), { timeout })
+  if (port > 0) {
+    console.log(`API ready on port: ${port}`)
+    process.env.WAYPER_API_PORT = String(port)
+  } else {
+    console.warn('API did not become ready within timeout')
+  }
+  return port
 }
 
 function killBackend() {
@@ -226,7 +212,7 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
-// IPC handler: renderer asks for the API port (cached from env var set by launcher/waitForPortFile)
+// IPC handler: renderer asks for the API port (cached by the launcher/readiness check)
 ipcMain.handle('get-api-port', () => {
   return parseInt(process.env.WAYPER_API_PORT || '0', 10)
 })
@@ -311,9 +297,9 @@ if (!gotTheLock) {
     }
     buildMenu()
     const backendStarted = startBackend()
-    // In packaged mode, wait for the API to write its port file
+    // In packaged mode, wait until the API is actually accepting requests.
     if (backendStarted) {
-      await waitForPortFile()
+      await waitForBackend()
     }
     createWindow()
 
