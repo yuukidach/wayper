@@ -1,6 +1,6 @@
 [project]
 name = "wayper"
-version = "1.6.11"
+version = "1.7.0"
 description = "Cross-platform wallpaper manager with Wallhaven integration"
 requires-python = ">=3.12"
 dependencies = [
@@ -23,8 +23,10 @@ dev = ["pytest>=8.0", "ruff>=0.8"]
 
 [project.scripts]
 wayper = "wayper.cli:cli"
-wayper-gui = "wayper.server.launcher:run_app"
 wayper-mcp = "wayper.mcp_server:main"
+
+[project.gui-scripts]
+wayper-gui = "wayper.server.launcher:run_app"
 
 [build-system]
 requires = ["hatchling"]

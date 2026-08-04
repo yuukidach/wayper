@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from wayper.process import windows_no_window_kwargs
 from wayper.server.api import port_file
 from wayper.server.api import run as run_api
 
@@ -112,7 +113,11 @@ def run_app():
     # Check dependencies first
     if not (electron_dir / "node_modules").exists():
         print("Installing dependencies...")
-        subprocess.check_call([_npm_executable(), "ci"], cwd=electron_dir)
+        subprocess.check_call(
+            [_npm_executable(), "ci"],
+            cwd=electron_dir,
+            **windows_no_window_kwargs(),
+        )
 
     print(f"Starting Electron in {electron_dir}...")
 
@@ -125,7 +130,12 @@ def run_app():
         env["WAYPER_API_PORT"] = str(port)
 
     # Start Electron
-    proc = subprocess.Popen(cmd, cwd=electron_dir, env=env)
+    proc = subprocess.Popen(
+        cmd,
+        cwd=electron_dir,
+        env=env,
+        **windows_no_window_kwargs(),
+    )
 
     def cleanup(signum, frame):
         print("Cleaning up...")

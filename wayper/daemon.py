@@ -203,11 +203,26 @@ def _mode_file_mtime(config: WayperConfig) -> int:
         return 0
 
 
-def daemon_command() -> list[str]:
+def daemon_command(
+    *,
+    executable: str | None = None,
+    platform: str | None = None,
+    frozen: bool | None = None,
+) -> list[str]:
     """Return the command used to start the daemon in this runtime."""
-    if getattr(sys, "frozen", False):
-        return [sys.executable, "daemon"]
-    return [sys.executable, "-m", "wayper.cli", "daemon"]
+    executable = executable or sys.executable
+    platform = platform or os.name
+    frozen = getattr(sys, "frozen", False) if frozen is None else frozen
+    if frozen:
+        return [executable, "daemon"]
+
+    # CREATE_NO_WINDOW is not reliable for console-subsystem executables under
+    # Windows 11 ConPTY.  A real pythonw.exe avoids allocating a console at all.
+    if platform == "nt":
+        pythonw = Path(executable).with_name("pythonw.exe")
+        if pythonw.is_file():
+            executable = str(pythonw)
+    return [executable, "-m", "wayper.cli", "daemon"]
 
 
 def start_daemon_process(*, close_stdin: bool = True) -> subprocess.Popen:
