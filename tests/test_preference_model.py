@@ -25,6 +25,7 @@ from wayper.preference_model import (
     _build_feature_space,
     _claim_or_touch_auto_retrain_worker,
     _diversify_preference_review_rank,
+    _pid_is_running,
     _release_auto_retrain_worker,
     _save_automatic_preference_model,
     _save_manual_preference_model,
@@ -70,6 +71,9 @@ def _examples(
 
 
 class PreferenceModelTest(unittest.TestCase):
+    def test_pid_probe_does_not_terminate_current_process(self) -> None:
+        self.assertTrue(_pid_is_running(os.getpid()))
+
     def test_examples_use_live_retained_files_and_weight_recent_bans(self) -> None:
         metadata = {
             "old-ban.jpg": {"tags": ["old"]},
