@@ -312,17 +312,19 @@ def do_unfav(
     )
 
 
-def do_ban(
+def _do_block(
     config: WayperConfig,
     monitor: str | None = None,
     clear_thumbnail: Callable[[str], None] | None = None,
     *,
+    action: str,
+    feedback_action: str,
     image: Path | None = None,
     wait_remote: bool = True,
     preference_context: str = "core",
     preference_model: dict[str, object] | None = None,
 ) -> CoreResult:
-    """Ban a wallpaper: blacklist, trash, switch to next.
+    """Remove a wallpaper through the shared blacklist/trash/undo workflow.
 
     If `image` is given, operate on that path directly and replace it on
     any monitor currently showing it.
@@ -336,10 +338,10 @@ def do_ban(
         else:
             monitor, mon_cfg, img = _resolve_monitor(config, monitor)
             if not img or not mon_cfg:
-                return CoreResult(action="ban", ok=False, error="No current wallpaper")
+                return CoreResult(action=action, ok=False, error="No current wallpaper")
 
         if not img.is_file():
-            return CoreResult(action="ban", ok=False, error="Image is no longer available")
+            return CoreResult(action=action, ok=False, error="Image is no longer available")
 
         shown_img = img
 
@@ -379,7 +381,7 @@ def do_ban(
 
         _record_preference_feedback(
             config,
-            "ban",
+            feedback_action,
             img.name,
             context=preference_context,
             model=preference_model,
@@ -392,13 +394,60 @@ def do_ban(
 
     remote_sync = wallhaven_web_unfav(config, img.name, wait=wait_remote)
 
-    log.info("ban: %s → trashed %s", monitor, img.name)
+    log.info("%s: %s → trashed %s", action, monitor, img.name)
     extra = {"remote_sync": remote_sync}
     if replacement_img:
         extra["replacement_image"] = replacement_img
     if replacements:
         extra["replacement_images"] = replacements
-    return CoreResult(action="ban", monitor=monitor, image=img, extra=extra)
+    return CoreResult(action=action, monitor=monitor, image=img, extra=extra)
+
+
+def do_ban(
+    config: WayperConfig,
+    monitor: str | None = None,
+    clear_thumbnail: Callable[[str], None] | None = None,
+    *,
+    image: Path | None = None,
+    wait_remote: bool = True,
+    preference_context: str = "core",
+    preference_model: dict[str, object] | None = None,
+) -> CoreResult:
+    """Ban a wallpaper; ordinary bans are not preference-training labels."""
+    return _do_block(
+        config,
+        monitor,
+        clear_thumbnail,
+        action="ban",
+        # Review used "ban" as its historical wire action, but it represents
+        # an explicit dislike rather than an ordinary exact-image block.
+        feedback_action="dislike" if preference_context == "model_review" else "ban",
+        image=image,
+        wait_remote=wait_remote,
+        preference_context=preference_context,
+        preference_model=preference_model,
+    )
+
+
+def do_dislike(
+    config: WayperConfig,
+    monitor: str | None = None,
+    clear_thumbnail: Callable[[str], None] | None = None,
+    *,
+    image: Path | None = None,
+    wait_remote: bool = True,
+) -> CoreResult:
+    """Mark a wallpaper as disliked, remove it, and teach the preference model."""
+    return _do_block(
+        config,
+        monitor,
+        clear_thumbnail,
+        action="dislike",
+        feedback_action="dislike",
+        image=image,
+        wait_remote=wait_remote,
+        preference_context="manual_dislike",
+    )
 
 
 def do_unban(config: WayperConfig, monitor: str | None = None) -> CoreResult:

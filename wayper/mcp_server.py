@@ -11,6 +11,7 @@ from .catalog import ImageCatalog
 from .config import load_config
 from .core import (
     do_ban,
+    do_dislike,
     do_fav,
     do_next,
     do_prev,
@@ -109,7 +110,7 @@ def unfav() -> dict:
 
 @mcp.tool()
 def ban() -> dict:
-    """Ban the current wallpaper: blacklist and switch to a new one."""
+    """Ban the current wallpaper without teaching the preference model."""
     config = _config()
     result = do_ban(config)
     if not result.ok:
@@ -121,8 +122,19 @@ def ban() -> dict:
 
 
 @mcp.tool()
+def dislike() -> dict:
+    """Dislike the current wallpaper: remove it and teach the preference model."""
+    config = _config()
+    result = do_dislike(config)
+    if not result.ok:
+        return {"error": result.error}
+    notify("Wallpaper", "Disliked — preference saved")
+    return {"action": "dislike", "image": str(result.image)}
+
+
+@mcp.tool()
 def unban() -> dict:
-    """Undo the last ban, restoring the wallpaper from trash."""
+    """Undo the last ban or dislike, restoring the wallpaper from trash."""
     config = _config()
     result = do_unban(config)
     if not result.ok:
@@ -179,9 +191,9 @@ def delete_wallpaper(image_path: str, add_to_blacklist_flag: bool = False) -> di
         return {"error": f"Path is not a managed wallpaper image: {image_path}"}
 
     if add_to_blacklist_flag:
-        # A blacklisted image is an explicit dislike, so it must follow the
-        # normal Ban path: system trash + undo + feedback, rather than a
-        # permanent unlink that bypasses core state.
+        # Exact blocking follows the normal Ban path: system trash + undo,
+        # rather than a permanent unlink that bypasses core state. It remains
+        # distinct from an explicit preference-model Dislike.
         result = do_ban(config, image=path, wait_remote=False)
         if not result.ok:
             return {"error": result.error}

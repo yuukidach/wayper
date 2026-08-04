@@ -18,6 +18,7 @@ function createTypeBadge(type) {
 const ICONS = {
     setWallpaper: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`,
     favorite: (s = 16, filled = false) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`,
+    dislike: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/><path d="m12 6-2 5 4 2-2 5"/></svg>`,
     ban: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg>`,
     close: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>`,
     restore: (s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path></svg>`,
@@ -160,6 +161,7 @@ const els = {
     btnUndo: document.getElementById('btn-undo'),
     btnFav: document.getElementById('btn-fav-current'),
     btnLocate: document.getElementById('btn-locate-current'),
+    btnDislike: document.getElementById('btn-dislike-current'),
     btnBan: document.getElementById('btn-ban-current'),
 
     btnPool: document.getElementById('btn-pool'),
@@ -268,6 +270,7 @@ function setupEventListeners() {
     els.btnUndo.onclick = () => undoBan();
     els.btnFav.onclick = () => controlAction('fav');
     els.btnLocate.onclick = () => scrollToCurrentWallpaper();
+    els.btnDislike.onclick = () => controlAction('dislike');
     els.btnBan.onclick = () => controlAction('ban');
 
     // Sidebar: Library
@@ -371,7 +374,7 @@ function handleGlobalKeydown(e) {
     }
 
     // Model-review rows have their own keyboard actions.  Keep this guard
-    // before the gallery shortcuts: otherwise X/Delete would ban the current
+    // before the gallery shortcuts: otherwise D/X/Delete would remove the current
     // wallpaper and Enter/Space would open an unrelated focused card.
     if (!lightboxEl) {
         const modelReviewTarget = e.target?.closest?.('.model-review-row');
@@ -379,7 +382,7 @@ function handleGlobalKeydown(e) {
             const handled = typeof handleModelReviewRowKeyboard === 'function'
                 && handleModelReviewRowKeyboard(e);
             const reviewKeys = [
-                'Enter', ' ', 'Escape', 'a', 'A', 'x', 'X', 'Delete',
+                'Enter', ' ', 'Escape', 'a', 'A', 'd', 'D', 'x', 'X', 'Delete',
                 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
             ];
             // Even if a stale row is between data refreshes, never let a
@@ -416,12 +419,12 @@ function handleGlobalKeydown(e) {
                 void resolveModelReviewDecision(selected, 'keep');
                 return;
             }
-            if ((e.key === 'x' || e.key === 'X' || e.key === 'Delete') && selected) {
+            if (['d', 'D', 'x', 'X', 'Delete'].includes(e.key) && selected) {
                 e.preventDefault();
                 void resolveModelReviewDecision(selected, 'ban');
                 return;
             }
-            if (['Enter', ' ', 'a', 'A', 'x', 'X', 'Delete'].includes(e.key)) return;
+            if (['Enter', ' ', 'a', 'A', 'd', 'D', 'x', 'X', 'Delete'].includes(e.key)) return;
             if (['/', 'h', 'l', 'f', 'o', 'u', 'g', 'G'].includes(e.key)) {
                 e.preventDefault();
                 return;
@@ -484,6 +487,18 @@ function handleGlobalKeydown(e) {
                 if (lightboxImg?.reviewOnly) {
                     e.preventDefault();
                     void keepLightboxReviewSuggestion();
+                }
+                return;
+            case 'd':
+            case 'D':
+                if (lightboxImg) {
+                    e.preventDefault();
+                    if (lightboxImg.reviewOnly) {
+                        void banLightboxReviewSuggestion();
+                    } else {
+                        dislikeImage(lightboxImg.path);
+                        closeLightbox();
+                    }
                 }
                 return;
             case 'x':
@@ -562,6 +577,14 @@ function handleGlobalKeydown(e) {
                 toggleFavoriteImage(focusedCard.dataset.path);
             } else {
                 controlAction('fav');
+            }
+            break;
+        case 'd':
+        case 'D':
+            if (focusedCard) {
+                dislikeImage(focusedCard.dataset.path);
+            } else {
+                controlAction('dislike');
             }
             break;
         case 'x':

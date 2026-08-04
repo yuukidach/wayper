@@ -356,7 +356,7 @@ def fit_semantic_head(
     *,
     model_name: str = DEFAULT_SEMANTIC_MODEL,
 ) -> SemanticHead | None:
-    """Fit from explicit Ban/Keep/Favorite metadata, or return ``None``.
+    """Fit from explicit Dislike/Keep/Favorite metadata, or return ``None``.
 
     Background retained files are deliberately excluded: their presence is not
     evidence that the user likes the image, and treating them as negatives made

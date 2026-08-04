@@ -100,6 +100,168 @@ async function testSuggestionRefreshStaysInPlace() {
     assert.equal(suggestionRenders, 2, 'normal invalidation should still remove stale suggestions');
 }
 
+async function testManualDislikeUsesDistinctFeedbackEndpoint() {
+    let requestUrl = null;
+    let requestBody = null;
+    const replacements = [];
+    const focusedAction = {};
+    let focusedNeighbor = false;
+    let removed = false;
+    const nextCard = {
+        dataset: { path: 'sfw/landscape/next.jpg' },
+        classList: { contains: name => name === 'wallpaper-card' },
+        focus: options => {
+            focusedNeighbor = options?.preventScroll === true;
+        },
+    };
+    const removedCard = {
+        dataset: { path: 'sfw/landscape/missed.jpg' },
+        classList: { contains: name => name === 'wallpaper-card' },
+        contains: element => element === focusedAction,
+        nextElementSibling: nextCard,
+        previousElementSibling: null,
+        remove: () => { removed = true; },
+    };
+    const context = {
+        API_URL: 'http://127.0.0.1:8080',
+        appState: {
+            mode: 'pool',
+            allImages: [{ path: 'sfw/landscape/missed.jpg' }],
+            images: [{ path: 'sfw/landscape/missed.jpg' }],
+            currentBatchIndex: 0,
+            status: { pool_count: 2, favorites_count: 0, blocklist_count: 1 },
+            modelReviewRecommendationCache: new Map(),
+            modelReviewRecommendationRequests: new Map(),
+        },
+        document: {
+            activeElement: focusedAction,
+            querySelectorAll: selector => selector === '.wallpaper-card'
+                ? [removedCard, nextCard]
+                : [],
+        },
+        console,
+        renderBlocklistSuggestionsBar: () => {},
+        updateStatusUI: () => {},
+        renderImages: () => {},
+        refreshImages: () => {},
+        applyMonitorCurrentImages: value => replacements.push(value),
+        fetch: async (url, options) => {
+            requestUrl = url;
+            requestBody = JSON.parse(options.body);
+            return { ok: true, json: async () => ({ replacement_images: { main: 'next.jpg' } }) };
+        },
+    };
+    context.window = context;
+
+    const renderer = loadRendererScript('renderer-data.js', context, ['dislikeImage']);
+    assert.equal(await renderer.dislikeImage('sfw/landscape/missed.jpg'), true);
+    assert.equal(requestUrl, 'http://127.0.0.1:8080/api/image/dislike');
+    assert.deepEqual(requestBody, { image_path: 'sfw/landscape/missed.jpg' });
+    assert.equal(context.appState.status.pool_count, 1);
+    assert.equal(context.appState.status.blocklist_count, 2);
+    assert.deepEqual(replacements, [{ main: 'next.jpg' }]);
+    assert.equal(removed, true);
+    assert.equal(focusedNeighbor, true, 'focus should move from the action to the next card');
+}
+
+async function testLightboxBanReturnsFocusToNextCard() {
+    const lightboxButton = {};
+    let nextCardFocused = false;
+    let cards;
+    const removedCard = {
+        dataset: { path: 'sfw/landscape/current.jpg' },
+        contains: () => false,
+        remove: () => { cards = cards.filter(card => card !== removedCard); },
+    };
+    const nextCard = {
+        dataset: { path: 'sfw/landscape/next.jpg' },
+        focus: () => { nextCardFocused = true; },
+    };
+    cards = [removedCard, nextCard];
+    const context = {
+        API_URL: 'http://127.0.0.1:8080',
+        appState: {
+            mode: 'pool',
+            allImages: cards.map(card => ({ path: card.dataset.path })),
+            images: cards.map(card => ({ path: card.dataset.path })),
+            currentBatchIndex: 2,
+            status: { pool_count: 2, favorites_count: 0, blocklist_count: 0 },
+            tagSuggestionsGeneration: 0,
+        },
+        document: {
+            activeElement: lightboxButton,
+            querySelectorAll: selector => selector === '.wallpaper-card' ? cards : [],
+        },
+        lightboxEl: { contains: element => element === lightboxButton },
+        lightboxImg: { path: removedCard.dataset.path },
+        lightboxPreviousFocus: removedCard,
+        setLightboxReturnFocus: element => { context.lightboxPreviousFocus = element; },
+        console,
+        renderBlocklistSuggestionsBar: () => {},
+        updateStatusUI: () => {},
+        renderImages: () => {},
+        refreshImages: () => {},
+        applyMonitorCurrentImages: () => {},
+        fetch: async () => ({
+            ok: true,
+            json: async () => ({ replacement_images: {} }),
+        }),
+    };
+    context.window = context;
+
+    const renderer = loadRendererScript('renderer-data.js', context, ['banImage']);
+    assert.equal(await renderer.banImage(removedCard.dataset.path), true);
+    assert.equal(
+        context.lightboxPreviousFocus,
+        nextCard,
+        'closing the lightbox should return focus to the next surviving card',
+    );
+    assert.equal(nextCardFocused, false, 'focus should remain in the modal until it closes');
+}
+
+function testRemovalMountsAndFocusesNextBatchCard() {
+    let renderCalls = 0;
+    let nextCardFocused = false;
+    let cards;
+    const removedCard = {
+        dataset: { path: 'sfw/landscape/rendered-last.jpg' },
+        contains: () => false,
+        remove: () => { cards = cards.filter(card => card !== removedCard); },
+    };
+    const nextCard = {
+        dataset: { path: 'sfw/landscape/unrendered-next.jpg' },
+        focus: options => { nextCardFocused = options?.preventScroll === true; },
+    };
+    cards = [removedCard];
+    const context = {
+        appState: {
+            allImages: [removedCard, nextCard].map(card => ({ path: card.dataset.path })),
+            images: [removedCard, nextCard].map(card => ({ path: card.dataset.path })),
+            currentBatchIndex: 1,
+        },
+        document: {
+            activeElement: removedCard,
+            querySelectorAll: selector => selector === '.wallpaper-card' ? cards : [],
+        },
+        renderImages: () => {},
+        renderNextBatch: () => {
+            renderCalls++;
+            cards.push(nextCard);
+            context.appState.currentBatchIndex++;
+        },
+    };
+    context.window = context;
+
+    const renderer = loadRendererScript(
+        'renderer-data.js',
+        context,
+        ['removeImageFromState'],
+    );
+    renderer.removeImageFromState(removedCard.dataset.path);
+    assert.equal(renderCalls, 1, 'the next batch should fill the removed card slot');
+    assert.equal(nextCardFocused, true, 'the newly mounted next card should receive focus');
+}
+
 async function testPreviewClosesBeforeBanCompletes() {
     const busyStates = [];
     let resolveBan;
@@ -491,6 +653,7 @@ function testGridNavigationBridgesModelReview() {
     renderer.handleGlobalKeydown(keyEvent('Enter'));
     renderer.handleGlobalKeydown(keyEvent(' '));
     renderer.handleGlobalKeydown(keyEvent('a'));
+    renderer.handleGlobalKeydown(keyEvent('d'));
     renderer.handleGlobalKeydown(keyEvent('x'));
     const focusBeforeHiddenShortcuts = context.document.activeElement;
     renderer.handleGlobalKeydown(keyEvent('h'));
@@ -499,6 +662,7 @@ function testGridNavigationBridgesModelReview() {
     assert.deepEqual(deckPreviews, [deckItem.path, deckItem.path]);
     assert.deepEqual(deckDecisions, [
         [deckItem.path, 'keep'],
+        [deckItem.path, 'ban'],
         [deckItem.path, 'ban'],
     ]);
     assert.deepEqual(hiddenGalleryActions, []);
@@ -1316,6 +1480,9 @@ async function testLateModelReviewResponseCannotRemountDeckAfterLeaving() {
 
 (async () => {
     await testSuggestionRefreshStaysInPlace();
+    await testManualDislikeUsesDistinctFeedbackEndpoint();
+    await testLightboxBanReturnsFocusToNextCard();
+    testRemovalMountsAndFocusesNextBatchCard();
     await testPreviewClosesBeforeBanCompletes();
     await testReviewRowsHandleKeyboardActions();
     await testInboxRoutesDecisionsByCandidateSource();

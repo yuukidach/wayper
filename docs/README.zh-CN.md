@@ -20,7 +20,7 @@
 
 **核心差异：**
 
-- **越用越聪明** — 拉黑壁纸后，wayper 分析你的模式。AI 驱动的标签分析会建议下一步排除什么，支持共现挖掘与多轮迭代反馈追踪。
+- **越用越聪明** — 模型漏掉真正不喜欢的壁纸时，用 **Dislike（不喜欢）** 明确教给模型；**Ban（拉黑）** 则保留为“看腻了”的单图屏蔽，两者互不混淆。
 - **AI 原生（MCP）** — 内置 [MCP](https://modelcontextprotocol.io/) 服务器。对 Codex 或 Claude 说 *"换一张有山的壁纸"* 或 *"收藏这张"* 就行。首个原生支持 AI 助手的壁纸管理器。
 - **全键盘操作 GUI** — 每个操作都有快捷键。网格导航、灯箱预览、收藏、设置——完全不需要鼠标。为重度用户打造。
 
@@ -77,9 +77,9 @@ uv pip install -e ".[browser]"  # 可选：浏览器 cookie 提取，用于 Wall
 - **标签搜索** — 按 Wallhaven 标签、分类或文件名搜索，支持自动补全
 - **智能建议** — 分析拉黑模式，推荐要排除的标签；共现挖掘找出跨排除个体的共同描述符；支持组合排除（如"tattoo + nude"）精细过滤
 - **AI 分析** — 基于 Codex 的深度分析，支持迭代反馈。识别上传者模式并建议 Wallhaven 用户黑名单候选。点击建议标签可预览匹配图片
-- **自适应过滤** — 可通过侧边栏常驻开关选择 `rules`、`model` 或 `rules + model`。**Review** 将模型自动拦截的下载与普通模型推荐放在两条独立卡牌轨道中，二者不会再互相遮挡
+- **自适应过滤** — 可通过侧边栏常驻开关选择 `rules`、`model` 或 `rules + model`。**Review** 将模型自动拦截的下载与普通模型推荐放在两条独立卡牌轨道中；模型漏掉的已有图片可在图库中手动 Dislike
 - **设置** — 在 GUI 中配置下载目录、Wallhaven 查询、排除标签/组合、纯度和显示器。修改即时生效，无需重启 daemon
-- **全键盘操作** — 每个操作都有快捷键：网格导航、标签切换、灯箱、收藏、拉黑、撤销
+- **全键盘操作** — 每个操作都有快捷键：网格导航、灯箱、收藏、不喜欢、拉黑和撤销
 
 **网格浏览：**
 
@@ -88,8 +88,8 @@ uv pip install -e ".[browser]"  # 可选：浏览器 cookie 提取，用于 Wall
 | `p` / `v` | 壁纸池 / 收藏 | `m` / `b` | Model / 黑名单 |
 | `s` | 设置 | `F1` `F2` `F3` | 切换 SFW / Sketchy / NSFW |
 | `h` / `l` | 上一张 / 下一张壁纸 | `f` | 收藏 |
-| `x` / `Del` | 拉黑 / 移除 | `u` | 撤销拉黑 |
-| `o` | 在 Wallhaven 打开 | | |
+| `d` | 不喜欢 + 教给模型 | `x` / `Del` | 仅拉黑这张图 |
+| `u` | 撤销上次不喜欢 / 拉黑 | `o` | 在 Wallhaven 打开 |
 | `/` | 聚焦搜索栏 | `Esc` | 清除搜索 / 取消聚焦 |
 | `Enter` / `Space` | 预览（灯箱） | 方向键 | 网格导航 |
 | `[` / `]` | 黑名单：可恢复 / 全部 | `a` | AI 分析（黑名单视图） |
@@ -101,8 +101,9 @@ uv pip install -e ".[browser]"  # 可选：浏览器 cookie 提取，用于 Wall
 | 按键 | 操作 | 按键 | 操作 |
 |------|------|------|------|
 | `←` / `→` | 上一张 / 下一张（缩放时为平移） | `Enter` | 设为壁纸 |
-| `f` | 收藏 | `x` / `Del` | 拉黑 |
-| `a`（Review） | 保留预览中的候选图 | `o` | 在 Wallhaven 打开 |
+| `f` | 收藏 | `d` | 不喜欢 + 教给模型 |
+| `x` / `Del` | 仅拉黑这张图 | `a`（Review） | 保留预览中的候选图 |
+| `o` | 在 Wallhaven 打开 | | |
 | `Space` / `Esc` | 关闭灯箱 | | |
 | 滚轮 | 在光标位置缩放（0.5×–8×） | 拖拽 | 缩放时平移 |
 | `0` | 重置为适应窗口 | `+` / `-` | 放大 / 缩小 |
@@ -120,8 +121,9 @@ wayper next                 # 下一张壁纸（历史前进或随机新壁纸�
 wayper prev                 # 上一张壁纸（历史后退）
 wayper fav [--open]         # 收藏当前壁纸
 wayper unfav                # 取消收藏
-wayper ban                  # 拉黑 + 切换
-wayper unban                # 撤销上次拉黑
+wayper dislike              # 明确不喜欢：教给模型、拉黑并切换
+wayper ban                  # 仅屏蔽这张图：拉黑并切换
+wayper unban                # 撤销上次不喜欢或拉黑
 wayper mode                 # 切换 sfw↔nsfw（保留 sketchy 状态）
 wayper mode sketchy         # 开关 sketchy
 wayper mode sfw,sketchy     # 设置精确组合
@@ -142,9 +144,9 @@ wayper --json status        # JSON 格式输出
 `uv pip install -e '.[semantic]'`；它通过 FastEmbed 使用 `BAAI/bge-small-en-v1.5`，编码的
 仍然只有元数据文本，并在本地持久化 embedding cache，首次训练填充 cache 时可能较慢。
 在还没有任何 Review 决策时，安装可以暂时用旧的黑名单/收藏数据启动；一旦出现 **Review**
-的 Ban 或 Keep，后续新的训练标签只来自这些明确的复核决策，普通图库操作不会被默认为标签。
+决策或手动 **Dislike**，后续训练标签只来自明确的 Keep/Dislike；普通 Ban 不会被默认为模型标签。
 可选的 semantic head 会从同一批复核样本学习相近的元数据模式，不需要手写人物或地区规则。近期拉黑
-的权重更高；池中从未明确 Keep 的图片只作为背景对照，不能证明「喜欢」。Wayper 会分别从明确 Keep/Ban
+的权重更高；池中从未明确 Keep 的图片只作为背景对照，不能证明「喜欢」。Wayper 会分别从明确 Keep/Dislike
 样本中保留最近一部分作为留出集，学习一条准确率优先、且更重视精度而非召回率的 Review 二分类边界，
 避免把弱猜测堆成很长的人工队列。**Recommended** 与 **Auto-held** 使用同一条边界：低于门槛的图片不会
 出现，页面数量只是上限而不是必须填满的目标。精确证据和语义分数只负责给已经越过门槛的图片排序，
@@ -155,9 +157,10 @@ GUI 独立的 **Review** 是这条反馈闭环的控制中心。侧边栏开关�
 `Rules`、`Model` 还是 `Both`（`Rules + model`），不会关闭模型推荐。复核界面有两条明确轨道：
 **Auto-held** 展示被模型自动隔离的下载，**Recommended** 展示图库中模型认为可能需要拉黑的图片。
 存在 Auto-held 项时会优先打开该轨道，因此自动拦截不会再埋在推荐项后面。每条轨道都是占满窗口的横向叠放卡牌：
-可以拖动、滚轮或左右按钮切换；点击当前图片或按 `Enter`/`Space` 进入完整预览；`A` 保留，`X`/`Delete` 拉黑。
-对于 Auto-held，Keep 会将文件释放到图库，Ban 才会移入系统回收站并加入黑名单；对于 Recommended，
-Keep 只记录正向纠正而不移动文件，Ban 走普通的图库到回收站/黑名单流程。GUI「拉黑」页面因此只负责
+可以拖动、滚轮或左右按钮切换；点击当前图片或按 `Enter`/`Space` 进入完整预览；`A` 保留，`D` 标记不喜欢
+（Review 中仍兼容 `X`/`Delete`）。对于 Auto-held，Keep 会将文件释放到图库，Dislike 会移入系统回收站并加入黑名单；
+对于 Recommended，Keep 只记录正向纠正而不移动文件，Dislike 走图库到回收站/黑名单流程并记录负向训练标签。
+GUI「拉黑」页面因此只负责
 可恢复/已拉黑的图片以及标签、上传者排除规则。反馈追加到本地 JSONL 事件日志（旧 JSON 日志仍可读取），
 每累计 10 条新反馈，Wayper 会排队做一次本地全量重训；`wayper model status` 会显示待处理数量和模型版本。过滤策略保存在 TOML 的 `wallhaven.filter_strategy`，旧安装默认仍为 `rules`。
 
@@ -167,6 +170,7 @@ Keep 只记录正向纠正而不移动文件，Ban 走普通的图库到回收�
 
 ```ini
 bind = $mod, F9,       exec, wayper ban
+bind = $mod CTRL, F9,  exec, wayper dislike
 bind = $mod SHIFT, F9, exec, wayper unban
 bind = $mod, F10,      exec, wayper fav
 bind = $mod SHIFT, F10,exec, wayper unfav
@@ -219,7 +223,7 @@ command = "/path/to/wayper/.venv/bin/wayper-mcp"
 }
 ```
 
-可用工具：`status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `unfav` · `ban` · `unban` · `set_mode` · `delete_wallpaper` · `wallpaper_info` · `tag_stats_top` · `tag_stats_lookup` · `tag_stats_combo` · `uploader_stats_lookup`
+可用工具：`status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `unfav` · `dislike` · `ban` · `unban` · `set_mode` · `delete_wallpaper` · `wallpaper_info` · `tag_stats_top` · `tag_stats_lookup` · `tag_stats_combo` · `uploader_stats_lookup`
 
 ## 配置
 

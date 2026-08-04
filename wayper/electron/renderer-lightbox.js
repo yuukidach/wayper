@@ -211,6 +211,12 @@ function handleLightboxKeydown(event) {
     }
 }
 
+function setLightboxReturnFocus(element) {
+    if (!element || typeof element.focus !== 'function') return false;
+    lightboxPreviousFocus = element;
+    return true;
+}
+
 function restoreLightboxFocus(previous, reviewPath) {
     // An asynchronous review action may already have restored focus to the
     // surviving queue before the fade-out timer runs.  Do not steal it back
@@ -303,7 +309,7 @@ function showLightbox(img) {
     if (reviewOnly) {
         lightboxEl.setAttribute?.(
             'aria-keyshortcuts',
-            'ArrowLeft ArrowRight A X Delete Escape',
+            'ArrowLeft ArrowRight A D X Delete Escape',
         );
     }
     lightboxEl.innerHTML = `
@@ -313,8 +319,8 @@ function showLightbox(img) {
         </div>
         <div class="lightbox-toolbar">
             ${reviewOnly ? `
-                <button class="lb-btn review-lightbox-decision review-lightbox-ban" data-action="ban" title="Ban (X)">
-                    <span>Ban</span><kbd class="review-keycap">X</kbd>
+                <button class="lb-btn review-lightbox-decision review-lightbox-ban" data-action="ban" title="Dislike and teach the model (D)">
+                    <span>Dislike</span><kbd class="review-keycap">D</kbd>
                 </button>
                 <button class="lb-btn review-lightbox-decision review-lightbox-keep" data-action="keep" title="Keep (A)">
                     <span>Keep</span><kbd class="review-keycap">A</kbd>
@@ -330,7 +336,10 @@ function showLightbox(img) {
                 <button class="lb-btn" data-action="fav" title="Favorite (F)">
                     ${ICONS.favorite(18)}<span>Fav</span><kbd>F</kbd>
                 </button>
-                <button class="lb-btn" data-action="ban" title="Ban (X)">
+                <button class="lb-btn" data-action="dislike" title="Dislike and teach the model (D)">
+                    ${ICONS.dislike(18)}<span>Dislike</span><kbd>D</kbd>
+                </button>
+                <button class="lb-btn" data-action="ban" title="Ban this exact image only (X)">
                     ${ICONS.ban(18)}<span>Ban</span><kbd>X</kbd>
                 </button>
             `}
@@ -388,8 +397,14 @@ function showLightbox(img) {
         if (action === 'keep') {
             btn.setAttribute?.('aria-label', 'Keep reviewed candidate (A)');
             btn.setAttribute?.('aria-keyshortcuts', 'A');
+        } else if (action === 'ban' && reviewOnly) {
+            btn.setAttribute?.('aria-label', 'Dislike reviewed candidate (D)');
+            btn.setAttribute?.('aria-keyshortcuts', 'D X Delete');
+        } else if (action === 'dislike') {
+            btn.setAttribute?.('aria-label', 'Dislike and teach the model (D)');
+            btn.setAttribute?.('aria-keyshortcuts', 'D');
         } else if (action === 'ban') {
-            btn.setAttribute?.('aria-label', 'Ban reviewed candidate (X)');
+            btn.setAttribute?.('aria-label', 'Ban this exact image only (X)');
             btn.setAttribute?.('aria-keyshortcuts', 'X Delete');
         }
         btn.onclick = (e) => {
@@ -399,6 +414,10 @@ function showLightbox(img) {
             else if (action === 'fav') { toggleFavoriteImage(lightboxImg.path); closeLightbox(); }
             else if (action === 'keep' && lightboxImg.reviewOnly) {
                 void keepLightboxReviewSuggestion();
+            }
+            else if (action === 'dislike' && !lightboxImg.reviewOnly) {
+                dislikeImage(lightboxImg.path);
+                closeLightbox();
             }
             else if (action === 'ban') {
                 if (lightboxImg.reviewOnly) {

@@ -13,6 +13,7 @@ from .backend import notify
 from .config import load_config
 from .core import (
     do_ban,
+    do_dislike,
     do_fav,
     do_next,
     do_prev,
@@ -238,7 +239,7 @@ def unfav(ctx):
 @cli.command()
 @click.pass_context
 def ban(ctx):
-    """Blacklist current wallpaper and switch to a new one."""
+    """Block the current wallpaper without teaching the preference model."""
     config = ctx.obj["config"]
     use_json = ctx.obj["json"]
 
@@ -260,8 +261,24 @@ def ban(ctx):
 
 @cli.command()
 @click.pass_context
+def dislike(ctx):
+    """Mark the current wallpaper as disliked and teach the preference model."""
+    config = ctx.obj["config"]
+    use_json = ctx.obj["json"]
+
+    result = do_dislike(config)
+    _require_success(result, use_json)
+
+    if use_json:
+        click.echo(json_mod.dumps({"action": "dislike", "image": str(result.image)}))
+    else:
+        notify("Wallpaper", "Disliked — preference saved")
+
+
+@cli.command()
+@click.pass_context
 def unban(ctx):
-    """Undo the last ban."""
+    """Undo the last ban or dislike."""
     config = ctx.obj["config"]
     use_json = ctx.obj["json"]
 

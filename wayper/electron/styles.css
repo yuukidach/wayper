@@ -213,6 +213,24 @@ button.danger kbd {
   color: var(--red);
 }
 
+.controls button.dislike {
+  background-color: transparent;
+  color: var(--mauve);
+  border-color: transparent;
+}
+
+.controls button.dislike:hover {
+  background-color: rgba(203, 166, 247, 0.12);
+  color: var(--mauve);
+  border-color: rgba(203, 166, 247, 0.25);
+}
+
+.controls button.dislike kbd {
+  background-color: rgba(203, 166, 247, 0.1);
+  border-color: rgba(203, 166, 247, 0.15);
+  color: var(--mauve);
+}
+
 /* ---------- Header ---------- */
 
 header {
@@ -280,13 +298,13 @@ h1 {
   margin-left: 2px;
 }
 
-.controls button:not(.primary):not(.danger) {
+.controls button:not(.primary):not(.danger):not(.dislike) {
   background: transparent;
   border-color: transparent;
   color: var(--subtext0);
 }
 
-.controls button:not(.primary):not(.danger):hover {
+.controls button:not(.primary):not(.danger):not(.dislike):hover {
   color: var(--text);
   background: var(--panel);
   border-color: var(--border-subtle);
@@ -994,6 +1012,16 @@ main {
 .action-btn.ban:hover {
   background: var(--red);
   border-color: var(--red);
+  color: var(--crust);
+}
+
+.action-btn.dislike {
+  color: var(--mauve);
+}
+
+.action-btn.dislike:hover {
+  background: var(--mauve);
+  border-color: var(--mauve);
   color: var(--crust);
 }
 
@@ -2297,6 +2325,11 @@ footer {
 .lb-btn[data-action="ban"]:hover {
   background: rgba(243, 139, 168, 0.1);
   color: var(--red);
+}
+
+.lb-btn[data-action="dislike"]:hover {
+  background: rgba(203, 166, 247, 0.1);
+  color: var(--mauve);
 }
 
 .lb-btn[data-action="restore"]:hover {

@@ -52,7 +52,7 @@
                 </svg>
                 <kbd>F</kbd>
             </button>
-            <button id="btn-undo" title="Undo Ban">
+            <button id="btn-undo" title="Undo Last Ban or Dislike">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M9 14 4 9l5-5"/>
                     <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11"/>
@@ -60,7 +60,15 @@
                 <kbd>U</kbd>
             </button>
             <div class="divider"></div>
-            <button id="btn-ban-current" class="danger" title="Ban (Block)">
+            <button id="btn-dislike-current" class="dislike" title="Dislike and teach the model (D)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+                    <path d="m12 6-2 5 4 2-2 5"/>
+                </svg>
+                <span class="label">Dislike</span>
+                <kbd>D</kbd>
+            </button>
+            <button id="btn-ban-current" class="danger" title="Ban this exact image only (X)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"/>
                     <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>

@@ -197,7 +197,7 @@ AUTO_RETRAIN_WORKER_STALE_SECONDS = 30 * 60
 _FEEDBACK_SCHEMA_VERSION = 2
 _LEGACY_FEEDBACK_SCHEMA_VERSION = 1
 _HISTORICAL_BAN_SCHEMA_VERSION = 1
-_FEEDBACK_ACTIONS = frozenset({"ban", "unban", "favorite", "unfavorite", "keep"})
+_FEEDBACK_ACTIONS = frozenset({"ban", "dislike", "unban", "favorite", "unfavorite", "keep"})
 
 log = logging.getLogger("wayper.preference_model")
 
@@ -491,7 +491,7 @@ def build_training_examples(
     """
     now = int(time.time()) if now is None else now
     if review_only:
-        return _build_model_review_examples(
+        return _build_curated_preference_examples(
             metadata,
             feedback_events,
             now=now,
@@ -509,7 +509,7 @@ def build_training_examples(
         if filename not in metadata:
             continue
         action = feedback["action"]
-        if action == "ban":
+        if action in {"ban", "dislike"}:
             # The feedback ledger outlives blacklist TTL pruning. Its latest
             # action is the durable, reversible record of this preference.
             latest_bans[filename] = int(feedback["timestamp"])
@@ -529,7 +529,9 @@ def build_training_examples(
             continue
         context_features = _model_context_features(meta)
         feedback = latest_feedback.get(filename)
-        is_explicit_ban = bool(isinstance(feedback, dict) and feedback.get("action") == "ban")
+        is_explicit_ban = bool(
+            isinstance(feedback, dict) and feedback.get("action") in {"ban", "dislike"}
+        )
         if filename in latest_bans:
             timestamp = latest_bans[filename]
             examples.append(
@@ -567,9 +569,13 @@ def build_training_examples(
     return examples
 
 
-def _is_model_review_feedback(event: object) -> bool:
-    """Whether an event is an intentional label from the review queue."""
-    if not isinstance(event, dict) or event.get("action") not in {"ban", "keep"}:
+def _is_curated_preference_feedback(event: object) -> bool:
+    """Whether an event is an intentional label for preference training."""
+    if not isinstance(event, dict):
+        return False
+    if event.get("action") == "dislike":
+        return True
+    if event.get("action") not in {"ban", "keep"}:
         return False
     return event.get("context") == "model_review" or event.get("source") in {
         "model_review",
@@ -577,14 +583,14 @@ def _is_model_review_feedback(event: object) -> bool:
     }
 
 
-def _model_review_labels(
+def _curated_preference_labels(
     events: Iterable[dict[str, object]],
 ) -> dict[str, tuple[str, int]]:
     """Resolve the latest curated review label for each filename.
 
-    Ordinary gallery actions are intentionally ignored.  An explicit unban
-    after a review Ban clears that reviewed label, allowing the user to
-    correct an earlier decision from the blocklist view.
+    Ordinary gallery actions are intentionally ignored. An explicit unban
+    after a curated dislike clears that label, allowing the user to correct an
+    earlier decision from the blocklist view. Legacy Review bans remain valid.
     """
     ordered = sorted(
         (event for event in events if _is_feedback_event(event)),
@@ -593,14 +599,17 @@ def _model_review_labels(
     labels: dict[str, tuple[str, int]] = {}
     for event in ordered:
         filename = str(event["filename"])
-        if _is_model_review_feedback(event):
+        if _is_curated_preference_feedback(event):
             labels[filename] = (str(event["action"]), int(event["timestamp"]))
-        elif event.get("action") == "unban" and labels.get(filename, (None, 0))[0] == "ban":
+        elif event.get("action") == "unban" and labels.get(filename, (None, 0))[0] in {
+            "ban",
+            "dislike",
+        }:
             labels.pop(filename, None)
     return labels
 
 
-def _build_model_review_examples(
+def _build_curated_preference_examples(
     metadata: dict[str, dict],
     feedback_events: Iterable[dict[str, object]],
     *,
@@ -608,8 +617,8 @@ def _build_model_review_examples(
     favorite_weight: float,
     recency_half_life_days: int,
 ) -> list[PreferenceExample]:
-    """Build labels exclusively from deliberate Model review decisions."""
-    labels = _model_review_labels(feedback_events)
+    """Build labels from deliberate Review decisions and manual dislikes."""
+    labels = _curated_preference_labels(feedback_events)
     examples: list[PreferenceExample] = []
     for filename, (action, timestamp) in sorted(labels.items()):
         meta = metadata.get(filename)
@@ -619,7 +628,7 @@ def _build_model_review_examples(
         if not tags:
             continue
         context_features = _model_context_features(meta)
-        if action == "ban":
+        if action in {"ban", "dislike"}:
             examples.append(
                 PreferenceExample(
                     filename=filename,
@@ -687,7 +696,7 @@ def collect_preference_training_snapshot(config: WayperConfig) -> PreferenceTrai
             now=snapshot_now,
         )
     )
-    review_examples = tuple(
+    curated_examples = tuple(
         build_training_examples(
             metadata,
             (),
@@ -698,9 +707,13 @@ def collect_preference_training_snapshot(config: WayperConfig) -> PreferenceTrai
             review_only=True,
         )
     )
-    has_review_feedback = any(_is_model_review_feedback(event) for event in feedback["events"])
-    examples = review_examples if has_review_feedback else legacy_examples
-    label_source = "model_review" if has_review_feedback else "legacy"
+    has_curated_feedback = any(
+        _is_curated_preference_feedback(event) for event in feedback["events"]
+    )
+    examples = curated_examples if has_curated_feedback else legacy_examples
+    # Keep the persisted source name stable for existing model files. It now
+    # covers both Review decisions and manual Dislike actions.
+    label_source = "model_review" if has_curated_feedback else "legacy"
     return PreferenceTrainingSnapshot(
         examples=examples,
         feedback_revision=int(feedback["revision"]),
@@ -905,7 +918,7 @@ def auto_filter_status(
         reason = "Model filtering is active. Likely blocks are held for your review."
     elif schema_ready:
         status = "calibration_pending"
-        reason = "More Keep/Ban decisions are needed before accurate model filtering can start."
+        reason = "More Keep/Dislike decisions are needed before accurate model filtering can start."
     else:
         status = "upgrade_pending"
         reason = "Retrain the local model before using it to filter new downloads."

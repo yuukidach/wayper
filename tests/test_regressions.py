@@ -19,6 +19,7 @@ from wayper.server.api import (
     UnblockRequest,
     app,
     ban_image_route,
+    dislike_image_route,
     get_config_route,
     model_review_action_route,
     model_review_route,
@@ -414,6 +415,99 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual(kwargs["preference_context"], "model_review")
         self.assertEqual(kwargs["preference_model"]["feature_score"], -0.25)
         self.assertEqual(kwargs["preference_model"]["review_score"], 1.25)
+
+    def test_manual_dislike_records_distinct_feedback_and_blocks_exact_image(self) -> None:
+        from wayper.core import do_ban, do_dislike
+        from wayper.preference_model import load_preference_feedback
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            image = config.download_dir / "sfw" / "landscape" / "missed.jpg"
+            image.parent.mkdir(parents=True)
+            image.touch()
+            ordinary_ban = image.with_name("tired.jpg")
+            review_dislike = image.with_name("review.jpg")
+            ordinary_ban.touch()
+            review_dislike.touch()
+
+            with (
+                patch("wayper.core._replace_on_all_monitors", return_value={}),
+                patch("wayper.core.push_undo") as push_undo,
+                patch("wayper.core._schedule_preference_model_retrain"),
+                patch("wayper.wallhaven_web.wallhaven_web_unfav", return_value="queued"),
+            ):
+                result = do_dislike(config, image=image, wait_remote=False)
+                do_ban(config, image=ordinary_ban, wait_remote=False)
+                do_ban(
+                    config,
+                    image=review_dislike,
+                    wait_remote=False,
+                    preference_context="model_review",
+                )
+
+            feedback = load_preference_feedback(config)
+            blacklist = config.blacklist_file.read_text()
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.action, "dislike")
+        self.assertIn("missed.jpg", blacklist)
+        self.assertEqual(push_undo.call_count, 3)
+        push_undo.assert_any_call(config, "missed.jpg", image.parent)
+        self.assertEqual(
+            [event["action"] for event in feedback["events"]],
+            ["dislike", "ban", "dislike"],
+        )
+        self.assertEqual(feedback["events"][0]["context"], "manual_dislike")
+        self.assertEqual(feedback["events"][2]["context"], "model_review")
+
+    def test_dislike_image_route_uses_explicit_dislike_core_action(self) -> None:
+        from wayper.core import CoreResult
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            image = config.download_dir / "sfw" / "landscape" / "candidate.jpg"
+            image.parent.mkdir(parents=True)
+            image.touch()
+            result = CoreResult(action="dislike", image=image, extra={"replacement_images": {}})
+
+            with (
+                patch("wayper.server.api.get_config", return_value=config),
+                patch("wayper.server.api.do_dislike", return_value=result) as do_dislike,
+                patch(
+                    "wayper.server.api._preference_learning_payload",
+                    return_value={"due": False},
+                ),
+            ):
+                response = dislike_image_route(
+                    ActionRequest(image_path="sfw/landscape/candidate.jpg")
+                )
+
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(response["learning"], {"due": False})
+        kwargs = do_dislike.call_args.kwargs
+        self.assertEqual(kwargs["image"], image.resolve())
+        self.assertFalse(kwargs["wait_remote"])
+        self.assertTrue(callable(kwargs["clear_thumbnail"]))
+
+    def test_dislike_cli_preserves_json_output(self) -> None:
+        from click.testing import CliRunner
+
+        from wayper.cli import cli
+        from wayper.core import CoreResult
+
+        config = WayperConfig()
+        image = Path("/tmp/missed.jpg")
+        with (
+            patch("wayper.cli.load_config", return_value=config),
+            patch(
+                "wayper.cli.do_dislike",
+                return_value=CoreResult(action="dislike", image=image),
+            ),
+        ):
+            result = CliRunner().invoke(cli, ["--json", "dislike"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(json.loads(result.output), {"action": "dislike", "image": str(image)})
 
     def test_preference_keep_feedback_reports_a_ledger_write_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:

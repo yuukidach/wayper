@@ -22,6 +22,7 @@ from wayper.catalog import ImageCatalog
 from wayper.config import WayperConfig, load_config, save_config
 from wayper.core import (
     do_ban,
+    do_dislike,
     do_fav,
     do_next,
     do_prev,
@@ -118,6 +119,7 @@ __all__ = [
     "set_wallpaper_route",
     "favorite_image",
     "ban_image_route",
+    "dislike_image_route",
     "preference_suggestions",
     "preference_suggestion_feedback",
     "model_review_route",
@@ -723,6 +725,12 @@ def control_action(
     }
     if action == "ban":
         result = do_ban(config, monitor, clear_thumbnail=lambda p: _remove_thumbnail(config, p))
+    elif action == "dislike":
+        result = do_dislike(
+            config,
+            monitor,
+            clear_thumbnail=lambda p: _remove_thumbnail(config, p),
+        )
     elif handler := handlers.get(action):
         result = handler(config, monitor)
     else:
@@ -736,7 +744,7 @@ def control_action(
         response["image"] = str(result.image)
     if result.monitor:
         response["monitor"] = result.monitor
-        if action == "ban":
+        if action in {"ban", "dislike"}:
             response["current_image"] = _relative_image(
                 config, result.extra.get("replacement_image")
             )
@@ -1011,6 +1019,29 @@ def ban_image_route(req: ActionRequest):
     return response
 
 
+@app.post("/api/image/dislike")
+def dislike_image_route(req: ActionRequest):
+    """Remove an existing image and record an explicit model-training dislike."""
+    config = get_config()
+    img_full = _resolve_image(config, req.image_path)
+    result = do_dislike(
+        config,
+        image=img_full,
+        wait_remote=False,
+        clear_thumbnail=lambda p: _remove_thumbnail(config, p),
+    )
+    if not result.ok:
+        raise HTTPException(400, result.error)
+
+    return {
+        "status": "ok",
+        "replacement_images": _relative_image_map(
+            config, result.extra.get("replacement_images", {})
+        ),
+        "learning": _preference_learning_payload(config),
+    }
+
+
 @app.get("/api/preference-suggestions")
 def preference_suggestions(purity: str = "", orient: str = "", limit: int = 24):
     """Return local model candidates for human review; never delete automatically."""
@@ -1178,7 +1209,7 @@ def _resolve_model_review_action(req: ModelReviewActionRequest) -> dict[str, obj
 @app.post("/api/model-review/resolve")
 @app.post("/api/model-review/action")
 def model_review_action_route(req: ModelReviewActionRequest):
-    """Apply Keep/Ban to one automatically filtered image."""
+    """Apply a Keep/Dislike decision to one automatically filtered image."""
     return _resolve_model_review_action(req)
 
 

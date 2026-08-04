@@ -621,7 +621,7 @@ function preferenceReviewRow(path) {
  * Model-review actions are deliberately rendered as ordinary buttons so they
  * remain usable with a screen reader and with Tab.  The queue is refreshed in
  * place, though, which means the element that had focus can disappear while a
- * Keep/Ban request is completing.  Keeping this small helper here gives both
+ * Keep/Dislike request is completing. Keeping this small helper here gives both
  * the row action and the lightbox a common, safe focus target.
  */
 function focusPreferenceReviewCandidate(path, selector = '.model-review-preview') {
@@ -799,7 +799,7 @@ function previewPreferenceSuggestion(item, event) {
     event?.stopPropagation();
     // Quarantine candidates and legacy ranked candidates share the lightbox
     // preview, but the review surface exposes only deliberate Keep (A) and
-    // Ban (X) decisions plus the Wallhaven link.
+    // Dislike (D) decisions plus the Wallhaven link.
     showLightbox({ ...item, isTrash: false, reviewOnly: true });
 }
 
@@ -971,7 +971,7 @@ function moveModelReviewFocus(row, direction) {
  *
  * Rows are focusable in addition to their individual controls.  This lets a
  * keyboard user review a queue efficiently (Enter/Space to preview, A to
- * keep, X/Delete to ban, and arrows to move between candidates) without
+ * keep, D (or legacy X/Delete) to dislike, and arrows to move between candidates) without
  * falling through to the gallery's global shortcuts, which otherwise operate
  * on the unrelated current wallpaper.
  */
@@ -1022,7 +1022,7 @@ function handleModelReviewRowKeyboard(event) {
         return true;
     }
 
-    if (key === 'x' || key === 'X' || key === 'Delete') {
+    if (['d', 'D', 'x', 'X', 'Delete'].includes(key)) {
         event.preventDefault();
         event.stopPropagation();
         if (!row.classList?.contains?.('is-busy')) {
@@ -1124,7 +1124,7 @@ async function banPreferenceSuggestion(item, row, { restoreFocus: requestedFocus
     try {
         // Auto-filtered files have not entered the pool yet, so resolve them
         // through the dedicated queue endpoint. Legacy ranked candidates keep
-        // the normal ban/trash path.
+        // the normal dislike/trash path.
         let banned;
         if (item.auto_filtered) {
             const result = await WayperApi.modelReviewAction(item.path, 'ban');
@@ -1151,7 +1151,7 @@ async function banPreferenceSuggestion(item, row, { restoreFocus: requestedFocus
         }
         return true;
     } catch (e) {
-        console.error('Failed to ban model review suggestion:', e);
+        console.error('Failed to dislike model review suggestion:', e);
         return false;
     } finally {
         setPreferenceReviewActionBusy(row, false);
@@ -1167,7 +1167,7 @@ async function banLightboxReviewSuggestion() {
     // Closing the preview is immediate UI feedback; the underlying review row
     // stays busy until the filesystem/API transaction finishes.
     // The lightbox closes immediately, so the active element is no longer in
-    // the row when the asynchronous ban resolves.  Ask the row updater to
+    // the row when the asynchronous dislike resolves. Ask the row updater to
     // move focus to the next surviving candidate once the transaction ends.
     const pendingBan = banPreferenceSuggestion(item, row, { restoreFocus: true });
     closeLightbox();
@@ -1183,11 +1183,11 @@ function createPreferenceReviewRow(item) {
     row.setAttribute?.(
         'aria-label',
         `${item.name || item.path}. Arrow keys move by row and column. `
-            + 'Enter or Space to preview, A to keep, X or Delete to ban',
+            + 'Enter or Space to preview, A to keep, D to dislike',
     );
     row.setAttribute?.(
         'aria-keyshortcuts',
-        'ArrowUp ArrowDown ArrowLeft ArrowRight Enter Space A X Delete',
+        'ArrowUp ArrowDown ArrowLeft ArrowRight Enter Space A D X Delete',
     );
     row.onkeydown = handleModelReviewRowKeyboard;
 
@@ -1301,10 +1301,10 @@ function createPreferenceReviewRow(item) {
     const ban = document.createElement('button');
     ban.className = 'model-review-ban';
     ban.type = 'button';
-    ban.textContent = 'Ban';
-    ban.title = `Ban ${item.name || 'wallpaper'} (X)`;
-    ban.setAttribute('aria-label', `Ban ${item.name || 'wallpaper'} (X)`);
-    ban.setAttribute('aria-keyshortcuts', 'X Delete');
+    ban.textContent = 'Dislike';
+    ban.title = `Dislike ${item.name || 'wallpaper'} and teach the model (D)`;
+    ban.setAttribute('aria-label', `Dislike ${item.name || 'wallpaper'} (D)`);
+    ban.setAttribute('aria-keyshortcuts', 'D X Delete');
     ban.onclick = event => {
         event.stopPropagation();
         banPreferenceSuggestion(item, row);
@@ -1511,10 +1511,10 @@ function decorateModelReviewDecisionButton(button, action) {
     const isKeep = action === 'keep';
     const label = document.createElement('span');
     label.className = 'model-review-decision-label';
-    label.textContent = isKeep ? 'Keep' : 'Ban';
+    label.textContent = isKeep ? 'Keep' : 'Dislike';
     const key = document.createElement('kbd');
     key.className = 'review-keycap model-review-keycap';
-    key.textContent = isKeep ? 'A' : 'X';
+    key.textContent = isKeep ? 'A' : 'D';
     button.textContent = '';
     button.append(label, key);
 }
@@ -1819,7 +1819,7 @@ function createModelReviewCard(item, index, total) {
     );
     card.setAttribute(
         'aria-keyshortcuts',
-        'ArrowLeft ArrowRight ArrowUp ArrowDown Enter Space A X Delete',
+        'ArrowLeft ArrowRight ArrowUp ArrowDown Enter Space A D X Delete',
     );
 
     const preview = document.createElement('button');
@@ -1871,15 +1871,15 @@ function createModelReviewCard(item, index, total) {
     const busy = appState.modelReviewActionInFlight instanceof Set
         && appState.modelReviewActionInFlight.has(item.path);
     const ban = modelReviewMakeButton(
-        'Ban',
+        'Dislike',
         'model-review-card-decision model-review-card-ban',
         () => { void resolveModelReviewDecision(item, 'ban'); },
     );
     ban.disabled = busy || !selected;
     ban.title = automaticallyHeld
-        ? 'Confirm the block and send to trash (X / Delete)'
-        : 'Move from your pool to Blocklist (X / Delete)';
-    ban.setAttribute('aria-keyshortcuts', 'X Delete');
+        ? 'Confirm the dislike, teach the model, and send to trash (D)'
+        : 'Dislike, teach the model, and move to Blocklist (D)';
+    ban.setAttribute('aria-keyshortcuts', 'D X Delete');
     decorateModelReviewDecisionButton(ban, 'ban');
     actions.appendChild(ban);
 
@@ -2205,7 +2205,7 @@ function modelReviewZeroStatePresentation(data) {
             eyebrow: 'Getting ready',
             title: 'The model is still learning',
             detail: modelFilter.reason
-                || 'Keep or Ban a few wallpapers in Pool to build enough preference feedback.',
+                || 'Keep or Dislike a few wallpapers to build enough preference feedback.',
             action: 'pool',
             actionLabel: 'Browse Pool',
         };
@@ -2387,8 +2387,8 @@ function createPreferenceReviewPanel() {
     const subtitle = document.createElement('span');
     subtitle.className = 'model-review-subtitle';
     subtitle.textContent = modelReviewModeActive()
-        ? 'Automatically held by the model · inspect, Keep or Ban · Enter/Space · A/X'
-        : 'Ranked by local tag/context evidence · Tab/Arrows · Enter/Space · A/X';
+        ? 'Automatically held by the model · inspect, Keep or Dislike · Enter/Space · A/D'
+        : 'Ranked by local tag/context evidence · Tab/Arrows · Enter/Space · A/D';
     heading.appendChild(subtitle);
     const count = document.createElement('span');
     count.className = 'model-review-count';
@@ -2982,7 +2982,8 @@ function createCard(img) {
             <div class="overlay">
                 <button class="action-btn" title="Set Wallpaper">${ICONS.setWallpaper()}</button>
                 <button class="action-btn fav ${img.is_favorite ? 'active' : ''}" title="Favorite">${ICONS.favorite(16, img.is_favorite)}</button>
-                <button class="action-btn ban" title="Ban">${ICONS.ban()}</button>
+                <button class="action-btn dislike" title="Dislike and teach the model (D)">${ICONS.dislike()}</button>
+                <button class="action-btn ban" title="Ban this exact image only (X)">${ICONS.ban()}</button>
                 <button class="action-btn url" title="Open on Wallhaven">${ICONS.externalLink()}</button>
             </div>
         `;
@@ -2992,8 +2993,17 @@ function createCard(img) {
         const btns = card.querySelectorAll('.action-btn');
         btns[0].onclick = (e) => { e.stopPropagation(); setWallpaper(img.path); };
         btns[1].onclick = (e) => { e.stopPropagation(); toggleFavoriteImage(img.path); };
-        btns[2].onclick = (e) => { e.stopPropagation(); banImage(img.path); };
-        btns[3].onclick = (e) => { e.stopPropagation(); openWallhavenUrl(img.name); };
+        btns[2].onclick = (e) => {
+            e.stopPropagation();
+            card.focus({ preventScroll: true });
+            dislikeImage(img.path);
+        };
+        btns[3].onclick = (e) => {
+            e.stopPropagation();
+            card.focus({ preventScroll: true });
+            banImage(img.path);
+        };
+        btns[4].onclick = (e) => { e.stopPropagation(); openWallhavenUrl(img.name); };
     }
 
     return card;

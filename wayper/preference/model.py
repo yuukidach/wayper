@@ -19,7 +19,7 @@ DEFAULT_EPOCHS = 6
 DEFAULT_THRESHOLD = 0.98
 # Review decisions are recoverable, but false positives still create manual
 # work.  New models replace this fallback with a boundary learned from held-out
-# Keep/Ban decisions.
+# Keep/Dislike decisions.
 DEFAULT_REVIEW_THRESHOLD = 0.20
 DEFAULT_REVIEW_DISLIKE_BOOST = 1.5
 DEFAULT_FAVORITE_WEIGHT = 4.0
@@ -70,8 +70,8 @@ class PreferenceTrainingSnapshot:
     data_signature: str
     favorite_files: int
     # ``legacy`` bootstraps an installation before the user has reviewed any
-    # candidates; once review feedback exists, snapshots switch to the
-    # curated model-review label stream.
+    # candidates; once curated feedback exists, snapshots switch to explicit
+    # Review and manual-Dislike labels.
     label_source: str = "legacy"
 
 

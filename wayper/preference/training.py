@@ -332,7 +332,7 @@ def train_preference_model(
     review_calibration: dict[str, object] = {
         "version": REVIEW_CALIBRATION_VERSION,
         "available": False,
-        "reason": "not enough explicit Keep/Ban decisions",
+        "reason": "not enough explicit Keep/Dislike decisions",
         "threshold": DEFAULT_REVIEW_THRESHOLD,
         "objective": REVIEW_CALIBRATION_OBJECTIVE,
     }

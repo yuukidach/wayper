@@ -1135,6 +1135,37 @@ async function banImage(
     }
 }
 
+async function dislikeImage(path) {
+    invalidateBlocklistSuggestions();
+    if (typeof invalidateModelReviewRecommendationCache === 'function') {
+        invalidateModelReviewRecommendationCache(path);
+    }
+    removeImageFromState(path);
+    // Dislike shares Ban's exact-image block/trash behavior, but the backend
+    // also records a curated negative label for the preference model.
+    if (appState.status) {
+        if (appState.mode === 'favorites') appState.status.favorites_count--;
+        else appState.status.pool_count--;
+        appState.status.blocklist_count++;
+        updateStatusUI();
+    }
+    try {
+        const res = await fetch(`${API_URL}/api/image/dislike`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_path: path }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        applyMonitorCurrentImages(data.replacement_images);
+        return true;
+    } catch (e) {
+        console.error("Dislike failed", e);
+        refreshImages();
+        return false;
+    }
+}
+
 async function undoBan() {
     try {
         await controlAction('unban');
@@ -1275,7 +1306,10 @@ async function applySearchFilter(preserveFocus = false, searchRequestId) {
     // Remove cards for images no longer present (animated)
     for (const [path, card] of existingCards) {
         if (!newPaths.has(path)) {
-            if (document.activeElement === card) {
+            if (
+                document.activeElement === card
+                || card.contains?.(document.activeElement)
+            ) {
                 const neighbor = card.nextElementSibling?.classList?.contains('wallpaper-card')
                     ? card.nextElementSibling
                     : card.previousElementSibling?.classList?.contains('wallpaper-card')
@@ -1532,35 +1566,105 @@ async function restoreImage(path) {
     }
 }
 
+function wallpaperCardForPath(path) {
+    return [...document.querySelectorAll('.wallpaper-card')]
+        .find(card => card.dataset.path === path) || null;
+}
+
+function imageRemovalFocusContext(path, card) {
+    const activeElement = document.activeElement;
+    if (
+        card
+        && (
+            activeElement === card
+            || card.contains?.(activeElement)
+        )
+    ) {
+        return 'gallery';
+    }
+
+    // The lightbox owns focus while a preview action runs, but its return
+    // target is still the gallery card that is about to disappear.
+    if (
+        typeof lightboxEl !== 'undefined'
+        && lightboxEl
+        && typeof lightboxImg !== 'undefined'
+        && lightboxImg?.path === path
+        && lightboxImg?.reviewOnly !== true
+        && (
+            activeElement === lightboxEl
+            || lightboxEl.contains?.(activeElement)
+        )
+    ) {
+        return 'lightbox';
+    }
+    return null;
+}
+
+function imageRemovalFocusTarget(nextPath, previousPath) {
+    let target = nextPath ? wallpaperCardForPath(nextPath) : null;
+
+    // Removing the last rendered card shifts the first unrendered image into
+    // its data index. Mount enough of the next batch to keep focus moving
+    // forward instead of falling back to the preceding card.
+    if (!target && nextPath && typeof renderNextBatch === 'function') {
+        const nextIndex = appState.images.findIndex(image => image.path === nextPath);
+        while (
+            nextIndex >= 0
+            && appState.currentBatchIndex <= nextIndex
+            && appState.currentBatchIndex < appState.images.length
+        ) {
+            const previousBatchIndex = appState.currentBatchIndex;
+            renderNextBatch();
+            if (appState.currentBatchIndex <= previousBatchIndex) break;
+        }
+        target = wallpaperCardForPath(nextPath);
+    }
+
+    return target || (previousPath ? wallpaperCardForPath(previousPath) : null);
+}
+
 function removeImageFromState(path, { renderEmpty = true } = {}) {
+    const card = wallpaperCardForPath(path);
+    const focusContext = imageRemovalFocusContext(path, card);
+    const imageIndex = appState.images.findIndex(img => img.path === path);
+    const renderedCards = [...document.querySelectorAll('.wallpaper-card')];
+    const cardIndex = card ? renderedCards.indexOf(card) : -1;
+    const nextPath = (imageIndex >= 0 ? appState.images[imageIndex + 1]?.path : null)
+        || (cardIndex >= 0 ? renderedCards[cardIndex + 1]?.dataset?.path : null);
+    const previousPath = (imageIndex > 0 ? appState.images[imageIndex - 1]?.path : null)
+        || (cardIndex > 0 ? renderedCards[cardIndex - 1]?.dataset?.path : null);
+
     // Also remove from allImages (unfiltered list)
     const allIdx = appState.allImages.findIndex(img => img.path === path);
     if (allIdx !== -1) appState.allImages.splice(allIdx, 1);
 
-    const idx = appState.images.findIndex(img => img.path === path);
-    if (idx !== -1) {
-        appState.images.splice(idx, 1);
+    if (imageIndex !== -1) {
+        appState.images.splice(imageIndex, 1);
         // If we removed an item before the current batch index, shift the index back
-        if (idx < appState.currentBatchIndex) {
+        if (imageIndex < appState.currentBatchIndex) {
             appState.currentBatchIndex--;
         }
     }
 
-    const card = [...document.querySelectorAll('.wallpaper-card')]
-        .find(el => el.dataset.path === path);
-    if (card) {
-        // Preserve focus — preventScroll avoids the browser jumping to make the
-        // newly focused card fully visible (especially noticeable with tall portrait cards)
-        if (document.activeElement === card) {
-            const next = card.nextElementSibling;
-            const prev = card.previousElementSibling;
-            if (next && next.classList.contains('wallpaper-card')) {
-                next.focus({ preventScroll: true });
-            } else if (prev && prev.classList.contains('wallpaper-card')) {
-                prev.focus({ preventScroll: true });
+    card?.remove();
+
+    if (focusContext) {
+        const target = imageRemovalFocusTarget(nextPath, previousPath);
+        if (target) {
+            if (
+                focusContext === 'lightbox'
+                && typeof setLightboxReturnFocus === 'function'
+            ) {
+                // closeLightbox() restores this target after its fade, keeping
+                // focus inside the modal until the modal actually closes.
+                setLightboxReturnFocus(target);
+            } else {
+                // preventScroll avoids jumping to fully reveal a tall portrait
+                // card while the masonry grid is closing the removed card's gap.
+                target.focus({ preventScroll: true });
             }
         }
-        card.remove();
     }
 
     if (renderEmpty && appState.images.length === 0) {

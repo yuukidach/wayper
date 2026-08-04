@@ -333,6 +333,7 @@ class PreferenceModelTest(unittest.TestCase):
     def test_review_only_uses_model_review_ban_and_keep_only(self) -> None:
         metadata = {
             "gallery-ban.jpg": {"tags": ["ordinary-ban"]},
+            "manual-dislike.jpg": {"tags": ["missed-by-model"]},
             "review-ban.jpg": {"tags": ["review-ban"]},
             "review-keep.jpg": {"tags": ["review-keep"]},
             "favorite.jpg": {"tags": ["favorite"]},
@@ -351,6 +352,15 @@ class PreferenceModelTest(unittest.TestCase):
                 "schema_version": 2,
                 "revision": 2,
                 "timestamp": 101,
+                "filename": "manual-dislike.jpg",
+                "action": "dislike",
+                "source": "core",
+                "context": "manual_dislike",
+            },
+            {
+                "schema_version": 2,
+                "revision": 3,
+                "timestamp": 101,
                 "filename": "review-ban.jpg",
                 "action": "ban",
                 "source": "core",
@@ -358,7 +368,7 @@ class PreferenceModelTest(unittest.TestCase):
             },
             {
                 "schema_version": 2,
-                "revision": 3,
+                "revision": 4,
                 "timestamp": 102,
                 "filename": "review-keep.jpg",
                 "action": "keep",
@@ -367,7 +377,7 @@ class PreferenceModelTest(unittest.TestCase):
             },
             {
                 "schema_version": 2,
-                "revision": 4,
+                "revision": 5,
                 "timestamp": 103,
                 "filename": "favorite.jpg",
                 "action": "favorite",
@@ -388,9 +398,11 @@ class PreferenceModelTest(unittest.TestCase):
 
         self.assertEqual(
             {example.filename for example in examples},
-            {"review-ban.jpg", "review-keep.jpg"},
+            {"manual-dislike.jpg", "review-ban.jpg", "review-keep.jpg"},
         )
         by_name = {example.filename: example for example in examples}
+        self.assertEqual(by_name["manual-dislike.jpg"].label, 1)
+        self.assertTrue(by_name["manual-dislike.jpg"].is_explicit_ban)
         self.assertEqual(by_name["review-ban.jpg"].label, 1)
         self.assertTrue(by_name["review-ban.jpg"].is_explicit_ban)
         self.assertEqual(by_name["review-keep.jpg"].label, 0)
@@ -429,6 +441,31 @@ class PreferenceModelTest(unittest.TestCase):
         )
 
         self.assertEqual(examples, [])
+
+    def test_manual_dislike_switches_to_curated_labels_and_unban_clears_it(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            config.metadata_file.write_text(
+                json.dumps({"missed.jpg": {"tags": ["missed-by-model"]}})
+            )
+
+            record_preference_feedback(
+                config,
+                "dislike",
+                "missed.jpg",
+                context="manual_dislike",
+                timestamp=100,
+            )
+            disliked = collect_preference_training_snapshot(config)
+            record_preference_feedback(config, "unban", "missed.jpg", timestamp=101)
+            undone = collect_preference_training_snapshot(config)
+
+        self.assertEqual(disliked.label_source, "model_review")
+        self.assertEqual([example.filename for example in disliked.examples], ["missed.jpg"])
+        self.assertEqual(disliked.examples[0].label, 1)
+        self.assertTrue(disliked.examples[0].is_explicit_ban)
+        self.assertEqual(undone.label_source, "model_review")
+        self.assertEqual(undone.examples, ())
 
     def test_legacy_feedback_and_unfavorite_do_not_create_keep_label(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -286,7 +286,7 @@ footer .links a { color: var(--subtext); }
   <div class="features">
     <div class="feature" style="border-color: var(--blue);">
       <strong style="color: var(--blue);">Learns from you</strong>
-      <p>Ban a wallpaper and wayper analyzes the pattern. Codex suggests what to exclude next, with iterative feedback tracking.</p>
+      <p>Dislike a wallpaper the model missed to add an explicit training label. Ban stays a separate exact-image block for wallpapers you are tired of.</p>
     </div>
     <div class="feature" style="border-color: var(--teal);">
       <strong style="color: var(--teal);">AI-native (MCP)</strong>
@@ -363,8 +363,9 @@ wayper next                 # next wallpaper (forward or new random)
 wayper prev                 # previous wallpaper from history
 wayper fav [--open]         # favorite current wallpaper
 wayper unfav                # remove from favorites
-wayper ban                  # blacklist + switch
-wayper unban                # undo last ban
+wayper dislike              # teach model, blacklist + switch
+wayper ban                  # exact-image block only + switch
+wayper unban                # undo last dislike or ban
 wayper mode                 # toggle sfw↔nsfw (preserves sketchy)
 wayper mode sketchy         # toggle sketchy on/off
 wayper mode sfw,sketchy     # set exact purity combination
@@ -380,12 +381,12 @@ wayper --json status        # machine-readable output</code></pre>
   the standard library. Install <code>uv pip install -e '.[semantic]'</code> to enable the optional
   FastEmbed <code>BAAI/bge-small-en-v1.5</code> text head, which encodes metadata only and keeps a
   persistent local embedding cache. Before any Review decisions exist, an installation may
-  temporarily bootstrap from its older blacklist/favorite data. Once a review Ban or Keep is recorded,
-  only those explicit review decisions become new training labels; ordinary gallery actions remain
-  outside the label stream. The semantic head learns related metadata patterns from those examples,
+  temporarily bootstrap from its older blacklist/favorite data. Once a Review decision or manual
+  Dislike is recorded, only explicit Keep/Dislike decisions become new training labels; ordinary Ban
+  remains outside the label stream. The semantic head learns related metadata patterns from those examples,
   without a manually configured person or region rule. Tag pairs remain opt-in with <code>--max-combos</code>.
   Live pool images are background controls unless explicitly kept. Wayper reserves the most recent
-  part of each explicit Keep/Ban class to learn an accuracy-first Review boundary that weights
+  part of each explicit Keep/Dislike class to learn an accuracy-first Review boundary that weights
   precision more than recall. Recommended and Auto-held use the same binary decision: scores below
   the learned boundary are omitted, and the page size is a maximum rather than a target to fill.
   Exact and semantic evidence only rank images that have already crossed the boundary.
@@ -394,7 +395,7 @@ wayper --json status        # machine-readable output</code></pre>
   automatically quarantined downloads (Auto-held) separate from likely blocks already in the pool
   (Recommended); pending Auto-held cards open first. Drag, scroll, or use the side arrows to move through
   the full-window card stack. Press <code>Enter</code>/<code>Space</code> for the full preview,
-  <code>A</code> to keep, or <code>X</code>/<code>Delete</code> to ban. An Auto-held Keep releases the
+  <code>A</code> to keep, or <code>D</code> to dislike and teach the model. An Auto-held Keep releases the
   file into the pool, while a recommendation Keep records a positive correction without moving it.
   Because Auto-held files are recoverable and require a human decision, a current trained model can
   quarantine likely blocks without the separate validation gate used for unattended deletion. Wayper
@@ -417,8 +418,9 @@ wayper --json status        # machine-readable output</code></pre>
     <div><kbd>Enter</kbd> / <kbd>Space</kbd> <span class="label">preview (lightbox)</span></div>
     <div><kbd>h</kbd> / <kbd>l</kbd> <span class="label">prev / next wallpaper</span></div>
     <div><kbd>f</kbd> <span class="label">favorite</span></div>
-    <div><kbd>x</kbd> / <kbd>Del</kbd> <span class="label">ban / remove</span></div>
-    <div><kbd>z</kbd> <span class="label">undo ban</span></div>
+    <div><kbd>d</kbd> <span class="label">dislike + teach model</span></div>
+    <div><kbd>x</kbd> / <kbd>Del</kbd> <span class="label">ban exact image only</span></div>
+    <div><kbd>u</kbd> <span class="label">undo dislike / ban</span></div>
     <div><kbd>o</kbd> <span class="label">open on Wallhaven</span></div>
     <div><kbd>F1</kbd> <kbd>F2</kbd> <kbd>F3</kbd> <span class="label">toggle SFW / Sketchy / NSFW</span></div>
     <div><kbd>s</kbd> <span class="label">settings</span></div>
@@ -430,14 +432,15 @@ wayper --json status        # machine-readable output</code></pre>
     <div><kbd>Tab</kbd> / <kbd>Arrow keys</kbd> <span class="label">enter and move through Review candidates</span></div>
     <div><kbd>Enter</kbd> / <kbd>Space</kbd> <span class="label">preview focused Review candidate</span></div>
     <div><kbd>←</kbd> / <kbd>→</kbd> <span class="label">switch candidates in Review preview</span></div>
-    <div><kbd>a</kbd> / <kbd>x</kbd> / <kbd>Del</kbd> <span class="label">keep / ban focused Review candidate</span></div>
+    <div><kbd>a</kbd> / <kbd>d</kbd> <span class="label">keep / dislike focused Review candidate</span></div>
   </div>
   <p class="kbd-label">Lightbox preview</p>
   <div class="kbd-grid">
     <div><kbd>←</kbd> / <kbd>→</kbd> <span class="label">previous / next image</span></div>
     <div><kbd>Enter</kbd> <span class="label">set as wallpaper</span></div>
     <div><kbd>f</kbd> <span class="label">favorite</span></div>
-    <div><kbd>x</kbd> / <kbd>Del</kbd> <span class="label">ban</span></div>
+    <div><kbd>d</kbd> <span class="label">dislike + teach model</span></div>
+    <div><kbd>x</kbd> / <kbd>Del</kbd> <span class="label">ban exact image only</span></div>
     <div><kbd>a</kbd> <span class="label">keep Review candidate</span></div>
     <div><kbd>o</kbd> <span class="label">open on Wallhaven</span></div>
     <div><kbd>Space</kbd> / <kbd>Esc</kbd> <span class="label">close lightbox</span></div>
@@ -460,7 +463,7 @@ command = "/path/to/wayper/.venv/bin/wayper-mcp"
   }
 }</code></pre>
   <p class="mcp-tools">
-    Tools: <code>status</code> <code>next_wallpaper</code> <code>prev_wallpaper</code> <code>fav</code> <code>unfav</code> <code>ban</code> <code>unban</code> <code>set_mode</code> <code>delete_wallpaper</code> <code>wallpaper_info</code> <code>tag_stats_top</code> <code>tag_stats_lookup</code> <code>tag_stats_combo</code> <code>uploader_stats_lookup</code>
+    Tools: <code>status</code> <code>next_wallpaper</code> <code>prev_wallpaper</code> <code>fav</code> <code>unfav</code> <code>dislike</code> <code>ban</code> <code>unban</code> <code>set_mode</code> <code>delete_wallpaper</code> <code>wallpaper_info</code> <code>tag_stats_top</code> <code>tag_stats_lookup</code> <code>tag_stats_combo</code> <code>uploader_stats_lookup</code>
   </p>
 </section>
 
@@ -473,6 +476,7 @@ command = "/path/to/wayper/.venv/bin/wayper-mcp"
   </div>
   <div id="tab-hypr" class="tab-content active">
     <pre><code>bind = $mod, F9,       exec, wayper ban
+bind = $mod CTRL, F9,  exec, wayper dislike
 bind = $mod SHIFT, F9, exec, wayper unban
 bind = $mod, F10,      exec, wayper fav
 bind = $mod SHIFT, F10,exec, wayper unfav

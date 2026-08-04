@@ -321,7 +321,7 @@ def _record_feedback_unlocked(
 
     record_preference_feedback(
         config,
-        action,
+        "dislike" if action == "ban" else action,
         filename,
         source="model_filter",
         context="model_review",
@@ -335,7 +335,7 @@ def resolve_model_review_item(
     raw_path: str,
     action: str,
 ) -> dict[str, object]:
-    """Apply an explicit Keep/Ban decision and return the resolved record."""
+    """Apply an explicit Keep/Dislike decision and return the resolved record."""
     if action not in {"keep", "ban"}:
         raise ValueError("Model review action must be keep or ban")
 
@@ -433,7 +433,7 @@ def model_review_status(config: WayperConfig) -> dict[str, object]:
     status = auto_filter_status(config, model=model)
     # Keep learning metadata alongside the gate state.  The review page is a
     # feedback loop, so showing only "ready" leaves users unable to tell
-    # whether their latest Keep/Ban decisions will trigger a refresh.
+    # whether their latest Keep/Dislike decisions will trigger a refresh.
     try:
         status["learning"] = preference_learning_status(config, model=model)
     except Exception:
