@@ -179,7 +179,7 @@ const els = {
 
     btnDaemon: document.getElementById('btn-daemon'),
     btnSettings: document.getElementById('btn-settings'),
-    updateBannerRoot: document.getElementById('update-banner-root'),
+    updateIndicator: document.getElementById('update-indicator'),
 
     monitorsList: document.getElementById('monitors-list'),
 

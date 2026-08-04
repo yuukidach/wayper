@@ -1674,57 +1674,23 @@ function removeImageFromState(path, { renderEmpty = true } = {}) {
 
 // --- Data Fetching ---
 
-function dismissedUpdateVersion() {
-    try {
-        return window.localStorage.getItem('wayper.dismissedUpdateVersion');
-    } catch {
-        return null;
-    }
-}
-
-function dismissUpdateBanner(version) {
-    if (version) {
-        try {
-            window.localStorage.setItem('wayper.dismissedUpdateVersion', version);
-        } catch { }
-    }
-    els.updateBannerRoot.classList.add('hidden');
-    els.updateBannerRoot.innerHTML = '';
-}
-
-function renderUpdateBanner(info) {
-    if (!els.updateBannerRoot) return;
+function renderUpdateIndicator(info) {
+    if (!els.updateIndicator) return;
     if (!info?.update_available || !info.latest_version) {
-        els.updateBannerRoot.classList.add('hidden');
-        els.updateBannerRoot.innerHTML = '';
+        els.updateIndicator.classList.add('hidden');
+        els.updateIndicator.onclick = null;
         return;
     }
-    if (dismissedUpdateVersion() === info.latest_version) return;
 
-    els.updateBannerRoot.innerHTML = `
-        <div class="update-banner">
-            <span class="update-banner-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                    <polyline points="7 10 12 15 17 10"/>
-                    <line x1="12" y1="15" x2="12" y2="3"/>
-                </svg>
-            </span>
-            <span class="update-banner-text">
-                <strong>Wayper ${esc(info.latest_version)}</strong> is available. Current version: ${esc(info.current_version)}.
-            </span>
-            <span class="update-banner-actions">
-                <button class="update-banner-open" type="button">Get Update</button>
-                <button class="update-banner-close" type="button" title="Dismiss">&times;</button>
-            </span>
-        </div>
-    `;
-    els.updateBannerRoot.classList.remove('hidden');
-    els.updateBannerRoot.querySelector('.update-banner-open').onclick = () => {
+    const versionMessage = `Wayper ${info.latest_version} is available`;
+    els.updateIndicator.title = `${versionMessage}. Current version: ${info.current_version}.`;
+    els.updateIndicator.setAttribute(
+        'aria-label',
+        `${versionMessage}. Open the release page.`,
+    );
+    els.updateIndicator.classList.remove('hidden');
+    els.updateIndicator.onclick = () => {
         window.open(info.release_url || 'https://github.com/yuukidach/wayper/releases/latest', '_blank');
-    };
-    els.updateBannerRoot.querySelector('.update-banner-close').onclick = () => {
-        dismissUpdateBanner(info.latest_version);
     };
 }
 
@@ -1732,7 +1698,7 @@ async function checkForAppUpdates(force = false) {
     try {
         const data = await WayperApi.updateCheck(force);
         appState.updateInfo = data;
-        renderUpdateBanner(data);
+        renderUpdateIndicator(data);
     } catch (e) {
         console.error('Update check failed:', e);
     }
