@@ -48,6 +48,28 @@ def _electron_workdir(src: Path) -> Path:
     return cache
 
 
+def _npm_executable(platform: str | None = None) -> str:
+    """Return the npm launcher appropriate for the current platform."""
+    platform = platform or sys.platform
+    return "npm.cmd" if platform == "win32" else "npm"
+
+
+def _electron_command(electron_dir: Path, platform: str | None = None) -> list[str]:
+    """Build a directly executable Electron command for development launches."""
+    platform = platform or sys.platform
+    if platform == "win32":
+        # node_modules/.bin/electron is a POSIX shell script even on Windows.
+        # CreateProcess cannot execute it and raises WinError 193, so use the
+        # native binary installed by the electron package instead.
+        electron_bin = electron_dir / "node_modules" / "electron" / "dist" / "electron.exe"
+    else:
+        electron_bin = electron_dir / "node_modules" / ".bin" / "electron"
+
+    if electron_bin.exists():
+        return [str(electron_bin), "."]
+    return [_npm_executable(platform), "start"]
+
+
 def _wait_for_api(timeout: float = 10) -> int:
     """Poll API port file and then the API until it responds. Returns the port."""
     pf = port_file()
@@ -90,19 +112,12 @@ def run_app():
     # Check dependencies first
     if not (electron_dir / "node_modules").exists():
         print("Installing dependencies...")
-        subprocess.check_call(["npm", "install"], cwd=electron_dir)
+        subprocess.check_call([_npm_executable(), "ci"], cwd=electron_dir)
 
     print(f"Starting Electron in {electron_dir}...")
 
-    # Find electron executable to run directly (avoiding npm -> node -> electron chain)
-    # This ensures we have the PID of the actual app to kill it later
-    electron_bin = electron_dir / "node_modules" / ".bin" / "electron"
-
-    if not electron_bin.exists():
-        # Fallback to npm start if binary not found
-        cmd = ["npm", "start"]
-    else:
-        cmd = [str(electron_bin), "."]
+    # Run Electron directly where possible so cleanup tracks the actual app PID.
+    cmd = _electron_command(electron_dir)
 
     # Pass API port to Electron so preload.js can pick it up
     env = {**os.environ, "WAYPER_DEV": "1"}

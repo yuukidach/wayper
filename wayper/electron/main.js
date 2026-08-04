@@ -11,6 +11,12 @@ let backendPath = null
 let captureInProgress = false
 
 const CAPTURE_SWITCH = '--wayper-capture'
+const APP_ID = 'com.wayper.app'
+
+if (process.platform === 'win32') {
+  // Keep development launches grouped under Wayper instead of electron.exe.
+  app.setAppUserModelId(APP_ID)
+}
 
 // Platform specific binary name
 const BACKEND_BINARY = process.platform === 'win32' ? 'wayper-backend.exe' : 'wayper-backend'
@@ -50,6 +56,17 @@ function getPortFilePath() {
     return path.join(appData, 'wayper', 'api.port')
   }
   return path.join(process.env.HOME, '.config', 'wayper', 'api.port')
+}
+
+function getAppIconPath() {
+  const iconName = process.platform === 'win32' ? 'icon.ico' : 'icon-256.png'
+  const candidates = [
+    // electron-builder copies runtime icons beside the packaged app resources.
+    path.join(process.resourcesPath, iconName),
+    // Source/development launch from wayper/electron.
+    path.join(__dirname, '../../assets', iconName),
+  ]
+  return candidates.find(candidate => fs.existsSync(candidate)) || null
 }
 
 function startBackend() {
@@ -227,7 +244,8 @@ ipcMain.handle('select-download-dir', async () => {
 
 function createWindow () {
   const isMac = process.platform === 'darwin'
-  mainWindow = new BrowserWindow({
+  const iconPath = getAppIconPath()
+  const windowOptions = {
     width: 1200,
     height: 800,
     backgroundColor: '#11111b',
@@ -236,7 +254,9 @@ function createWindow () {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     }
-  })
+  }
+  if (iconPath) windowOptions.icon = iconPath
+  mainWindow = new BrowserWindow(windowOptions)
 
   mainWindow.loadFile('index.html')
 
@@ -284,6 +304,10 @@ if (!gotTheLock) {
   })
 
   app.whenReady().then(async () => {
+    const iconPath = getAppIconPath()
+    if (process.platform === 'darwin' && app.dock && iconPath) {
+      app.dock.setIcon(iconPath)
+    }
     buildMenu()
     const backendStarted = startBackend()
     // In packaged mode, wait for the API to write its port file
