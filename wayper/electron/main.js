@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron')
+const { app, BrowserWindow, Menu, shell, ipcMain, dialog, screen } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const http = require('http')
@@ -245,9 +245,10 @@ ipcMain.handle('select-download-dir', async () => {
 function createWindow () {
   const isMac = process.platform === 'darwin'
   const iconPath = getAppIconPath()
+  const availableHeight = screen.getPrimaryDisplay().workAreaSize.height
   const windowOptions = {
     width: 1200,
-    height: 800,
+    height: Math.min(900, availableHeight),
     backgroundColor: '#11111b',
     autoHideMenuBar: !isMac,
     titleBarStyle: 'default',
