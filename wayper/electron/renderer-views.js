@@ -2962,7 +2962,7 @@ function createCard(img) {
             <img class="loading" src="${thumbUrl}" loading="lazy" decoding="async" alt="${esc(img.name)}">
             <div class="overlay">
                 <button class="action-btn restore" title="Restore to Pool">${ICONS.restore()}</button>
-                <button class="action-btn url" title="Open on Wallhaven">${ICONS.externalLink()}</button>
+                <button class="action-btn url" title="Open on Wallhaven (O)" aria-keyshortcuts="O">${ICONS.externalLink()}</button>
             </div>
         `;
         const cardImg = card.querySelector('img');
@@ -2980,11 +2980,11 @@ function createCard(img) {
         card.innerHTML = `
             <img class="loading" src="${thumbUrl}" loading="lazy" decoding="async" alt="${esc(img.name)}">
             <div class="overlay">
-                <button class="action-btn" title="Set Wallpaper">${ICONS.setWallpaper()}</button>
-                <button class="action-btn fav ${img.is_favorite ? 'active' : ''}" title="Favorite">${ICONS.favorite(16, img.is_favorite)}</button>
-                <button class="action-btn dislike" title="Dislike and teach the model (D)">${ICONS.dislike()}</button>
-                <button class="action-btn ban" title="Ban this exact image only (X)">${ICONS.ban()}</button>
-                <button class="action-btn url" title="Open on Wallhaven">${ICONS.externalLink()}</button>
+                <button class="action-btn" title="Set Wallpaper (Enter)" aria-keyshortcuts="Enter">${ICONS.setWallpaper()}</button>
+                <button class="action-btn fav ${img.is_favorite ? 'active' : ''}" title="Favorite (F)" aria-keyshortcuts="F">${ICONS.favorite(16, img.is_favorite)}</button>
+                <button class="action-btn dislike" title="Dislike and teach the model (D)" aria-keyshortcuts="D">${ICONS.dislike()}</button>
+                <button class="action-btn ban" title="Ban this exact image only (X)" aria-keyshortcuts="X Delete">${ICONS.ban()}</button>
+                <button class="action-btn url" title="Open on Wallhaven (O)" aria-keyshortcuts="O">${ICONS.externalLink()}</button>
             </div>
         `;
         const cardImg = card.querySelector('img');

@@ -159,10 +159,7 @@ const els = {
     btnPrev: document.getElementById('btn-prev'),
     btnNext: document.getElementById('btn-next'),
     btnUndo: document.getElementById('btn-undo'),
-    btnFav: document.getElementById('btn-fav-current'),
     btnLocate: document.getElementById('btn-locate-current'),
-    btnDislike: document.getElementById('btn-dislike-current'),
-    btnBan: document.getElementById('btn-ban-current'),
 
     btnPool: document.getElementById('btn-pool'),
     btnFavorites: document.getElementById('btn-favorites'),
@@ -268,10 +265,7 @@ function setupEventListeners() {
     els.btnPrev.onclick = () => controlAction('prev');
     els.btnNext.onclick = () => controlAction('next');
     els.btnUndo.onclick = () => undoBan();
-    els.btnFav.onclick = () => controlAction('fav');
     els.btnLocate.onclick = () => scrollToCurrentWallpaper();
-    els.btnDislike.onclick = () => controlAction('dislike');
-    els.btnBan.onclick = () => controlAction('ban');
 
     // Sidebar: Library
     els.btnPool.onclick = () => setViewMode('pool');

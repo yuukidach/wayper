@@ -941,6 +941,18 @@ main {
   color: var(--crust);
 }
 
+.action-btn.dislike,
+.action-btn.ban {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.action-btn.ban {
+  background: rgba(243, 139, 168, 0.1);
+  border-color: rgba(243, 139, 168, 0.16);
+}
+
 .action-btn.ban:hover {
   background: var(--red);
   border-color: var(--red);
@@ -948,7 +960,8 @@ main {
 }
 
 .action-btn.dislike {
-  color: var(--mauve);
+  background: rgba(203, 166, 247, 0.1);
+  border-color: rgba(203, 166, 247, 0.16);
 }
 
 .action-btn.dislike:hover {
