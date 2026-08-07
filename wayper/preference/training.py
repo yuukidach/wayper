@@ -11,10 +11,13 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 
 from .model import (
+    DEFAULT_AUTO_FILTER_NEIGHBOR_THRESHOLD,
     DEFAULT_COMBO_MIN_SUPPORT,
     DEFAULT_EPOCHS,
     DEFAULT_FEATURE_NORMALIZATION,
     DEFAULT_MAX_COMBO_FEATURES,
+    DEFAULT_NEIGHBOR_K,
+    DEFAULT_RECOMMENDATION_THRESHOLD,
     DEFAULT_REVIEW_THRESHOLD,
     DEFAULT_THRESHOLD,
     MIN_TRAINING_PER_CLASS,
@@ -32,14 +35,36 @@ from .model import (
     _pair_keys,
     _sigmoid,
     _storage_feature_key,
+    build_neighbor_prototypes,
     preference_review_decision_score,
     preference_review_has_dislike_evidence,
 )
 
 REVIEW_CALIBRATION_FRACTION = 0.20
 REVIEW_TARGET_PRECISION = 0.80
-REVIEW_CALIBRATION_VERSION = 2
-REVIEW_CALIBRATION_OBJECTIVE = "precision_at_least_0_80"
+REVIEW_CALIBRATION_VERSION = 4
+REVIEW_CALIBRATION_OBJECTIVE = "auto_filter_precision_at_least_0_80"
+
+
+def _default_auto_boundary(model: PreferenceModel) -> float:
+    """Choose a scale-correct fallback for neighbour and legacy heads."""
+    return (
+        DEFAULT_AUTO_FILTER_NEIGHBOR_THRESHOLD
+        if model.neighbor_head_ready
+        else DEFAULT_REVIEW_THRESHOLD
+    )
+
+
+def _attach_neighbor_head(
+    model: PreferenceModel,
+    examples: list[PreferenceExample],
+) -> str:
+    """Attach the dependency-free explicit-feedback content-neighbour head."""
+    prototypes = build_neighbor_prototypes(examples)
+    model.neighbor_k = DEFAULT_NEIGHBOR_K
+    model.neighbor_prototypes = prototypes
+    model._neighbor_feature_index = None
+    return "ready" if model.neighbor_head_ready else "insufficient_explicit_feedback"
 
 
 def _attach_semantic_head(
@@ -102,7 +127,7 @@ def _calibrate_review_boundary(
     model: PreferenceModel,
     holdout: list[PreferenceExample],
 ) -> dict[str, object]:
-    """Select a precision-weighted binary boundary from unseen decisions."""
+    """Select a precision-weighted automatic boundary from unseen decisions."""
     predictions = model.predict_many(
         [(example.tags, None, example.context_features) for example in holdout],
         top_n=12,
@@ -110,26 +135,32 @@ def _calibrate_review_boundary(
     scored = [
         (
             preference_review_decision_score(model, prediction),
-            preference_review_has_dislike_evidence(prediction),
+            preference_review_has_dislike_evidence(prediction)
+            and (not model.neighbor_head_ready or prediction.neighbor_available),
             example.label,
         )
         for example, prediction in zip(holdout, predictions, strict=True)
     ]
-    values = sorted({score for score, _, _ in scored})
+    values = sorted({score for score, evidence, _ in scored if evidence})
     if not values:
         return {
             "version": REVIEW_CALIBRATION_VERSION,
             "available": False,
             "reason": "holdout produced no scores",
-            "threshold": DEFAULT_REVIEW_THRESHOLD,
+            "threshold": _default_auto_boundary(model),
             "objective": REVIEW_CALIBRATION_OBJECTIVE,
         }
 
     thresholds = [
         max(values) + 1e-9,
         *((lower + upper) / 2 for lower, upper in zip(values, values[1:])),
+        DEFAULT_RECOMMENDATION_THRESHOLD,
         min(values) - 1e-9,
     ]
+    thresholds = sorted(
+        {boundary for boundary in thresholds if boundary >= DEFAULT_RECOMMENDATION_THRESHOLD},
+        reverse=True,
+    )
     positives = sum(label == 1 for _, _, label in scored)
     minimum_predictions = min(MIN_VALIDATION_PER_CLASS, positives)
     rows: list[tuple[float, float, float, int, dict[str, object]]] = []
@@ -163,7 +194,10 @@ def _calibrate_review_boundary(
         payload: dict[str, object] = {
             "version": REVIEW_CALIBRATION_VERSION,
             "available": True,
+            # Keep the source label stable for existing CLI/API consumers;
+            # ``method`` records the new ranking head explicitly.
             "source": "stratified_recent_holdout",
+            "method": "content_knn",
             "objective": REVIEW_CALIBRATION_OBJECTIVE,
             "target_precision": REVIEW_TARGET_PRECISION,
             "threshold": round(boundary, 6),
@@ -189,7 +223,7 @@ def _calibrate_review_boundary(
             "version": REVIEW_CALIBRATION_VERSION,
             "available": False,
             "reason": "holdout had too few positive predictions",
-            "threshold": DEFAULT_REVIEW_THRESHOLD,
+            "threshold": _default_auto_boundary(model),
             "objective": REVIEW_CALIBRATION_OBJECTIVE,
         }
     precise = [row for row in rows if row[0] >= REVIEW_TARGET_PRECISION]
@@ -344,6 +378,7 @@ def train_preference_model(
             threshold=threshold,
             epochs=epochs,
         )
+        _attach_neighbor_head(calibration_model, calibration_training)
         _attach_semantic_head(calibration_model, calibration_training, semantic_model)
         review_calibration = _calibrate_review_boundary(
             calibration_model,
@@ -357,6 +392,7 @@ def train_preference_model(
         threshold=threshold,
         epochs=epochs,
     )
+    neighbor_status = _attach_neighbor_head(model, examples)
     semantic_status, semantic_head = _attach_semantic_head(model, examples, semantic_model)
     if semantic_head is not None:
         model.training_summary.update(
@@ -380,7 +416,22 @@ def train_preference_model(
             "controls": sum(example.is_control for example in examples),
             "semantic_model": semantic_model or "",
             "semantic_status": semantic_status,
+            "neighbor_status": neighbor_status,
+            "neighbor_examples": len(model.neighbor_prototypes),
+            "neighbor_dislikes": sum(
+                prototype.label == 1 for prototype in model.neighbor_prototypes
+            ),
+            "neighbor_keeps": sum(prototype.label == 0 for prototype in model.neighbor_prototypes),
+            "neighbor_k": model.neighbor_k,
             "label_source": label_source,
+            "auto_filter_threshold": review_calibration["threshold"],
+            "auto_filter_calibration": review_calibration,
+            "recommendation_threshold": DEFAULT_RECOMMENDATION_THRESHOLD,
+            "recommendation_strategy": (
+                "content_knn_top_k" if neighbor_status == "ready" else "sparse_cold_start"
+            ),
+            # Compatibility aliases for clients written before the automatic
+            # and human-review decisions became separate lanes.
             "review_threshold": review_calibration["threshold"],
             "review_calibration": review_calibration,
         }

@@ -2970,6 +2970,14 @@ footer {
   background: rgba(166, 227, 161, 0.1);
 }
 
+.model-review-neighbor-evidence {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--blue);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .model-review-actions {
   display: flex;
   justify-content: flex-end;

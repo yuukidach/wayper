@@ -957,6 +957,13 @@ function testReviewZeroStateDistinguishesCompletionLearningAndFailure() {
     assert.equal(complete.action, 'pool');
     assert.equal(complete.title.includes('No '), false);
 
+    const recommendationReadyWhileAutoCalibrating = renderer.modelReviewZeroStatePresentation({
+        status: 'calibration_pending',
+        recommendation_status: 'ready',
+        model_filter: { status: 'calibration_pending' },
+    });
+    assert.equal(recommendationReadyWhileAutoCalibrating.variant, 'complete');
+
     const learning = renderer.modelReviewZeroStatePresentation({
         status: 'ready', recommendation_status: 'untrained',
     });

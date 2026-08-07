@@ -385,11 +385,12 @@ wayper --json status        # machine-readable output</code></pre>
   Dislike is recorded, only explicit Keep/Dislike decisions become new training labels; ordinary Ban
   remains outside the label stream. The semantic head learns related metadata patterns from those examples,
   without a manually configured person or region rule. Tag pairs remain opt-in with <code>--max-combos</code>.
-  Live pool images are background controls unless explicitly kept. Wayper reserves the most recent
-  part of each explicit Keep/Dislike class to learn an accuracy-first Review boundary that weights
-  precision more than recall. Recommended and Auto-held use the same binary decision: scores below
-  the learned boundary are omitted, and the page size is a maximum rather than a target to fill.
-  Exact and semantic evidence only rank images that have already crossed the boundary.
+  Live pool images are background controls unless explicitly kept. With enough explicit feedback,
+  Wayper persists a bounded, class-balanced item-item content k-nearest-neighbour head using plain
+  cosine similarity over normalized tags and context. Recommended is a bounded Top-K active-learning
+  rank and does not inherit the automatic boundary. Auto-held uses a separate high-precision boundary
+  calibrated on a recent explicit Keep/Dislike holdout and fails open without neighbour coverage.
+  The sparse FTRL contributions remain available for explanations and cold-start fallback.
   Open the dedicated Review view to control this loop. The sidebar chooses Rules, Model, or
   Rules + model for new downloads without disabling recommendations. Two explicit card lanes keep
   automatically quarantined downloads (Auto-held) separate from likely blocks already in the pool

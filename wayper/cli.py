@@ -518,6 +518,19 @@ def train_preference_model_cmd(ctx, combo_min_support, max_combos, validation_da
             f"{report.get('context_features', 0)} context, "
             f"{report['combo_features']} experimental combos"
         )
+        if report.get("neighbor_head_ready"):
+            click.echo(
+                "Content-neighbor head: "
+                f"{report.get('neighbor_prototypes', 0)} explicit prototypes, "
+                f"k={report.get('neighbor_k')}"
+            )
+            click.echo(
+                "Review boundaries: "
+                f"Recommended >= {float(report.get('recommendation_threshold', 0.5)):.2f}, "
+                f"Auto-held >= {float(report.get('auto_filter_threshold', 0.8)):.2f}"
+            )
+        else:
+            click.echo("Content-neighbor head: waiting for explicit Keep/Dislike feedback")
         click.echo(f"Labels: {report.get('label_source', 'legacy')}")
         if report.get("semantic_enabled"):
             click.echo(
@@ -623,6 +636,19 @@ def preference_model_status(ctx):
             f"{report.get('context_features', 0)} context, "
             f"{report['combo_features']} experimental combos"
         )
+        if report.get("neighbor_head_ready"):
+            click.echo(
+                "Content-neighbor head: "
+                f"{report.get('neighbor_prototypes', 0)} explicit prototypes, "
+                f"k={report.get('neighbor_k')}"
+            )
+            click.echo(
+                "Review boundaries: "
+                f"Recommended >= {float(report.get('recommendation_threshold', 0.5)):.2f}, "
+                f"Auto-held >= {float(report.get('auto_filter_threshold', 0.8)):.2f}"
+            )
+        else:
+            click.echo("Content-neighbor head: waiting for explicit Keep/Dislike feedback")
         click.echo(f"Labels: {report.get('label_source', 'legacy')}")
         if report.get("semantic_enabled"):
             click.echo(
@@ -712,10 +738,16 @@ def preference_model_score(ctx, filename, tags):
             raise SystemExit(2)
         raise click.UsageError(message)
 
-    from .preference_model import auto_skip_ready
+    from .preference_model import (
+        auto_skip_ready,
+        preference_recommendation_candidate,
+        preference_review_candidate,
+    )
 
     prediction = model.predict(input_tags, metadata=input_metadata)
     safe_to_skip = auto_skip_ready(model)
+    auto_hold_candidate = preference_review_candidate(model, prediction)
+    recommendation_candidate = preference_recommendation_candidate(model, prediction)
     result = {
         "filename": label,
         "probability": prediction.probability,
@@ -725,8 +757,18 @@ def preference_model_score(ctx, filename, tags):
         "semantic_score": prediction.semantic_score,
         "semantic_probability": prediction.semantic_probability,
         "semantic_available": prediction.semantic_available,
+        "neighbor_probability": prediction.neighbor_probability,
+        "neighbor_available": prediction.neighbor_available,
+        "neighbor_count": prediction.neighbor_count,
+        "neighbor_dislike_count": prediction.neighbor_dislike_count,
+        "neighbor_keep_count": prediction.neighbor_keep_count,
+        "neighbor_max_similarity": prediction.neighbor_max_similarity,
+        "neighbor_nearest_dislike": prediction.neighbor_nearest_dislike,
+        "neighbor_nearest_keep": prediction.neighbor_nearest_keep,
         "threshold": model.threshold,
         "would_skip": safe_to_skip and prediction.probability >= model.threshold,
+        "would_auto_hold": auto_hold_candidate,
+        "would_recommend": recommendation_candidate,
         "contributions": list(prediction.contributions),
         "dislike_evidence": [
             item for item in prediction.contributions if item.get("direction") == "dislike"
@@ -742,6 +784,18 @@ def preference_model_score(ctx, filename, tags):
             click.echo(f"Calibrated dislike probability: {prediction.probability:.1%}")
         else:
             click.echo(f"Uncalibrated dislike score: {prediction.score:+.3f}")
+        if prediction.neighbor_available:
+            click.echo(
+                "Content-neighbor vote: "
+                f"{prediction.neighbor_probability:.1%} "
+                f"({prediction.neighbor_dislike_count} Dislike / "
+                f"{prediction.neighbor_keep_count} Keep neighbours)"
+            )
+        click.echo(
+            "Model lanes: "
+            f"Auto-held {'yes' if auto_hold_candidate else 'no'}, "
+            f"Recommended {'yes' if recommendation_candidate else 'no'}"
+        )
         click.echo(f"Automatic skip safety gate: {'ready' if safe_to_skip else 'not ready'}")
         if prediction.contributions:
             click.echo("Top evidence:")

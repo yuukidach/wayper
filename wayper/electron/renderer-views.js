@@ -653,7 +653,12 @@ function refreshPreferenceSuggestionDiagnostics() {
         ? data.diagnostics
         : {};
     const bestReviewScore = items.reduce((best, item) => {
-        const score = Number(item?.review_score ?? item?.feature_score);
+        const score = Number(
+            item?.neighbor_probability
+            ?? item?.recommendation_score
+            ?? item?.review_score
+            ?? item?.feature_score,
+        );
         return Number.isFinite(score) ? Math.max(best, score) : best;
     }, 0);
     const serverCandidateCount = Number(diagnostics.candidate_count);
@@ -686,7 +691,9 @@ function preferenceReviewEmptyText(data) {
     }
     const diagnostics = data?.diagnostics || {};
     const bestReviewScore = Number(
-        diagnostics.best_review_score ?? diagnostics.best_feature_score,
+        diagnostics.best_neighbor_probability
+        ?? diagnostics.best_review_score
+        ?? diagnostics.best_feature_score,
     );
     const bestLabel = Number.isFinite(bestReviewScore)
         ? formatPreferenceScore(bestReviewScore)
@@ -1225,15 +1232,20 @@ function createPreferenceReviewRow(item) {
     const rank = document.createElement('span');
     rank.className = 'model-review-rank';
     rank.textContent = formatPreferenceRank(item);
+    const neighborRank = item.ranking_source === 'content_knn';
     rank.title = item.auto_filtered
-        ? `Review score ${formatPreferenceScore(item.decision_score ?? item.review_score)}`
+        ? `Auto-held score ${formatPreferenceScore(item.neighbor_probability ?? item.decision_score ?? item.review_score)}`
             + ` · boundary ${formatPreferenceScore(item.threshold)}`
-        : `Hybrid rank ${formatPreferenceScore(item.hybrid_score ?? item.review_score ?? item.feature_score)}`
-            + ` · review score ${formatPreferenceScore(item.review_score ?? item.feature_score)}`
-            + (item.semantic_available
-                ? ` · semantic ${formatPreferenceScore(item.semantic_score)}`
-                : '')
-            + ` · net feature score ${formatPreferenceScore(item.feature_score)}`;
+        : neighborRank
+            ? `Dislike-neighbour vote ${formatPreferenceScore(item.neighbor_probability)}`
+                + ` · similarity ${formatPreferenceScore(item.neighbor_max_similarity)}`
+                + ` · sparse explanation ${formatPreferenceScore(item.review_score ?? item.feature_score)}`
+            : `Hybrid rank ${formatPreferenceScore(item.hybrid_score ?? item.review_score ?? item.feature_score)}`
+                + ` · review score ${formatPreferenceScore(item.review_score ?? item.feature_score)}`
+                + (item.semantic_available
+                    ? ` · semantic ${formatPreferenceScore(item.semantic_score)}`
+                    : '')
+                + ` · net feature score ${formatPreferenceScore(item.feature_score)}`;
     itemHeader.appendChild(rank);
     body.appendChild(itemHeader);
 
@@ -1268,7 +1280,18 @@ function createPreferenceReviewRow(item) {
     };
     appendEvidence('Dislike', dislikeEvidence, 'dislike');
     appendEvidence('Counter', keepEvidence, 'counter');
-    if (!dislikeEvidence.length && !keepEvidence.length) {
+    if (neighborRank && item.neighbor_nearest_dislike?.filename) {
+        const neighbor = document.createElement('span');
+        neighbor.className = 'model-review-neighbor-evidence';
+        neighbor.textContent = `Similar to Dislike: ${item.neighbor_nearest_dislike.filename}`;
+        neighbor.title = `Nearest explicit Dislike (${formatPreferenceScore(item.neighbor_nearest_dislike.similarity)} similarity)`;
+        explanation.appendChild(neighbor);
+    }
+    if (
+        !dislikeEvidence.length
+        && !keepEvidence.length
+        && !(neighborRank && item.neighbor_nearest_dislike?.filename)
+    ) {
         explanation.textContent = 'No individual feature explanation available';
     }
     body.appendChild(explanation);
@@ -2199,7 +2222,9 @@ function modelReviewZeroStatePresentation(data) {
             actionLabel: 'Try again',
         };
     }
-    if (recommendationStatus !== 'ready' || modelFilter.status === 'calibration_pending') {
+    // Recommended is an active-learning lane and remains useful while the
+    // separate unattended/Auto-held calibration is still collecting labels.
+    if (recommendationStatus !== 'ready') {
         return {
             variant: 'learning',
             eyebrow: 'Getting ready',
@@ -2214,7 +2239,9 @@ function modelReviewZeroStatePresentation(data) {
         variant: 'complete',
         eyebrow: 'Queue clear',
         title: 'You’re all caught up',
-        detail: strategy === 'rules'
+        detail: modelFilter.status === 'calibration_pending'
+            ? 'Recommended is ready; Auto-held will activate after the next calibration refresh.'
+            : strategy === 'rules'
             ? 'There are no model recommendations waiting. Rules continue to filter new downloads.'
             : 'There are no auto-held images or recommendations waiting for this monitor.',
         action: 'pool',

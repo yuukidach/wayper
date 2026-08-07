@@ -381,6 +381,9 @@ def _model_review_item_details(
         "feature_normalization",
         "trained_at",
         "review_threshold",
+        "auto_filter_threshold",
+        "recommendation_threshold",
+        "auto_filter_threshold_kind",
     ):
         value = model.get(key)
         if isinstance(value, str | int | float | bool):
@@ -396,6 +399,15 @@ def _model_review_item_details(
         "semantic_score",
         "semantic_probability",
         "semantic_available",
+        "neighbor_probability",
+        "neighbor_available",
+        "neighbor_count",
+        "neighbor_dislike_count",
+        "neighbor_keep_count",
+        "neighbor_similarity_sum",
+        "neighbor_max_similarity",
+        "ranking_source",
+        "recommendation_score",
         "probability",
         "calibrated",
         "rank",
@@ -404,6 +416,14 @@ def _model_review_item_details(
         value = item.get(key)
         if isinstance(value, str | int | float | bool):
             details[key] = value
+    for key in ("neighbor_nearest_dislike", "neighbor_nearest_keep"):
+        value = item.get(key)
+        if isinstance(value, dict):
+            details[key] = {
+                str(name): nested
+                for name, nested in value.items()
+                if isinstance(nested, str | int | float | bool)
+            }
     return details or None
 
 

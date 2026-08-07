@@ -152,16 +152,20 @@ used as new training labels; an ordinary Ban is not silently promoted to one.
 The optional semantic head learns related metadata patterns from the same review
 examples, without a manually configured person/region rule. A live image that
 has never been explicitly kept is treated as a background control, not as proof
-that you like it. Wayper reserves the most recent part of each explicit Keep/Dislike
-class to learn an accuracy-first Review boundary, weighting precision more than
-recall so weak guesses do not create a large manual queue. **Recommended** and
-**Auto-held** use that same binary decision: scores below the learned boundary
-are omitted, and the page size is only a maximum rather than a target to fill.
-Semantic and exact evidence rank the images that already passed the boundary;
-rank alone cannot make an image a candidate. Because model hits require a human
-decision, a current trained model can filter without passing the separate
-high-precision gate used for unattended deletion. Model hits never enter the
-blacklist automatically.
+that you like it. With enough explicit feedback, Wayper also persists a bounded,
+class-balanced item-item content k-nearest-neighbour head (plain cosine over
+normalized tags and context). This is the classic single-user recommender
+formulation used by mature projects such as
+[LightFM](https://github.com/lyst/lightfm) and
+[implicit](https://github.com/benfred/implicit), adapted here without a
+compiled runtime dependency. **Recommended** is an active-learning
+lane: it ranks the strongest explicit Dislike-neighbour votes and returns a
+bounded Top-K, so it does not inherit the high-precision automatic boundary.
+**Auto-held** uses a separate boundary calibrated on a recent explicit
+Keep/Dislike holdout and fails open when the neighbour head has no coverage.
+The human recommendation lane may use the explainable sparse head as a
+cold-start fallback, and FTRL contributions remain visible as explanations.
+Model hits never enter the blacklist automatically.
 
 The GUI's dedicated **Review** view is the control center for this loop.
 The sidebar control chooses `Rules`, `Model`, or `Both` (`Rules + model`) for

@@ -72,6 +72,17 @@ def _clean_record(value: object) -> dict[str, object] | None:
                 isinstance(item, float) and not math.isfinite(item)
             ):
                 clean_model[str(key)] = item
+            elif key in {"neighbor_nearest_dislike", "neighbor_nearest_keep"} and isinstance(
+                item, dict
+            ):
+                neighbor = {
+                    str(k): v
+                    for k, v in item.items()
+                    if isinstance(v, str | int | float | bool)
+                    and not (isinstance(v, float) and not math.isfinite(v))
+                }
+                if neighbor:
+                    clean_model[key] = neighbor
             elif key in {"dislike_evidence", "keep_evidence", "contributions"} and isinstance(
                 item, list
             ):
@@ -229,6 +240,15 @@ def list_model_review_items(
                 "semantic_score",
                 "semantic_probability",
                 "semantic_available",
+                "neighbor_probability",
+                "neighbor_available",
+                "neighbor_count",
+                "neighbor_dislike_count",
+                "neighbor_keep_count",
+                "neighbor_similarity_sum",
+                "neighbor_max_similarity",
+                "neighbor_nearest_dislike",
+                "neighbor_nearest_keep",
                 "threshold",
                 "contributions",
                 "dislike_evidence",
@@ -242,10 +262,14 @@ def list_model_review_items(
         model = item.get("model")
         score = 0.0
         if isinstance(model, dict):
-            for key in ("probability", "review_score", "feature_score"):
-                value = model.get(key)
-                if isinstance(value, int | float):
-                    score = max(score, float(value))
+            neighbor_score = model.get("neighbor_probability")
+            if isinstance(neighbor_score, int | float):
+                score = float(neighbor_score)
+            else:
+                for key in ("probability", "review_score", "feature_score"):
+                    value = model.get(key)
+                    if isinstance(value, int | float):
+                        score = max(score, float(value))
         created = item.get("created_at", 0)
         return (
             -score,

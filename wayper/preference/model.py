@@ -9,9 +9,13 @@ from dataclasses import field as dataclass_field
 
 from ..tags import normalize_tag
 
-MODEL_SCHEMA_VERSION = 3
+# Schema 4 adds a bounded, persisted content-neighbour head.  Keep the older
+# values named explicitly: model files are user data and must remain readable
+# across upgrades so a background refresh can replace them safely.
+MODEL_SCHEMA_VERSION = 4
 LEGACY_MODEL_SCHEMA_VERSION = 1
 SPARSE_MODEL_SCHEMA_VERSION = 2
+CALIBRATED_MODEL_SCHEMA_VERSION = 3
 DEFAULT_COMBO_MIN_SUPPORT = 20
 DEFAULT_MAX_COMBO_FEATURES = 0
 DEFAULT_UPLOADER_MIN_SUPPORT = 10
@@ -22,6 +26,15 @@ DEFAULT_THRESHOLD = 0.98
 # Keep/Dislike decisions.
 DEFAULT_REVIEW_THRESHOLD = 0.20
 DEFAULT_REVIEW_DISLIKE_BOOST = 1.5
+DEFAULT_NEIGHBOR_K = 35
+DEFAULT_NEIGHBOR_MAX_PROTOTYPES = 2048
+DEFAULT_NEIGHBOR_MIN_SIMILARITY = 0.15
+DEFAULT_RECOMMENDATION_THRESHOLD = 0.50
+# This is a probability boundary, unlike DEFAULT_REVIEW_THRESHOLD which is a
+# legacy sparse-logit margin.  It is deliberately conservative and is replaced
+# by a held-out boundary when enough explicit feedback exists.
+DEFAULT_AUTO_FILTER_NEIGHBOR_THRESHOLD = 0.80
+NEIGHBOR_HEAD_SCHEMA_VERSION = 1
 DEFAULT_FAVORITE_WEIGHT = 4.0
 DEFAULT_RECENCY_HALF_LIFE_DAYS = 90
 DEFAULT_FEATURE_NORMALIZATION = "field_l2"
@@ -101,6 +114,18 @@ class PreferencePrediction:
     semantic_score: float | None = None
     semantic_probability: float | None = None
     semantic_available: bool = False
+    # The content-neighbour head is intentionally separate from the sparse
+    # logistic explanation above.  ``neighbor_probability`` is a weighted vote
+    # over explicit Keep/Dislike prototypes, not a pixel or embedding score.
+    neighbor_probability: float | None = None
+    neighbor_available: bool = False
+    neighbor_count: int = 0
+    neighbor_dislike_count: int = 0
+    neighbor_keep_count: int = 0
+    neighbor_similarity_sum: float = 0.0
+    neighbor_max_similarity: float = 0.0
+    neighbor_nearest_dislike: dict[str, object] | None = None
+    neighbor_nearest_keep: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         dislike_evidence = [
@@ -134,7 +159,30 @@ class PreferencePrediction:
                 else None
             ),
             "semantic_available": self.semantic_available,
+            "neighbor_probability": (
+                round(self.neighbor_probability, 4)
+                if self.neighbor_probability is not None
+                else None
+            ),
+            "neighbor_available": self.neighbor_available,
+            "neighbor_count": self.neighbor_count,
+            "neighbor_dislike_count": self.neighbor_dislike_count,
+            "neighbor_keep_count": self.neighbor_keep_count,
+            "neighbor_similarity_sum": round(self.neighbor_similarity_sum, 4),
+            "neighbor_max_similarity": round(self.neighbor_max_similarity, 4),
+            "neighbor_nearest_dislike": self.neighbor_nearest_dislike,
+            "neighbor_nearest_keep": self.neighbor_nearest_keep,
         }
+
+
+@dataclass(frozen=True)
+class PreferenceNeighborPrototype:
+    """One unit-normalized explicit example for content k-nearest-neighbours."""
+
+    filename: str
+    label: int
+    timestamp: int
+    features: tuple[tuple[str, float], ...]
 
 
 def preference_review_score(prediction: PreferencePrediction) -> float:
@@ -154,7 +202,14 @@ def preference_review_decision_score(
     model: PreferenceModel,
     prediction: PreferencePrediction,
 ) -> float:
-    """Return the model margin used by the binary Review decision."""
+    """Return the score used by the conservative automatic boundary.
+
+    New models use the calibrated content-neighbour probability whenever the
+    query has neighbour coverage.  Legacy/cold-start predictions retain the
+    explainable sparse margin so old callers and models continue to work.
+    """
+    if prediction.neighbor_available and prediction.neighbor_probability is not None:
+        return prediction.neighbor_probability
     semantic = (
         model.semantic_blend * prediction.semantic_score
         if prediction.semantic_available and prediction.semantic_score is not None
@@ -164,15 +219,32 @@ def preference_review_decision_score(
 
 
 def preference_review_threshold(model: PreferenceModel) -> float:
-    """Return a finite learned Review boundary, or the conservative fallback."""
-    value = model.training_summary.get("review_threshold")
+    """Return the automatic boundary (legacy name retained for API clients)."""
+    value = model.training_summary.get("auto_filter_threshold")
+    if not isinstance(value, int | float) or isinstance(value, bool) or not math.isfinite(value):
+        value = model.training_summary.get("review_threshold")
     if isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value):
-        return float(value)
-    return DEFAULT_REVIEW_THRESHOLD
+        boundary = float(value)
+        return (
+            max(DEFAULT_RECOMMENDATION_THRESHOLD, boundary)
+            if model.neighbor_head_ready
+            else boundary
+        )
+    return (
+        DEFAULT_AUTO_FILTER_NEIGHBOR_THRESHOLD
+        if model.neighbor_head_ready
+        else DEFAULT_REVIEW_THRESHOLD
+    )
 
 
 def preference_review_has_dislike_evidence(prediction: PreferencePrediction) -> bool:
-    """Require a concrete sparse or semantic dislike signal."""
+    """Require concrete evidence for the conservative automatic boundary."""
+    if prediction.neighbor_available:
+        return (
+            prediction.neighbor_max_similarity >= DEFAULT_NEIGHBOR_MIN_SIMILARITY
+            and prediction.neighbor_dislike_count > 0
+            and bool(prediction.neighbor_probability is not None)
+        )
     return prediction.strongest_review_dislike_score > 0 or bool(
         prediction.semantic_available
         and prediction.semantic_score is not None
@@ -180,11 +252,49 @@ def preference_review_has_dislike_evidence(prediction: PreferencePrediction) -> 
     )
 
 
+def preference_recommendation_candidate(
+    model: PreferenceModel,
+    prediction: PreferencePrediction,
+) -> bool:
+    """Return whether a prediction belongs in the human Recommended lane.
+
+    Recommended is an active-learning queue: a bounded rank is useful even
+    when it would not clear an unattended-action boundary.  A neighbour head
+    therefore uses a modest majority vote and requires at least one explicit
+    Dislike neighbour.  Queries with no neighbour coverage use the sparse
+    explainable head as a cold-start fallback, with the fixed recoverable
+    margin rather than the high-precision automatic threshold.
+    """
+    if prediction.neighbor_available and prediction.neighbor_probability is not None:
+        return (
+            prediction.neighbor_dislike_count > 0
+            and prediction.neighbor_max_similarity >= DEFAULT_NEIGHBOR_MIN_SIMILARITY
+            and prediction.neighbor_probability >= DEFAULT_RECOMMENDATION_THRESHOLD
+        )
+    return (
+        prediction.strongest_review_dislike_score > 0
+        or bool(
+            prediction.semantic_available
+            and prediction.semantic_score is not None
+            and prediction.semantic_score > 0
+        )
+    ) and preference_review_decision_score(model, prediction) >= DEFAULT_REVIEW_THRESHOLD
+
+
 def preference_review_candidate(
     model: PreferenceModel,
     prediction: PreferencePrediction,
 ) -> bool:
-    """Classify one prediction with the model-specific Review boundary."""
+    """Classify one prediction with the conservative automatic boundary.
+
+    This compatibility entry point is used by download filtering.  Human
+    recommendations must call :func:`preference_recommendation_candidate`.
+    """
+    # Once a persisted neighbour head exists, an uncovered query must fail
+    # open.  Falling back to the sparse margin here would silently turn the
+    # recommendation cold-start path into an automatic action.
+    if model.neighbor_head_ready and not prediction.neighbor_available:
+        return False
     return preference_review_has_dislike_evidence(prediction) and (
         preference_review_decision_score(model, prediction) >= preference_review_threshold(model)
     )
@@ -200,7 +310,7 @@ def _contribution_direction(value: object) -> str | None:
 
 @dataclass
 class PreferenceModel:
-    """Persisted sparse logistic model."""
+    """Persisted sparse logistic model with an optional content-neighbour head."""
 
     bias: float
     prior_log_odds: float
@@ -220,6 +330,11 @@ class PreferenceModel:
     semantic_weights: tuple[float, ...] = ()
     semantic_blend: float = 0.0
     semantic_rank_weight: float = 0.0
+    neighbor_k: int = DEFAULT_NEIGHBOR_K
+    neighbor_prototypes: tuple[PreferenceNeighborPrototype, ...] = ()
+    _neighbor_feature_index: dict[str, tuple[tuple[int, float], ...]] | None = dataclass_field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def feature_space(self) -> FeatureSpace:
@@ -233,6 +348,90 @@ class PreferenceModel:
     def semantic_enabled(self) -> bool:
         """Whether this model contains a persisted semantic preference head."""
         return bool(self.semantic_model and self.semantic_weights)
+
+    @property
+    def neighbor_head_ready(self) -> bool:
+        """Whether explicit prototypes cover both sides of the preference."""
+        labels = {prototype.label for prototype in self.neighbor_prototypes}
+        return labels == {0, 1} and self.neighbor_k > 0
+
+    def _neighbor_index(self) -> dict[str, tuple[tuple[int, float], ...]]:
+        """Build a reusable sparse inverted index for cosine overlap."""
+        if self._neighbor_feature_index is not None:
+            return self._neighbor_feature_index
+        postings: dict[str, list[tuple[int, float]]] = {}
+        for index, prototype in enumerate(self.neighbor_prototypes):
+            for feature, value in prototype.features:
+                postings.setdefault(feature, []).append((index, value))
+        self._neighbor_feature_index = {
+            feature: tuple(values) for feature, values in postings.items()
+        }
+        return self._neighbor_feature_index
+
+    def _predict_neighbors(
+        self,
+        tags: Iterable[object],
+        context_features: Iterable[object] | None,
+    ) -> dict[str, object]:
+        """Return a similarity-weighted explicit-label vote for one query."""
+        if not self.neighbor_head_ready:
+            return {}
+        query = _neighbor_feature_values(tags, context_features)
+        if not query:
+            return {}
+        scores: dict[int, float] = {}
+        postings = self._neighbor_index()
+        for feature, query_value in query:
+            for prototype_index, prototype_value in postings.get(feature, ()):
+                scores[prototype_index] = (
+                    scores.get(prototype_index, 0.0) + query_value * prototype_value
+                )
+        neighbors = sorted(
+            (
+                (min(1.0, similarity), self.neighbor_prototypes[index])
+                for index, similarity in scores.items()
+                if similarity > 0
+            ),
+            key=lambda item: (
+                -item[0],
+                -item[1].timestamp,
+                item[1].filename,
+                item[1].label,
+            ),
+        )[: self.neighbor_k]
+        if not neighbors:
+            return {}
+        similarity_sum = sum(similarity for similarity, _ in neighbors)
+        if similarity_sum <= 0:
+            return {}
+        dislike_similarity = sum(
+            similarity for similarity, prototype in neighbors if prototype.label == 1
+        )
+        dislike_neighbors = [item for item in neighbors if item[1].label == 1]
+        keep_neighbors = [item for item in neighbors if item[1].label == 0]
+
+        def evidence(
+            item: tuple[float, PreferenceNeighborPrototype] | None,
+        ) -> dict[str, object] | None:
+            if item is None:
+                return None
+            similarity, prototype = item
+            return {
+                "filename": prototype.filename,
+                "label": "dislike" if prototype.label else "keep",
+                "similarity": round(similarity, 4),
+            }
+
+        return {
+            "probability": dislike_similarity / similarity_sum,
+            "count": len(neighbors),
+            "dislike_count": len(dislike_neighbors),
+            "keep_count": len(keep_neighbors),
+            "similarity_sum": similarity_sum,
+            "max_similarity": neighbors[0][0],
+            "nearest_dislike": evidence(dislike_neighbors[0] if dislike_neighbors else None),
+            "nearest_keep": evidence(keep_neighbors[0] if keep_neighbors else None),
+        }
 
     def predict(
         self,
@@ -251,6 +450,7 @@ class PreferenceModel:
             if context_features is not None
             else _model_context_features(metadata)
         )
+        neighbor = self._predict_neighbors(normalized, normalized_context)
         score = self.bias + self.prior_log_odds
         feature_score = 0.0
         contributions: list[tuple[str, str, float, float]] = []
@@ -359,6 +559,25 @@ class PreferenceModel:
             semantic_score=semantic_score,
             semantic_probability=semantic_probability,
             semantic_available=semantic_available,
+            neighbor_probability=(
+                float(neighbor["probability"]) if "probability" in neighbor else None
+            ),
+            neighbor_available=bool(neighbor),
+            neighbor_count=int(neighbor.get("count", 0)),
+            neighbor_dislike_count=int(neighbor.get("dislike_count", 0)),
+            neighbor_keep_count=int(neighbor.get("keep_count", 0)),
+            neighbor_similarity_sum=float(neighbor.get("similarity_sum", 0.0)),
+            neighbor_max_similarity=float(neighbor.get("max_similarity", 0.0)),
+            neighbor_nearest_dislike=(
+                neighbor.get("nearest_dislike")
+                if isinstance(neighbor.get("nearest_dislike"), dict)
+                else None
+            ),
+            neighbor_nearest_keep=(
+                neighbor.get("nearest_keep")
+                if isinstance(neighbor.get("nearest_keep"), dict)
+                else None
+            ),
         )
 
     def predict_many(
@@ -454,6 +673,19 @@ class PreferenceModel:
                 if self.semantic_enabled
                 else {}
             ),
+            "neighbor_head": {
+                "version": NEIGHBOR_HEAD_SCHEMA_VERSION,
+                "k": self.neighbor_k,
+                "prototypes": [
+                    {
+                        "filename": prototype.filename,
+                        "label": prototype.label,
+                        "timestamp": prototype.timestamp,
+                        "features": [list(feature) for feature in prototype.features],
+                    }
+                    for prototype in self.neighbor_prototypes
+                ],
+            },
         }
 
     @classmethod
@@ -465,6 +697,7 @@ class PreferenceModel:
         if isinstance(raw_schema_version, bool) or raw_schema_version not in {
             LEGACY_MODEL_SCHEMA_VERSION,
             SPARSE_MODEL_SCHEMA_VERSION,
+            CALIBRATED_MODEL_SCHEMA_VERSION,
             MODEL_SCHEMA_VERSION,
         }:
             raise ValueError("Unsupported preference model file")
@@ -488,6 +721,70 @@ class PreferenceModel:
         semantic_weights = semantic_raw.get("weights", [])
         if not isinstance(semantic_weights, list | tuple):
             raise ValueError("Invalid preference model semantic weights")
+        neighbor_raw = raw.get("neighbor_head", {})
+        if neighbor_raw is None:
+            neighbor_raw = {}
+        if not isinstance(neighbor_raw, dict):
+            raise ValueError("Invalid preference model neighbor head")
+        neighbor_version = neighbor_raw.get("version", NEIGHBOR_HEAD_SCHEMA_VERSION)
+        if (
+            isinstance(neighbor_version, bool)
+            or not isinstance(neighbor_version, int)
+            or neighbor_version != NEIGHBOR_HEAD_SCHEMA_VERSION
+        ):
+            raise ValueError("Invalid preference model neighbor head version")
+        neighbor_k = neighbor_raw.get("k", DEFAULT_NEIGHBOR_K)
+        if (
+            isinstance(neighbor_k, bool)
+            or not isinstance(neighbor_k, int)
+            or not 1 <= neighbor_k <= DEFAULT_NEIGHBOR_MAX_PROTOTYPES
+        ):
+            raise ValueError("Invalid preference model neighbor k")
+        raw_prototypes = neighbor_raw.get("prototypes", [])
+        if not isinstance(raw_prototypes, list | tuple):
+            raise ValueError("Invalid preference model neighbor prototypes")
+        if len(raw_prototypes) > DEFAULT_NEIGHBOR_MAX_PROTOTYPES:
+            raise ValueError("Preference model neighbor head is too large")
+        neighbor_prototypes: list[PreferenceNeighborPrototype] = []
+        for raw_prototype in raw_prototypes:
+            if not isinstance(raw_prototype, dict):
+                raise ValueError("Invalid preference model neighbor prototype")
+            label = raw_prototype.get("label")
+            timestamp = raw_prototype.get("timestamp")
+            filename = raw_prototype.get("filename")
+            raw_features = raw_prototype.get("features")
+            if (
+                isinstance(label, bool)
+                or label not in {0, 1}
+                or isinstance(timestamp, bool)
+                or not isinstance(timestamp, int)
+                or not isinstance(filename, str)
+                or not filename
+                or not isinstance(raw_features, list | tuple)
+            ):
+                raise ValueError("Invalid preference model neighbor prototype")
+            features: list[tuple[str, float]] = []
+            if len(raw_features) > 512:
+                raise ValueError("Preference model neighbor prototype is too large")
+            for raw_feature in raw_features:
+                if not isinstance(raw_feature, list | tuple) or len(raw_feature) != 2:
+                    raise ValueError("Invalid preference model neighbor feature")
+                feature, raw_value = raw_feature
+                if not isinstance(feature, str) or not feature:
+                    raise ValueError("Invalid preference model neighbor feature")
+                value = float(raw_value)
+                if not math.isfinite(value) or value <= 0:
+                    raise ValueError("Invalid preference model neighbor feature")
+                features.append((feature, value))
+            if features:
+                neighbor_prototypes.append(
+                    PreferenceNeighborPrototype(
+                        filename=filename,
+                        label=int(label),
+                        timestamp=timestamp,
+                        features=tuple(features),
+                    )
+                )
         return cls(
             bias=float(raw["bias"]),
             prior_log_odds=float(raw["prior_log_odds"]),
@@ -521,6 +818,8 @@ class PreferenceModel:
             semantic_weights=tuple(float(value) for value in semantic_weights),
             semantic_blend=float(semantic_raw.get("blend", 0.0)),
             semantic_rank_weight=float(semantic_raw.get("rank_weight", 0.0)),
+            neighbor_k=neighbor_k,
+            neighbor_prototypes=tuple(neighbor_prototypes),
         )
 
 
@@ -567,6 +866,91 @@ def _model_context_features(metadata: dict[str, object] | None) -> tuple[str, ..
         if value not in (None, ""):
             values.append(f"{field}:{value}")
     return _normalize_context_features(values)
+
+
+def _neighbor_feature_values(
+    tags: Iterable[object] | None,
+    context_features: Iterable[object] | None,
+) -> tuple[tuple[str, float], ...]:
+    """Return a deterministic unit vector for metadata content similarity.
+
+    Tags and each context field first receive equal total mass, matching the
+    sparse model's field normalization.  A final L2 normalization makes the
+    dot product an ordinary cosine similarity without NumPy or SciPy.
+    """
+    normalized_tags = _model_tags(tags)
+    normalized_context = _normalize_context_features(context_features)
+    values: list[tuple[str, float]] = []
+    if normalized_tags:
+        tag_scale = 1.0 / math.sqrt(len(normalized_tags))
+        values.extend((f"tag:{tag}", tag_scale) for tag in normalized_tags)
+    by_field: dict[str, list[str]] = {}
+    for token in normalized_context:
+        field, _, _ = token.partition(":")
+        by_field.setdefault(field, []).append(token)
+    for field in sorted(by_field):
+        tokens = by_field[field]
+        scale = 1.0 / math.sqrt(len(tokens))
+        values.extend((f"context:{token}", scale) for token in tokens)
+    norm = math.sqrt(sum(value * value for _, value in values))
+    if norm <= 0:
+        return ()
+    return tuple((feature, value / norm) for feature, value in sorted(values))
+
+
+def build_neighbor_prototypes(
+    examples: Iterable[PreferenceExample],
+    *,
+    max_prototypes: int = DEFAULT_NEIGHBOR_MAX_PROTOTYPES,
+) -> tuple[PreferenceNeighborPrototype, ...]:
+    """Build a recent, class-balanced prototype set from explicit feedback."""
+    if max_prototypes < 2:
+        return ()
+    explicit = [
+        example
+        for example in examples
+        if example.is_explicit_ban or example.is_explicit_keep or example.is_favorite
+    ]
+    grouped = {
+        label: sorted(
+            (example for example in explicit if example.label == label),
+            key=lambda example: (-example.timestamp, example.filename),
+        )
+        for label in (0, 1)
+    }
+    if not grouped[0] or not grouped[1]:
+        return ()
+
+    # Reserve half for each class so a long run of one action cannot erase the
+    # opposing preference.  Any unused slots are filled by the newest remaining
+    # explicit examples regardless of class.
+    per_class = max_prototypes // 2
+    selected = [*grouped[0][:per_class], *grouped[1][:per_class]]
+    selected_ids = {id(example) for example in selected}
+    remainder = sorted(
+        (example for example in explicit if id(example) not in selected_ids),
+        key=lambda example: (-example.timestamp, example.filename, example.label),
+    )
+    selected.extend(remainder[: max(0, max_prototypes - len(selected))])
+
+    prototypes: list[PreferenceNeighborPrototype] = []
+    for example in sorted(
+        selected,
+        key=lambda item: (item.timestamp, item.filename, item.label),
+    ):
+        features = _neighbor_feature_values(example.tags, example.context_features)
+        if features:
+            prototypes.append(
+                PreferenceNeighborPrototype(
+                    filename=example.filename,
+                    label=example.label,
+                    timestamp=example.timestamp,
+                    features=features,
+                )
+            )
+    if {prototype.label for prototype in prototypes} != {0, 1}:
+        return ()
+    return tuple(prototypes)
 
 
 def _context_min_support(token: str) -> int:

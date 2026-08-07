@@ -41,6 +41,7 @@ from wayper.preference_model import (
     load_preference_model,
     preference_deletion_suggestions,
     preference_learning_status,
+    preference_recommendation_candidate,
     record_preference_feedback,
     run_scheduled_preference_model_retrain,
     save_preference_model,
@@ -134,6 +135,131 @@ class PreferenceModelTest(unittest.TestCase):
         self.assertGreater(disliked.probability, kept.probability)
         self.assertTrue(any(item["feature"] == "bad" for item in disliked.contributions))
         self.assertIn("bad\x1fspecific", model.combo_weights)
+
+    def test_content_neighbor_head_separates_recommendation_from_auto_boundary(self) -> None:
+        examples = [
+            *[
+                PreferenceExample(
+                    filename=f"explicit-ban-{index}.jpg",
+                    tags=("bad subject", "shared context"),
+                    label=1,
+                    base_weight=1.0,
+                    timestamp=1_700_000_000 + index,
+                    is_explicit_ban=True,
+                )
+                for index in range(20)
+            ],
+            *[
+                PreferenceExample(
+                    filename=f"explicit-keep-{index}.jpg",
+                    tags=("good subject", "shared context"),
+                    label=0,
+                    base_weight=1.0,
+                    timestamp=1_700_001_000 + index,
+                    is_explicit_keep=True,
+                )
+                for index in range(20)
+            ],
+        ]
+        model = train_preference_model(examples, validation_days=0)
+        model.training_summary["auto_filter_threshold"] = 0.99
+
+        candidate, prediction = auto_filter_prediction(
+            model,
+            {"tags": ["bad subject", "shared context"]},
+        )
+
+        self.assertTrue(model.neighbor_head_ready)
+        self.assertGreater(prediction.neighbor_probability or 0.0, 0.5)
+        self.assertTrue(preference_recommendation_candidate(model, prediction))
+        self.assertFalse(candidate)
+
+        # A new model may still explain an unseen tag with its sparse head, but
+        # automatic filtering must fail open until a content neighbour exists.
+        model.tag_weights["unseen risk"] = 2.0
+        uncovered_hit, uncovered_prediction = auto_filter_prediction(
+            model,
+            {"tags": ["unseen risk"]},
+        )
+        self.assertFalse(uncovered_prediction.neighbor_available)
+        self.assertFalse(uncovered_hit)
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "model.json"
+            save_preference_model(model, path)
+            loaded = load_preference_model(path)
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        self.assertTrue(loaded.neighbor_head_ready)
+        restored = loaded.predict(["bad subject", "shared context"])
+        self.assertAlmostEqual(
+            restored.neighbor_probability or 0.0,
+            prediction.neighbor_probability or 0.0,
+        )
+
+    def test_content_neighbor_head_requires_both_explicit_classes(self) -> None:
+        examples = [
+            *[
+                PreferenceExample(
+                    filename=f"ban-{index}.jpg",
+                    tags=("bad", "shared"),
+                    label=1,
+                    base_weight=1.0,
+                    timestamp=1_700_000_000 + index,
+                    is_explicit_ban=True,
+                )
+                for index in range(12)
+            ],
+            *[
+                PreferenceExample(
+                    filename=f"background-{index}.jpg",
+                    tags=("good",),
+                    label=0,
+                    base_weight=1.0,
+                    timestamp=1_700_001_000 + index,
+                )
+                for index in range(12)
+            ],
+        ]
+        model = train_preference_model(examples, validation_days=0)
+
+        self.assertFalse(model.neighbor_head_ready)
+        self.assertEqual(model.neighbor_prototypes, ())
+
+    def test_stale_neighbor_calibration_cannot_enable_auto_filtering(self) -> None:
+        examples = [
+            *[
+                PreferenceExample(
+                    f"ban-{index}.jpg",
+                    ("bad", "shared"),
+                    1,
+                    1.0,
+                    1_700_000_000 + index,
+                    is_explicit_ban=True,
+                )
+                for index in range(20)
+            ],
+            *[
+                PreferenceExample(
+                    f"keep-{index}.jpg",
+                    ("good", "shared"),
+                    0,
+                    1.0,
+                    1_700_001_000 + index,
+                    is_explicit_keep=True,
+                )
+                for index in range(20)
+            ],
+        ]
+        model = train_preference_model(examples, validation_days=0)
+        calibration = model.training_summary["auto_filter_calibration"]
+        calibration["version"] = int(calibration["version"]) - 1
+
+        with tempfile.TemporaryDirectory() as td:
+            status = auto_filter_status(WayperConfig(download_dir=Path(td)), model)
+
+        self.assertFalse(status["ready"])
+        self.assertEqual(status["status"], "calibration_pending")
 
     def test_temporal_holdout_does_not_seed_training_pair_vocabulary(self) -> None:
         examples = [
@@ -563,7 +689,9 @@ class PreferenceModelTest(unittest.TestCase):
 
         self.assertTrue(calibration["available"])
         self.assertEqual(calibration["source"], "stratified_recent_holdout")
+        self.assertEqual(calibration["method"], "content_knn")
         self.assertGreaterEqual(calibration["precision"], 0.8)
+        self.assertGreaterEqual(calibration["threshold"], 0.5)
         self.assertEqual(model.training_summary["review_threshold"], calibration["threshold"])
         self.assertTrue(held)
         self.assertFalse(kept)

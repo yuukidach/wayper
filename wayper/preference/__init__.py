@@ -9,6 +9,7 @@ from .model import (
     FeatureSpace,
     PreferenceExample,
     PreferenceModel,
+    PreferenceNeighborPrototype,
     PreferencePrediction,
     PreferenceTrainingSnapshot,
 )
@@ -17,6 +18,7 @@ from .training import train_preference_model
 __all__ = [
     "FeatureSpace",
     "PreferenceExample",
+    "PreferenceNeighborPrototype",
     "PreferenceModel",
     "PreferencePrediction",
     "PreferenceTrainingSnapshot",
