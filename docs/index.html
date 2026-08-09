@@ -376,31 +376,22 @@ wayper status               # show current state
 wayper-gui                  # GUI app
 wayper setup                # install .desktop entry (Linux)
 wayper --json status        # machine-readable output</code></pre>
-  <p><code>wayper model train</code> reads only local Wallhaven metadata (normalized tags and compact
-  color/category/purity context); it never opens image files or inspects pixels. The base model uses
-  the standard library. Install <code>uv pip install -e '.[semantic]'</code> to enable the optional
-  FastEmbed <code>BAAI/bge-small-en-v1.5</code> text head, which encodes metadata only and keeps a
-  persistent local embedding cache. Before any Review decisions exist, an installation may
-  temporarily bootstrap from its older blacklist/favorite data. Once a Review decision or manual
-  Dislike is recorded, only explicit Keep/Dislike decisions become new training labels; ordinary Ban
-  remains outside the label stream. The semantic head learns related metadata patterns from those examples,
-  without a manually configured person or region rule. Tag pairs remain opt-in with <code>--max-combos</code>.
-  Live pool images are background controls unless explicitly kept. With enough explicit feedback,
-  Wayper persists a bounded, class-balanced item-item content k-nearest-neighbour head using plain
-  cosine similarity over normalized tags and context. Recommended is a bounded Top-K active-learning
-  rank and does not inherit the automatic boundary. Auto-held uses a separate high-precision boundary
-  calibrated on a recent explicit Keep/Dislike holdout and fails open without neighbour coverage.
-  The sparse FTRL contributions remain available for explanations and cold-start fallback.
-  Open the dedicated Review view to control this loop. The sidebar chooses Rules, Model, or
-  Rules + model for new downloads without disabling recommendations. Two explicit card lanes keep
-  automatically quarantined downloads (Auto-held) separate from likely blocks already in the pool
-  (Recommended); pending Auto-held cards open first. Drag, scroll, or use the side arrows to move through
-  the full-window card stack. Press <code>Enter</code>/<code>Space</code> for the full preview,
-  <code>A</code> to keep, or <code>D</code> to dislike and teach the model. An Auto-held Keep releases the
-  file into the pool, while a recommendation Keep records a positive correction without moving it.
-  Because Auto-held files are recoverable and require a human decision, a current trained model can
-  quarantine likely blocks without the separate validation gate used for unattended deletion. Wayper
-  refreshes the model locally after enough new feedback.</p>
+  <p><code>wayper model train</code> learns from local Wallhaven metadata only: normalized tags and
+  compact color/category/purity context. It never opens image files or reads pixels. The base model uses
+  the standard library; install <code>uv pip install -e '.[semantic]'</code> to add the optional FastEmbed
+  <code>BAAI/bge-small-en-v1.5</code> text head. Embeddings are metadata-only and cached locally.</p>
+  <p>Before any <strong>Review</strong> feedback exists, older blacklist/favorite data may bootstrap the model.
+  After the first Review decision or manual <strong>Dislike</strong>, only explicit Keep/Dislike decisions become
+  labels; <strong>Ban</strong> remains an exact-image block. Images merely sitting in the pool are background
+  examples. The model learns related metadata, filters likely blocks into a recoverable queue, and ranks
+  suggestions. It never changes the blacklist automatically and refreshes locally after enough feedback.</p>
+  <p>Open the dedicated <strong>Review</strong> view to teach the model. Choose <code>Rules</code>,
+  <code>Model</code>, or <code>Both</code> for new downloads. <strong>Auto-held</strong> contains downloads set
+  aside by the model; <strong>Recommended</strong> contains possible blocks already in the pool. Auto-held appears
+  first. Drag, scroll, or use the arrows to move through cards; <code>Enter</code>/<code>Space</code> opens a preview,
+  <code>A</code> keeps, and <code>D</code> dislikes. Keeping an Auto-held file releases it into the pool; keeping
+  a recommendation records feedback without moving the file. In Settings, the language can follow the system
+  or be set to English/Simplified Chinese; download batch size is configured under General.</p>
 </section>
 
 <section id="browse">

@@ -138,33 +138,21 @@ wayper setup                # 安装 .desktop（Linux）
 wayper --json status        # JSON 格式输出
 ```
 
-`wayper model train` 只读取本地 Wallhaven 元数据——规范化 tag，以及紧凑的颜色/分类/纯度
-上下文——不会打开图片或分析像素。基础模型仍可只用 Python 标准库运行；tag-pair 仍需通过
-`--max-combos` 显式实验。若要启用更强的本地文本 head，可安装
-`uv pip install -e '.[semantic]'`；它通过 FastEmbed 使用 `BAAI/bge-small-en-v1.5`，编码的
-仍然只有元数据文本，并在本地持久化 embedding cache，首次训练填充 cache 时可能较慢。
-在还没有任何 Review 决策时，安装可以暂时用旧的黑名单/收藏数据启动；一旦出现 **Review**
-决策或手动 **Dislike**，后续训练标签只来自明确的 Keep/Dislike；普通 Ban 不会被默认为模型标签。
-可选的 semantic head 会从同一批复核样本学习相近的元数据模式，不需要手写人物或地区规则。近期拉黑
-的权重更高；池中从未明确 Keep 的图片只作为背景对照，不能证明「喜欢」。明确反馈足够后，Wayper 还会
-持久化一个有容量上限、类别平衡的 item-item 内容 k 近邻 head，对规范化 tag 和上下文做普通 cosine
-相似度。这是 [LightFM](https://github.com/lyst/lightfm)、[implicit](https://github.com/benfred/implicit)
-等成熟项目采用的经典单用户推荐建模方式；这里用标准库实现，不引入
-编译型运行时依赖。**Recommended** 现在是主动学习排序轨道：按明确 Dislike 近邻的加权投票选出有界
-Top-K，不再继承自动动作的高精度门槛。**Auto-held** 则单独用近期明确 Keep/Dislike 留出集校准边界，
-没有近邻覆盖时安全放行。Recommended 在冷启动时可以退回可解释的稀疏 head；FTRL 的特征贡献仍用于解释。
-任何模型命中都绝不会自动加入黑名单。
+`wayper model train` 只根据本地 Wallhaven 元数据（规范化 tag、颜色/分类/纯度）训练，
+不会打开图片或读取像素。基础模型只依赖 Python 标准库；安装
+`uv pip install -e '.[semantic]'` 可启用 FastEmbed 的 `BAAI/bge-small-en-v1.5` 文本 head，
+embedding 只来自元数据并保存在本地。
 
-GUI 独立的 **Review** 是这条反馈闭环的控制中心。侧边栏开关只决定新下载使用
-`Rules`、`Model` 还是 `Both`（`Rules + model`），不会关闭模型推荐。复核界面有两条明确轨道：
-**Auto-held** 展示被模型自动隔离的下载，**Recommended** 展示图库中模型认为可能需要拉黑的图片。
-存在 Auto-held 项时会优先打开该轨道，因此自动拦截不会再埋在推荐项后面。每条轨道都是占满窗口的横向叠放卡牌：
-可以拖动、滚轮或左右按钮切换；点击当前图片或按 `Enter`/`Space` 进入完整预览；`A` 保留，`D` 标记不喜欢
-（Review 中仍兼容 `X`/`Delete`）。对于 Auto-held，Keep 会将文件释放到图库，Dislike 会移入系统回收站并加入黑名单；
-对于 Recommended，Keep 只记录正向纠正而不移动文件，Dislike 走图库到回收站/黑名单流程并记录负向训练标签。
-GUI「拉黑」页面因此只负责
-可恢复/已拉黑的图片以及标签、上传者排除规则。反馈追加到本地 JSONL 事件日志（旧 JSON 日志仍可读取），
-每累计 10 条新反馈，Wayper 会排队做一次本地全量重训；`wayper model status` 会显示待处理数量和模型版本。过滤策略保存在 TOML 的 `wallhaven.filter_strategy`，旧安装默认仍为 `rules`。
+在还没有 **Review** 反馈时，Wayper 可以暂时用旧的黑名单/收藏数据启动。第一次 Review 决策或手动
+**Dislike** 之后，新的训练标签只来自明确的 Keep/Dislike；**Ban** 仍只是单图拉黑。仅出现在图库中的图片
+不会被当成「喜欢」。模型会学习相近的元数据，把疑似拉黑项放入可恢复的队列并给出推荐；它不会自动修改黑名单，
+积累足够反馈后会在本地刷新。
+
+打开 **Review** 来教模型。侧边栏可为新下载选择 `Rules`、`Model` 或 `Both`（`Rules + model`）。
+**Auto-held** 是被模型暂存的下载，**Recommended** 是图库中可能需要拉黑的图片，Auto-held 会优先显示。
+拖动、滚轮或左右按钮可切换卡片；`Enter`/`Space` 打开预览，`A` 保留，`D` 标记不喜欢。保留 Auto-held
+会把文件放回图库；保留 Recommended 只记录反馈，不移动文件。设置中的语言可以跟随系统，也可以切换为
+English/简体中文；下载批量大小位于「常规」配置。
 
 ### 快捷键示例
 

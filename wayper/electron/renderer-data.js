@@ -107,6 +107,10 @@ function populateSettingsForm() {
 
     // General
     document.getElementById('input-interval').value = c.interval_min ?? 5;
+    const languageInput = document.getElementById('input-language');
+    if (languageInput) {
+        languageInput.value = window.WayperI18n?.normalizePreference?.(c.language) || c.language || 'auto';
+    }
     document.getElementById('input-quota').value = c.quota_mb;
     document.getElementById('input-download-dir').value = c.download_dir || '';
 
@@ -853,6 +857,12 @@ async function saveSettings() {
         pause_on_lock: document.getElementById('input-pause-on-lock').checked,
         safe_mode: document.getElementById('input-safe-mode').checked,
     };
+    const languageInput = document.getElementById('input-language');
+    if (languageInput) {
+        updates.language = window.WayperI18n?.normalizePreference?.(languageInput.value)
+            || languageInput.value
+            || 'auto';
+    }
 
     // Only send credentials if user entered a new value
     const apiKeyVal = document.getElementById('input-api-key').value;
@@ -1708,6 +1718,12 @@ async function fetchConfig() {
     try {
         const data = await WayperApi.config();
         appState.config = data;
+        // Resolve ``auto`` against the host locale in the renderer.  Keeping
+        // the preference in the backend config makes the choice persistent,
+        // while this call lets a language change take effect immediately.
+        if (window.WayperI18n?.setPreference) {
+            window.WayperI18n.setPreference(data.language || 'auto');
+        }
         appState.hasApiKey = !!data.has_api_key;
         appState.safeMode = !!data.safe_mode;
 

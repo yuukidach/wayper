@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from wayper.catalog import ImageCatalog
-from wayper.config import WayperConfig
+from wayper.config import WayperConfig, load_config, save_config
 from wayper.server.config_service import apply_config_updates, config_payload
 
 
@@ -72,6 +72,26 @@ class ConfigServiceTest(unittest.TestCase):
         self.assertEqual(config.wallhaven.batch_size, 1)
         self.assertTrue(config_payload(config, {"sfw"})["has_api_key"])
         self.assertNotIn("api_key", config_payload(config, {"sfw"}))
+
+    def test_language_preference_is_normalized_and_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "config.toml"
+            config = WayperConfig(download_dir=Path(td), language="zh-CN")
+            save_config(config, path)
+            loaded = load_config(path)
+
+        self.assertEqual(loaded.language, "zh")
+        self.assertEqual(config_payload(loaded, {"sfw"})["language"], "zh")
+
+    def test_language_update_rejects_unknown_values_with_auto(self) -> None:
+        config = WayperConfig(language="en")
+        apply_config_updates(config, {"language": "fr"}, resolve_download_dir=Path)
+        self.assertEqual(config.language, "auto")
+
+    def test_locale_alias_updates_language_preference(self) -> None:
+        config = WayperConfig(language="en")
+        apply_config_updates(config, {"locale": "zh-CN"}, resolve_download_dir=Path)
+        self.assertEqual(config.language, "zh")
 
 
 if __name__ == "__main__":

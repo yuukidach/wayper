@@ -120,8 +120,31 @@ const PREFERENCE_REVIEW_BASE_COUNT = 8;
 const PREFERENCE_REVIEW_CARD_MIN_WIDTH = 285;
 const PREFERENCE_REVIEW_GAP = 8;
 const BLOCKLIST_PAGE_SIZE = WayperBlocklistPager.DEFAULT_PAGE_SIZE;
-const blocklistDateFormatter = new Intl.DateTimeFormat();
-const blocklistTimeFormatter = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' });
+let blocklistDateFormatter = new Intl.DateTimeFormat();
+let blocklistTimeFormatter = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' });
+
+function updateBlocklistDateLocale(locale) {
+    const localeTag = locale === 'zh' ? 'zh-CN' : 'en-US';
+    try {
+        blocklistDateFormatter = new Intl.DateTimeFormat(localeTag);
+        blocklistTimeFormatter = new Intl.DateTimeFormat(localeTag, {
+            hour: '2-digit',
+            minute: '2-digit',
+        });
+    } catch (_) {
+        // Keep the host default if a runtime ships without the requested
+        // locale data.
+    }
+}
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('wayper-language-changed', event => {
+        updateBlocklistDateLocale(event.detail?.locale);
+        if (appState.mode === 'trash' && typeof renderBlocklistView === 'function') {
+            renderBlocklistView();
+        }
+    });
+}
 
 // Global Loader
 const loader = document.createElement('div');
@@ -299,7 +322,16 @@ function setupEventListeners() {
 
     // Settings Form
     els.btnSaveSettings.onclick = saveSettings;
-    els.btnCancelSettings.onclick = () => switchView('grid');
+    els.btnCancelSettings.onclick = () => {
+        // A language dropdown change is previewed immediately.  Cancel must
+        // restore the persisted preference so an unsaved choice is not left
+        // active for the rest of this session.
+        window.WayperI18n?.setPreference?.(appState.config?.language || 'auto');
+        switchView('grid');
+    };
+    document.getElementById('input-language')?.addEventListener('change', event => {
+        window.WayperI18n?.setPreference?.(event.target?.value);
+    });
     document.getElementById('btn-add-tag').onclick = addExcludeTag;
     document.getElementById('input-exclude-tag').addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); addExcludeTag(); }

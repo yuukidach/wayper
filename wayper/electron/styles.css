@@ -101,6 +101,13 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Outfit does not ship CJK glyphs.  Keep the compact Latin UI while letting
+   the platform's native Chinese sans-serif render translated labels cleanly. */
+html:lang(zh) body {
+  --font-sans: 'Noto Sans SC', 'Microsoft YaHei', 'PingFang SC',
+    -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
 /* Subtle noise texture for depth */
 body::after {
   content: '';
@@ -3349,6 +3356,7 @@ footer {
 }
 
 .model-review-grid .model-review-carousel {
+  --review-card-basis: 84%;
   display: flex;
   align-items: stretch;
   gap: 0;
@@ -3369,6 +3377,19 @@ footer {
   touch-action: pan-y;
   user-select: none;
   transition: opacity 180ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Keep the first and last cards centered as well as the cards in the middle.
+ * Without these flex spacers, the edge cards stop at scrollLeft 0/max and sit
+ * noticeably off-center even though the JavaScript asks them to snap to center.
+ */
+.model-review-grid .model-review-carousel::before,
+.model-review-grid .model-review-carousel::after {
+  content: '';
+  flex: 0 0 calc((100% - var(--review-card-basis)) / 2);
+  width: calc((100% - var(--review-card-basis)) / 2);
+  min-width: calc((100% - var(--review-card-basis)) / 2);
+  pointer-events: none;
 }
 
 .model-review-grid .model-review-carousel.is-dragging,
@@ -3470,8 +3491,8 @@ footer {
 .model-review-grid .model-review-card {
   position: relative;
   display: block;
-  flex: 0 0 84%;
-  width: 84%;
+  flex: 0 0 var(--review-card-basis);
+  width: var(--review-card-basis);
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -3636,8 +3657,40 @@ footer {
 }
 
 .model-review-grid .model-review-card.is-busy .model-review-card-actions {
-  opacity: 0.46;
+  opacity: 0.72;
   pointer-events: none;
+}
+
+.model-review-grid .model-review-card.is-submitting {
+  cursor: progress;
+}
+
+.model-review-grid .model-review-card-decision.is-pending {
+  position: relative;
+  overflow: hidden;
+  border-color: currentColor;
+  box-shadow:
+    0 0 0 2px rgb(255 255 255 / 7%),
+    0 12px 34px rgb(0 0 0 / 28%);
+  transform: translateY(-1px) scale(0.98);
+}
+
+.model-review-grid .model-review-card-decision.is-pending::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 18%,
+    rgb(255 255 255 / 14%) 48%,
+    transparent 78%
+  );
+  content: '';
+  transform: translateX(-110%);
+  animation: model-review-action-sheen 900ms ease-in-out infinite;
+}
+
+@keyframes model-review-action-sheen {
+  to { transform: translateX(110%); }
 }
 
 .model-review-grid .model-review-card-decision {
@@ -3788,6 +3841,7 @@ footer {
 
 @media (max-width: 720px) {
   .model-review-grid .model-review-carousel {
+    --review-card-basis: 88%;
     padding-right: 6%;
     padding-left: 6%;
     scroll-padding-inline: 6%;

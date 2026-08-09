@@ -138,56 +138,28 @@ wayper setup                # install .desktop entry (Linux)
 wayper --json status        # machine-readable output
 ```
 
-`wayper model train` reads only local Wallhaven metadata—normalized tags plus
-compact color/category/purity context—and never opens image files or inspects
-pixels. The base model works with the Python standard library; tag pairs remain
-an opt-in experiment (`--max-combos`). For a stronger local text head, install
-`uv pip install -e '.[semantic]'`: it uses `BAAI/bge-small-en-v1.5` through
-FastEmbed to encode the metadata text only, with a persistent local embedding
-cache. The first semantic training run may take longer while that cache is
-filled. Before any review decisions exist, an installation may use its older
-blacklist/favorite data as a temporary bootstrap. Once a **Review** decision or
-manual **Dislike** has been recorded, only explicit Keep/Dislike decisions are
-used as new training labels; an ordinary Ban is not silently promoted to one.
-The optional semantic head learns related metadata patterns from the same review
-examples, without a manually configured person/region rule. A live image that
-has never been explicitly kept is treated as a background control, not as proof
-that you like it. With enough explicit feedback, Wayper also persists a bounded,
-class-balanced item-item content k-nearest-neighbour head (plain cosine over
-normalized tags and context). This is the classic single-user recommender
-formulation used by mature projects such as
-[LightFM](https://github.com/lyst/lightfm) and
-[implicit](https://github.com/benfred/implicit), adapted here without a
-compiled runtime dependency. **Recommended** is an active-learning
-lane: it ranks the strongest explicit Dislike-neighbour votes and returns a
-bounded Top-K, so it does not inherit the high-precision automatic boundary.
-**Auto-held** uses a separate boundary calibrated on a recent explicit
-Keep/Dislike holdout and fails open when the neighbour head has no coverage.
-The human recommendation lane may use the explainable sparse head as a
-cold-start fallback, and FTRL contributions remain visible as explanations.
-Model hits never enter the blacklist automatically.
+`wayper model train` learns from local Wallhaven metadata only: normalized tags and
+compact color/category/purity context. It never opens image files or reads pixels.
+The base model uses the standard library. Install `uv pip install -e '.[semantic]'`
+to add the optional FastEmbed `BAAI/bge-small-en-v1.5` text head; embeddings are
+metadata-only and cached locally.
 
-The GUI's dedicated **Review** view is the control center for this loop.
-The sidebar control chooses `Rules`, `Model`, or `Both` (`Rules + model`) for
-new downloads; it does not turn recommendations on or off. The review view has
-two explicit lanes: **Auto-held** for downloads quarantined by the model, and
-**Recommended** for likely blocks already in the pool. Pending
-Auto-held items open first, so an automatic model decision is never buried
-behind recommendations. Each lane uses a full-window, horizontally scrolling
-card stack: drag or scroll through cards, use the side arrows, and click the
-current image (or press `Enter`/`Space`) for the full preview. `A` keeps the
-current card; `D` dislikes it (`X`/`Delete` remain compatible in Review). For
-Auto-held cards, Keep releases the file into the pool and Dislike sends it to
-system trash plus the blacklist. For recommendations, Keep records a positive
-correction without moving the file,
-while Dislike follows the normal pool-to-trash/blocklist flow and records a
-negative training label. The Blocklist view
-therefore remains reserved for recoverable/blocked files and tag/uploader
-exclusion rules. Feedback is appended to a local JSONL event log (the older JSON log
-is still read), and after 10 new events Wayper queues a local full-batch refresh;
-`wayper model status` shows the pending count and model schema. The strategy is
-stored as `wallhaven.filter_strategy` in TOML and defaults to `rules` for
-existing installations.
+Before any **Review** feedback exists, older blacklist/favorite data may bootstrap
+the model. After the first Review decision or manual **Dislike**, only explicit
+Keep/Dislike decisions become labels; **Ban** remains an exact-image block. Images
+that merely sit in the pool are background examples, not proof that you like them.
+The model learns related metadata, filters likely blocks into a recoverable queue,
+and ranks suggestions. It never changes the blacklist automatically, and refreshes
+locally after enough feedback.
+
+Open the dedicated **Review** view to teach the model. Choose `Rules`, `Model`, or
+`Both` (`Rules + model`) for new downloads. **Auto-held** contains downloads set
+aside by the model; **Recommended** contains possible blocks already in the pool.
+Auto-held appears first. Drag, scroll, or use the arrows to move through cards;
+`Enter`/`Space` opens a preview, `A` keeps, and `D` dislikes. Keeping an Auto-held
+file releases it into the pool; keeping a recommendation records feedback without
+moving the file. In Settings, the language can follow the system or be set to
+English/Simplified Chinese; download batch size is configured under General.
 
 ### Keybindings
 

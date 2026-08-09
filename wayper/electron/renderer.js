@@ -1,6 +1,7 @@
 /*
  * The renderer is intentionally split into the following ordered scripts:
  *
+ *   i18n.js            system locale detection and UI translations
  *   renderer-state.js   bootstrap, state, keyboard and navigation
  *   renderer-data.js    settings, actions, search and API coordination
  *   renderer-views.js   gallery, blocklist and review rendering

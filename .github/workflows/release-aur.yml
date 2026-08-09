@@ -6,45 +6,102 @@ on:
       - 'v*'
   workflow_dispatch:
 
+concurrency:
+  # AUR accepts one writer at a time. Queue tag releases instead of letting
+  # concurrent jobs race on the same package repository.
+  group: publish-aur
+  cancel-in-progress: false
+
 jobs:
   aur:
     runs-on: ubuntu-latest
     container: archlinux:base-devel
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Extract version
         run: |
+          set -euo pipefail
           pacman -Sy --noconfirm curl git openssh
           if [[ "$GITHUB_REF_NAME" == v* ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
             echo "TAG_NAME=${GITHUB_REF_NAME}" >> $GITHUB_ENV
           else
             # workflow_dispatch: get latest tag
-            TAG=$(curl -s "https://api.github.com/repos/${GITHUB_REPOSITORY}/tags" | grep -oP '"name":\s*"\Kv[^"]+' | head -1)
+            TAG=$(curl --fail --silent --show-error --retry 3 \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/tags" \
+              | grep -oP '"name":\s*"\Kv[^"]+' | head -1)
+            [[ -n "$TAG" ]] || { echo "::error::Could not determine the latest release tag"; exit 1; }
             echo "VERSION=${TAG#v}" >> $GITHUB_ENV
             echo "TAG_NAME=$TAG" >> $GITHUB_ENV
           fi
 
       - name: Compute sha256sum
         run: |
-          HASH=$(curl -sL "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG_NAME}.tar.gz" | sha256sum | cut -d' ' -f1)
+          set -euo pipefail
+          HASH=$(curl --fail --silent --show-error --retry 3 -L \
+            "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG_NAME}.tar.gz" \
+            | sha256sum | cut -d' ' -f1)
+          [[ "$HASH" =~ ^[[:xdigit:]]{64}$ ]] || { echo "::error::Invalid release checksum"; exit 1; }
           echo "SHA256=$HASH" >> $GITHUB_ENV
 
       - name: Setup SSH
         env:
           AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
         run: |
+          set -euo pipefail
+          [[ -n "${AUR_SSH_KEY:-}" ]] || {
+            echo "::error::AUR_SSH_KEY is not configured"
+            exit 1
+          }
           mkdir -p /root/.ssh
           printf '%s\n' "$AUR_SSH_KEY" > /root/.ssh/id_ed25519
           chmod 600 /root/.ssh/id_ed25519
-          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" >> /root/.ssh/known_hosts
+          # Keep the official AUR Ed25519 fingerprint pinned.  This avoids a
+          # host-key prompt while still detecting an unexpected key change.
+          printf '%s\n' \
+            'aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN' \
+            > /root/.ssh/known_hosts
+          if ! ssh-keygen -y -f /root/.ssh/id_ed25519 >/dev/null; then
+            echo "::error::AUR_SSH_KEY is not a readable private SSH key"
+            exit 1
+          fi
 
       - name: Clone AUR repo and update
+        env:
+          GIT_SSH_COMMAND: >-
+            ssh -o BatchMode=yes -o ConnectTimeout=20
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=2
         run: |
-          for i in 1 2 3; do
-            git clone ssh://aur@aur.archlinux.org/wayper.git aur && break
-            echo "Retry $i: AUR SSH connection failed, waiting 10s..."
-            sleep 10
+          set -euo pipefail
+          clone_succeeded=false
+          max_attempts=8
+          for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+            # A failed SSH clone can leave an empty destination behind. Use an
+            # explicit CI-only path so the next attempt always starts clean.
+            if [[ -e aur ]]; then
+              rm -rf aur
+            fi
+            echo "::group::AUR clone attempt $attempt/$max_attempts"
+            if timeout 90s git clone ssh://aur@aur.archlinux.org/wayper.git aur; then
+              clone_succeeded=true
+              echo "::endgroup::"
+              break
+            fi
+            echo "::endgroup::"
+            if (( attempt < max_attempts )); then
+              delay=$((20 * 2 ** (attempt - 1)))
+              (( delay > 300 )) && delay=300
+              echo "AUR clone failed (possibly temporary maintenance); retrying in ${delay}s..."
+              sleep "$delay"
+            fi
           done
+          if [[ "$clone_succeeded" != true ]]; then
+            echo "::error::Could not clone the AUR repository after $max_attempts attempts. The AUR may be under maintenance; rerun this workflow when it is available."
+            exit 1
+          fi
           cd aur
           git config user.name "Da Chen"
           git config user.email "dachen@connect.hku.hk"
@@ -60,8 +117,20 @@ jobs:
           git add PKGBUILD .SRCINFO
           git diff --cached --quiet && echo "No changes to commit" && exit 0
           git commit -m "bump: v$VERSION"
-          for i in 1 2 3; do
-            git push && break
-            echo "Retry $i: AUR push failed, waiting 10s..."
-            sleep 10
+          push_succeeded=false
+          for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+            if timeout 90s git push; then
+              push_succeeded=true
+              break
+            fi
+            if (( attempt < max_attempts )); then
+              delay=$((20 * 2 ** (attempt - 1)))
+              (( delay > 300 )) && delay=300
+              echo "AUR push failed; retrying in ${delay}s..."
+              sleep "$delay"
+            fi
           done
+          if [[ "$push_succeeded" != true ]]; then
+            echo "::error::Could not push the AUR update after $max_attempts attempts"
+            exit 1
+          fi

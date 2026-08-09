@@ -22,6 +22,38 @@ CONFIG_FILE = CONFIG_DIR / "config.toml"
 # older clients, but are always serialized as ``rules+model``.
 FILTER_STRATEGIES = ("rules", "model", "rules+model")
 
+# GUI language preferences.  ``auto`` follows the operating-system/browser
+# locale in the Electron renderer; explicit values make the choice portable
+# across launches and machines.
+LANGUAGE_CHOICES = ("auto", "en", "zh")
+
+
+def normalize_language(value: object) -> str:
+    """Return a supported GUI language preference.
+
+    Config files are user-editable, so malformed values must gracefully fall
+    back to automatic locale detection rather than preventing Wayper startup.
+    A few common locale spellings are accepted for convenience.
+    """
+    normalized = str(value or "auto").strip().lower().replace("_", "-")
+    aliases = {
+        "english": "en",
+        "en-us": "en",
+        "en-gb": "en",
+        "chinese": "zh",
+        "zh-cn": "zh",
+        "zh-tw": "zh",
+        "简体中文": "zh",
+        "繁體中文": "zh",
+        "自动": "auto",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized.startswith("zh-"):
+        return "zh"
+    if normalized.startswith("en-"):
+        return "en"
+    return normalized if normalized in LANGUAGE_CHOICES else "auto"
+
 
 def normalize_filter_strategy(value: object) -> str:
     """Return a safe, canonical automatic-filter strategy.
@@ -113,6 +145,12 @@ class WayperConfig:
     wallhaven: WallhavenConfig = field(default_factory=WallhavenConfig)
     transition: TransitionConfig = field(default_factory=TransitionConfig)
     greeter: GreeterConfig = field(default_factory=GreeterConfig)
+    # Preferred GUI language: ``auto`` follows the system locale, while
+    # ``en`` and ``zh`` explicitly select English or Simplified Chinese.
+    language: str = "auto"
+
+    def __post_init__(self) -> None:
+        self.language = normalize_language(self.language)
 
     @property
     def state_file(self) -> Path:
@@ -212,6 +250,7 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
     lines.append(f"blacklist_ttl_days = {config.blacklist_ttl_days}")
     lines.append(f"pause_on_lock = {str(config.pause_on_lock).lower()}")
     lines.append(f"safe_mode = {str(config.safe_mode).lower()}")
+    lines.append(f'language = "{_esc(normalize_language(config.language))}"')
 
     wh = config.wallhaven
     lines.append("")
@@ -323,4 +362,5 @@ def load_config(path: Path | None = None) -> WayperConfig:
         wallhaven=wallhaven,
         transition=transition,
         greeter=greeter,
+        language=raw.get("language", raw.get("locale", "auto")),
     )

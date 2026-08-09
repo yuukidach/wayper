@@ -1800,14 +1800,25 @@ function setupModelReviewCarousel(carousel) {
     carousel.addEventListener('pointercancel', finishPointer);
 }
 
-function setModelReviewCardBusy(path, busy) {
+function setModelReviewCardBusy(path, busy, action = null) {
     if (!path || typeof els === 'undefined') return;
     const card = els.wallpaperGrid?.querySelector(modelReviewCardSelector(path));
     if (!card) return;
     card.classList.toggle('is-busy', busy);
+    card.classList.toggle('is-submitting', busy);
     card.setAttribute('aria-busy', String(busy));
+    if (busy && action) {
+        card.dataset.pendingAction = action;
+    } else if (!busy) {
+        delete card.dataset.pendingAction;
+    }
     const active = card.dataset.path === appState.modelReviewSelectedPath;
     for (const button of card.querySelectorAll('.model-review-card-decision')) {
+        const isPendingAction = busy && action && button.classList.contains(
+            action === 'keep' ? 'model-review-card-keep' : 'model-review-card-ban',
+        );
+        button.classList.toggle('is-pending', Boolean(isPendingAction));
+        button.setAttribute('aria-busy', String(Boolean(isPendingAction)));
         button.disabled = busy || !active;
     }
 }
@@ -2172,7 +2183,10 @@ async function resolveModelReviewDecision(item, action) {
     }
     if (appState.modelReviewActionInFlight.has(item.path)) return false;
     appState.modelReviewActionInFlight.add(item.path);
-    setModelReviewCardBusy(item.path, true);
+    // Mark the choice before the network request starts.  The old UI only
+    // changed after the request returned, which made a click feel ignored on
+    // a slow API or while a local model action was being queued.
+    setModelReviewCardBusy(item.path, true, action);
     try {
         let result;
         if (item.auto_filtered === true) {

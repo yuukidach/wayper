@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from wayper.config import WayperConfig, normalize_filter_strategy
+from wayper.config import WayperConfig, normalize_filter_strategy, normalize_language
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +26,10 @@ def config_payload(config: WayperConfig, mode: set[str]) -> dict[str, object]:
         "proxy": config.proxy or "",
         "pause_on_lock": config.pause_on_lock,
         "safe_mode": config.safe_mode,
+        # ``auto`` is intentionally retained here; the renderer resolves it
+        # against the host locale and can therefore switch languages without
+        # requiring a backend restart.
+        "language": normalize_language(getattr(config, "language", "auto")),
         "has_api_key": bool(config.api_key),
         "has_wh_password": bool(config.wallhaven_password),
         "wallhaven_username": config.wallhaven_username,
@@ -84,7 +88,12 @@ def apply_config_updates(
         "wallhaven_username": ("wallhaven_username", lambda value: str(value).strip()),
         "wallhaven_password": ("wallhaven_password", lambda value: value),
         "blacklist_ttl_days": ("blacklist_ttl_days", lambda value: max(0, int(value))),
+        "language": ("language", normalize_language),
     }
+    # Accept ``locale`` as a compatibility alias used by a few early GUI
+    # prototypes, while serializing the canonical ``language`` key.
+    if "locale" in updates and "language" not in updates:
+        updates = {**updates, "language": updates["locale"]}
     for key, (attribute, transform) in scalar_fields.items():
         if key in updates:
             setattr(config, attribute, transform(updates[key]))

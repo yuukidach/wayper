@@ -158,8 +158,22 @@
                             <input type="number" id="input-interval" min="0" value="5">
                         </div>
                         <div class="field">
+                            <label for="input-language">Language</label>
+                            <select id="input-language">
+                                <option value="auto">System default</option>
+                                <option value="en">English</option>
+                                <option value="zh">Simplified Chinese</option>
+                            </select>
+                            <small class="hint">Use the system language unless you choose an override</small>
+                        </div>
+                        <div class="field">
                             <label for="input-quota">Disk Quota (MB)</label>
                             <input type="number" id="input-quota" min="100" value="4000">
+                        </div>
+                        <div class="field">
+                            <label for="input-batch-size">Download Batch Size</label>
+                            <input type="number" id="input-batch-size" min="1" value="5">
+                            <small class="hint">Maximum wallpapers to download per mode and orientation</small>
                         </div>
                         <div class="field">
                             <label for="input-download-dir">Download Folder</label>
@@ -261,11 +275,6 @@
                             </select>
                         </div>
                         <div class="field">
-                            <label for="input-batch-size">Download Batch Size</label>
-                            <input type="number" id="input-batch-size" min="1" value="5">
-                            <small class="hint">Maximum wallpapers to download per mode and orientation</small>
-                        </div>
-                        <div class="field">
                             <label for="input-min-favorites">Minimum Favorites</label>
                             <input type="number" id="input-min-favorites" min="0" value="0">
                             <small class="hint">Skip Wallhaven downloads below this favorite count</small>
@@ -321,6 +330,7 @@
         </div>
     </footer>
 
+    <script src="i18n.js"></script>
     <script src="exclusion-rules.js"></script>
     <script src="blocklist-pager.js"></script>
     <script src="api.js"></script>

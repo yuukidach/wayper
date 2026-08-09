@@ -105,6 +105,7 @@ class ConfigResponse(BaseModel):
     proxy: str
     pause_on_lock: bool
     safe_mode: bool
+    language: str = "auto"
     has_api_key: bool
     has_wh_password: bool
     wallhaven_username: str
