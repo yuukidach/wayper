@@ -1055,13 +1055,17 @@ function handleModelReviewRowKeyboard(event) {
     return false;
 }
 
-async function keepPreferenceSuggestion(item, row) {
+async function keepPreferenceSuggestion(
+    item,
+    row,
+    { restoreFocus: requestedFocus = null } = {},
+) {
     // The dedicated deck resolves both ranked pool recommendations and
     // automatically held files through its source-aware decision handler.
     if (modelReviewModeActive()) {
         return resolveModelReviewDecision(item, 'keep');
     }
-    const restoreFocus = Boolean(
+    const restoreFocus = requestedFocus ?? Boolean(
         row
         && typeof document !== 'undefined'
         && row.contains?.(document.activeElement),
@@ -1108,9 +1112,11 @@ async function keepLightboxReviewSuggestion() {
     const item = preferenceReviewItems().find(candidate => candidate.path === image.path) || image;
     const row = preferenceReviewRow(item.path);
     try {
-        const kept = await keepPreferenceSuggestion(item, row);
-        if (kept && lightboxImg === image) closeLightbox();
-        return kept;
+        // Close the preview immediately. The review transaction continues in
+        // the background and restores focus to the next candidate when done.
+        const pendingKeep = keepPreferenceSuggestion(item, row, { restoreFocus: true });
+        closeLightbox();
+        return await pendingKeep;
     } finally {
         preferenceKeepInFlight.delete(image.path);
     }
@@ -2101,6 +2107,144 @@ function applyModelReviewDecisionResult(item, action, result) {
     return appState.modelReviewSelectedPath;
 }
 
+function applyOptimisticModelReviewDecision(item, action) {
+    if (!item?.path) return false;
+    const itemsBefore = modelReviewVisibleItems();
+    const indexBefore = itemsBefore.findIndex(candidate => candidate.path === item.path);
+    const source = activeModelReviewSource();
+    const previousSelectedPath = appState.modelReviewSelectedPath;
+    if (!(appState.modelReviewResolvedPaths instanceof Set)) {
+        appState.modelReviewResolvedPaths = new Set();
+    }
+    appState.modelReviewResolvedPaths.add(item.path);
+    if (typeof invalidateModelReviewRecommendationCache === 'function') {
+        invalidateModelReviewRecommendationCache(item.path);
+    }
+    if (!appState.modelReviewData) {
+        return {
+            source,
+            indexBefore,
+            previousSelectedPath,
+            sourceKey: item.auto_filtered === true ? 'items' : 'recommendations',
+        };
+    }
+    const data = appState.modelReviewData;
+    const sourceKey = item.auto_filtered === true ? 'items' : 'recommendations';
+    const sourceItems = Array.isArray(data[sourceKey]) ? data[sourceKey] : [];
+    const remaining = sourceItems.filter(candidate => candidate?.path !== item.path);
+    const updated = { ...data, [sourceKey]: remaining };
+    if (item.auto_filtered === true) {
+        const pending = Number(data.pending_count);
+        if (Number.isFinite(pending)) updated.pending_count = Math.max(0, pending - 1);
+    } else {
+        const count = Number(data.recommendation_count);
+        if (Number.isFinite(count)) updated.recommendation_count = Math.max(0, count - 1);
+    }
+    appState.modelReviewData = updated;
+    const next = modelReviewVisibleItems();
+    appState.modelReviewSelectedPath = next[indexBefore]?.path
+        || next[indexBefore - 1]?.path
+        || next[0]?.path
+        || null;
+    if (item.auto_filtered === true) {
+        if (!appState.status || typeof appState.status !== 'object') appState.status = {};
+        appState.status.model_review_count = Math.max(
+            0,
+            Number(appState.status?.model_review_count || 0) - 1,
+        );
+        if (action === 'keep') {
+            appState.status.pool_count = Number(appState.status?.pool_count || 0) + 1;
+        } else {
+            appState.status.blocklist_count = Number(
+                appState.status?.blocklist_count || 0,
+            ) + 1;
+        }
+    }
+    if (
+        appState.status
+        && typeof appState.status === 'object'
+        && typeof updateStatusUI === 'function'
+    ) {
+        updateStatusUI();
+    }
+    return {
+        source,
+        indexBefore,
+        previousSelectedPath,
+        sourceKey,
+    };
+}
+
+function rollbackOptimisticModelReviewDecision(item, action, snapshot) {
+    if (!item?.path) return false;
+    if (appState.modelReviewResolvedPaths instanceof Set) {
+        appState.modelReviewResolvedPaths.delete(item.path);
+    }
+    if (typeof invalidateModelReviewRecommendationCache === 'function') {
+        invalidateModelReviewRecommendationCache();
+    }
+    const sourceKey = snapshot?.sourceKey
+        || (item.auto_filtered === true ? 'items' : 'recommendations');
+    const data = appState.modelReviewData;
+    if (data) {
+        const sourceItems = Array.isArray(data[sourceKey]) ? [...data[sourceKey]] : [];
+        if (!sourceItems.some(candidate => candidate?.path === item.path)) {
+            const requestedIndex = Number(snapshot?.indexBefore);
+            const index = Math.max(
+                0,
+                Math.min(
+                    Number.isFinite(requestedIndex) && requestedIndex >= 0
+                        ? requestedIndex
+                        : sourceItems.length,
+                    sourceItems.length,
+                ),
+            );
+            sourceItems.splice(index, 0, item);
+        }
+        const restored = { ...data, [sourceKey]: sourceItems };
+        if (sourceKey === 'items') {
+            const pending = Number(data.pending_count);
+            if (Number.isFinite(pending)) restored.pending_count = pending + 1;
+        } else {
+            const count = Number(data.recommendation_count);
+            if (Number.isFinite(count)) restored.recommendation_count = count + 1;
+        }
+        appState.modelReviewData = restored;
+    }
+    if (item.auto_filtered === true) {
+        if (!appState.status || typeof appState.status !== 'object') appState.status = {};
+        appState.status.model_review_count = Number(
+            appState.status.model_review_count || 0,
+        ) + 1;
+        if (action === 'keep') {
+            appState.status.pool_count = Math.max(
+                0,
+                Number(appState.status.pool_count || 0) - 1,
+            );
+        } else {
+            appState.status.blocklist_count = Math.max(
+                0,
+                Number(appState.status.blocklist_count || 0) - 1,
+            );
+        }
+    }
+    appState.modelReviewSource = snapshot?.source
+        || (sourceKey === 'items' ? 'held' : 'recommended');
+    appState.modelReviewSelectedPath = snapshot?.previousSelectedPath
+        || item.path
+        || modelReviewVisibleItems()[0]?.path
+        || null;
+    if (
+        appState.status
+        && typeof appState.status === 'object'
+        && typeof updateStatusUI === 'function'
+    ) {
+        updateStatusUI();
+    }
+    renderModelReviewView();
+    return true;
+}
+
 function syncModelReviewCarouselPositions(carousel) {
     const cards = [...(carousel?.querySelectorAll('.model-review-card') || [])];
     const total = cards.length;
@@ -2110,7 +2254,7 @@ function syncModelReviewCarouselPositions(carousel) {
     });
 }
 
-function removeResolvedModelReviewCard(path, action) {
+function removeResolvedModelReviewCard(path, action, { immediate = false } = {}) {
     const carousel = els.wallpaperGrid?.querySelector('.model-review-carousel');
     const card = carousel?.querySelector(modelReviewCardSelector(path));
     const remaining = modelReviewVisibleItems();
@@ -2173,6 +2317,13 @@ function removeResolvedModelReviewCard(path, action) {
         finish();
     };
     card.addEventListener('transitionend', finishTransition);
+    if (immediate) {
+        // Optimistic decisions already have a server transaction in flight.
+        // Do not hold the next decision hostage to the decorative collapse;
+        // finish on the next frame so the browser can paint the choice first.
+        requestModelReviewFrame(finish);
+        return;
+    }
     setTimeout(finish, 440);
 }
 
@@ -2187,6 +2338,11 @@ async function resolveModelReviewDecision(item, action) {
     // changed after the request returned, which made a click feel ignored on
     // a slow API or while a local model action was being queued.
     setModelReviewCardBusy(item.path, true, action);
+    // Remove the card immediately. Filesystem/model work continues in the
+    // background, so a fast sequence of decisions never waits on the prior
+    // request or its transition animation.
+    const optimistic = applyOptimisticModelReviewDecision(item, action);
+    if (optimistic) removeResolvedModelReviewCard(item.path, action, { immediate: true });
     try {
         let result;
         if (item.auto_filtered === true) {
@@ -2199,13 +2355,23 @@ async function resolveModelReviewDecision(item, action) {
                 preferenceContext: 'model_review',
                 returnResult: true,
             });
-            if (!result) return false;
+            if (!result) {
+                rollbackOptimisticModelReviewDecision(item, action, optimistic);
+                return false;
+            }
         }
-        applyModelReviewDecisionResult(item, action, result);
-        updateStatusUI();
-        removeResolvedModelReviewCard(item.path, action);
+        // The queue was updated optimistically. Reconcile only server fields
+        // that can affect learning/model status; never reinsert the card.
+        if (appState.modelReviewData && result?.learning) {
+            appState.modelReviewData.learning = result.learning;
+            appState.modelReviewData.recommendation_learning = result.learning;
+        }
+        if (appState.modelReviewData && result?.model_filter) {
+            appState.modelReviewData.model_filter = result.model_filter;
+        }
         return true;
     } catch (error) {
+        rollbackOptimisticModelReviewDecision(item, action, optimistic);
         console.error('Failed to ' + action + ' model review item:', error);
         alert('Could not ' + action + ' ' + (item.name || 'this wallpaper')
             + ': ' + error.message);

@@ -452,30 +452,43 @@ def _find_review_item(
 def _model_review_feedback(config: WayperConfig, image: Path) -> dict[str, object] | None:
     """Return server-observed ranking details for one review candidate.
 
-    The renderer sends only a context marker.  Looking the candidate up again
-    here prevents stale or fabricated client scores from becoming part of the
-    preference ledger while still preserving useful audit information when the
-    image is acted on from the review panel.
+    The renderer sends only a context marker, so the server still recomputes
+    the evidence rather than trusting client scores.  Score just this image:
+    re-ranking the complete pool for every decision made action latency grow
+    with library size.
     """
     location = _pool_image_location(config, image)
     if location is None:
         return None
-    try:
-        from wayper.preference_model import preference_deletion_suggestions
-
-        purity, orientation = location
-        result = preference_deletion_suggestions(
-            config,
-            purities=(purity,),
-            orientation=orientation,
-            limit=60,
-        )
-    except Exception:
-        log.debug("Could not refresh model-review context for %s", image, exc_info=True)
+    metadata = _get_metadata().get(image.name)
+    if not isinstance(metadata, dict) or not metadata.get("tags"):
         return None
+    try:
+        from wayper.preference_model import (
+            load_preference_model,
+            model_report,
+            preference_model_path,
+            preference_recommendation_candidate,
+            preference_review_decision_score,
+            preference_review_score,
+        )
 
-    item = _find_review_item(config, result, image)
-    return _model_review_item_details(result, item) if item else None
+        model_path = preference_model_path(config)
+        model = load_preference_model(model_path)
+        if model is None:
+            return None
+        prediction = model.predict(metadata.get("tags", []), metadata=metadata, top_n=20)
+        if not preference_recommendation_candidate(model, prediction):
+            return None
+        item = {
+            **prediction.to_dict(),
+            "review_score": preference_review_score(prediction),
+            "decision_score": preference_review_decision_score(model, prediction),
+        }
+        return _model_review_item_details(model_report(model, model_path), item)
+    except Exception:
+        log.debug("Could not score model-review context for %s", image, exc_info=True)
+        return None
 
 
 def _blocklist_filename(value: str) -> str:
@@ -552,9 +565,41 @@ def _schedule_preference_model_retrain(config: WayperConfig) -> None:
         log.warning("Could not schedule preference model refresh", exc_info=True)
 
 
-def _preference_learning_payload(config: WayperConfig) -> dict[str, object] | None:
-    """Return a fresh learning summary after a Model review decision."""
+def _preference_learning_payload(
+    config: WayperConfig,
+    *,
+    fast: bool = False,
+) -> dict[str, object] | None:
+    """Return learning metadata without delaying a Review action.
+
+    The complete status call collects a training snapshot from every library
+    file. That is useful for the Review page refresh, but it is unnecessary in
+    the response to a single Keep/Dislike click. ``fast`` reports the durable
+    feedback revision from the ledger and deliberately avoids the filesystem
+    scan; the next queue refresh supplies the complete status.
+    """
     try:
+        if fast:
+            from wayper.preference_model import (
+                AUTO_RETRAIN_MIN_FEEDBACK,
+                load_preference_feedback,
+                load_preference_model,
+                preference_model_path,
+            )
+
+            model = load_preference_model(preference_model_path(config))
+            feedback = load_preference_feedback(config)
+            revision = int(feedback.get("revision", 0))
+            previous = int(model.training_summary.get("feedback_revision", 0)) if model else 0
+            pending = max(0, revision - previous)
+            return {
+                "status": "ready" if model else "untrained",
+                "pending_feedback": pending,
+                "minimum_feedback": AUTO_RETRAIN_MIN_FEEDBACK,
+                "due": bool(model and pending >= AUTO_RETRAIN_MIN_FEEDBACK),
+                "approximate": True,
+            }
+
         from wayper.preference_model import preference_learning_status
 
         return preference_learning_status(config)
@@ -1035,7 +1080,7 @@ def ban_image_route(req: ActionRequest):
         ),
     }
     if is_model_review:
-        response["learning"] = _preference_learning_payload(config)
+        response["learning"] = _preference_learning_payload(config, fast=True)
     return response
 
 
@@ -1122,28 +1167,39 @@ def preference_suggestion_feedback(req: PreferenceFeedbackRequest):
             "Only the keep feedback action is supported for ranked candidates",
         )
 
+    image = _resolve_image(config, req.path)
+    if _pool_image_location(config, image) is None:
+        raise HTTPException(400, "Keep feedback is only available for live pool images")
+    candidate_model = _model_review_feedback(config, image)
+    candidate_validated = candidate_model is not None
+    if candidate_model is None:
+        # Older clients can call this compatibility route before a model has
+        # been persisted, and some installations have a legacy candidate
+        # response cached.  Keep that fallback deliberately out of the normal
+        # decision path; trained Review actions use the single-item scorer
+        # above and never rescan the library.
+        try:
+            from wayper.preference_model import preference_deletion_suggestions
+
+            purity, orientation = _pool_image_location(config, image) or (None, None)
+            current_candidates = preference_deletion_suggestions(
+                config,
+                purities=(purity,) if purity else None,
+                orientation=orientation,
+                limit=60,
+            )
+            candidate_item = _find_review_item(config, current_candidates, image)
+            candidate_validated = candidate_item is not None
+            candidate_model = _model_review_item_details(current_candidates, candidate_item)
+        except Exception:
+            log.debug("Could not validate legacy model-review candidate", exc_info=True)
+        if not candidate_validated:
+            raise HTTPException(409, "Image is no longer a model review candidate")
     with FileLock():
-        image = _resolve_image(config, req.path)
-        location = _pool_image_location(config, image)
-        if location is None:
-            raise HTTPException(400, "Keep feedback is only available for live pool images")
-
-        from wayper.preference_model import preference_deletion_suggestions
-
-        purity, orientation = location
-        current_candidates = preference_deletion_suggestions(
-            config,
-            purities=(purity,),
-            orientation=orientation,
-            limit=60,
-        )
-        if not isinstance(current_candidates, dict):
+        # Revalidate after taking the state lock so a concurrent action cannot
+        # move the file between candidate validation and the ledger append.
+        if not image.is_file() or _pool_image_location(config, image) is None:
             raise HTTPException(409, "Image is no longer a model review candidate")
-        candidate_item = _find_review_item(config, current_candidates, image)
-        if candidate_item is None:
-            raise HTTPException(409, "Image is no longer a model review candidate")
-        candidate_model = _model_review_item_details(current_candidates, candidate_item)
-
         _record_preference_feedback(
             config,
             "keep",
@@ -1156,7 +1212,7 @@ def preference_suggestion_feedback(req: PreferenceFeedbackRequest):
         )
 
     _schedule_preference_model_retrain(config)
-    return {"status": "ok", "learning": _preference_learning_payload(config)}
+    return {"status": "ok", "learning": _preference_learning_payload(config, fast=True)}
 
 
 @app.get("/api/model-review")
@@ -1209,20 +1265,11 @@ def _resolve_model_review_action(req: ModelReviewActionRequest) -> dict[str, obj
         raise HTTPException(409, str(exc)) from exc
     except (FileExistsError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
-    # Return the refreshed learning state so the inbox can update its status
-    # rail immediately after a decision without waiting for the next poll.
-    try:
-        from wayper.model_review import model_review_status
-
-        review_status = model_review_status(config)
-    except Exception:
-        review_status = {}
     return {
         "status": "ok",
         "action": req.action,
         "review": result,
-        "learning": review_status.get("learning"),
-        "model_filter": review_status,
+        "learning": _preference_learning_payload(config, fast=True),
     }
 
 
