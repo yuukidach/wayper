@@ -11,6 +11,7 @@ import httpx
 from fastapi import HTTPException
 
 from wayper.config import MonitorConfig, WallhavenConfig, WayperConfig, load_config
+from wayper.model_review import queue_model_review_item
 from wayper.pool import load_metadata, save_metadata
 from wayper.server.api import (
     ActionRequest,
@@ -21,6 +22,7 @@ from wayper.server.api import (
     ban_image_route,
     dislike_image_route,
     get_config_route,
+    get_status,
     model_review_action_route,
     model_review_route,
     preference_suggestion_feedback,
@@ -28,6 +30,7 @@ from wayper.server.api import (
     remove_blocklist_entry,
     update_config_route,
 )
+from wayper.state import write_mode
 from wayper.wallhaven import WallhavenClient
 
 
@@ -62,6 +65,55 @@ class _FakeAsyncClient:
 
 
 class RegressionTest(unittest.TestCase):
+    def test_status_counts_follow_selected_monitor_orientation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(
+                download_dir=Path(td),
+                monitors=[
+                    MonitorConfig("landscape-monitor", 1920, 1080, "landscape"),
+                    MonitorConfig("portrait-monitor", 1080, 1920, "portrait"),
+                ],
+            )
+            write_mode(config, {"sfw"})
+            for orientation, suffix in (("landscape", "wide"), ("portrait", "tall")):
+                pool = config.download_dir / "sfw" / orientation
+                favorite = config.download_dir / "favorites" / "sfw" / orientation
+                pool.mkdir(parents=True)
+                favorite.mkdir(parents=True)
+                (pool / f"{suffix}.jpg").touch()
+                (favorite / f"{suffix}.jpg").touch()
+                review = config.model_review_dir / "sfw" / orientation / f"{suffix}.jpg"
+                review.parent.mkdir(parents=True)
+                review.touch()
+                queue_model_review_item(
+                    config,
+                    review,
+                    purity="sfw",
+                    orientation=orientation,
+                    prediction={"probability": 0.99},
+                    strategy="model",
+                )
+
+            with (
+                patch("wayper.server.api.get_config", return_value=config),
+                patch("wayper.server.api.is_daemon_running", return_value=(False, None)),
+            ):
+                landscape = get_status(monitor="landscape-monitor", include_recoverable=False)
+                portrait = get_status(monitor="portrait-monitor", include_recoverable=False)
+                unscoped = get_status(include_recoverable=False)
+
+        self.assertEqual(landscape.monitor, "landscape-monitor")
+        self.assertEqual(landscape.orientation, "landscape")
+        self.assertEqual((landscape.pool_count, landscape.favorites_count), (1, 1))
+        self.assertEqual(landscape.model_review_count, 1)
+        self.assertEqual(portrait.monitor, "portrait-monitor")
+        self.assertEqual(portrait.orientation, "portrait")
+        self.assertEqual((portrait.pool_count, portrait.favorites_count), (1, 1))
+        self.assertEqual(portrait.model_review_count, 1)
+        self.assertIsNone(unscoped.monitor)
+        self.assertEqual((unscoped.pool_count, unscoped.favorites_count), (2, 2))
+        self.assertEqual(unscoped.model_review_count, 2)
+
     def test_config_route_exposes_and_updates_wallhaven_batch_size(self) -> None:
         config = WayperConfig(wallhaven=WallhavenConfig(batch_size=7))
 

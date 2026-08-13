@@ -50,6 +50,7 @@ let appState = {
     monitors: [],
     selectedMonitor: null, // monitor name
     status: { running: false, pid: null },
+    statusRequestId: 0, // Invalidates status responses for a previous monitor
     refreshing: false, // true while refreshImages is in-flight
     images: [],
     config: null, // Full config object
@@ -72,6 +73,10 @@ let appState = {
     preferenceSuggestions: null,   // Local metadata-model image review candidates
     modelReviewData: null,          // Auto-filter quarantine queue
     modelReviewContextKey: null,    // Purity/orientation represented by modelReviewData
+    // Review is scoped by purity/orientation, not by the physical monitor.
+    // Keep the last response for each scope so moving between monitors can
+    // paint synchronously and refresh in the background.
+    modelReviewContextCache: new Map(),
     modelReviewRecommendationCache: new Map(), // Makes repeat entry immediate
     modelReviewRecommendationRequests: new Map(), // Coalesces background ranking work
     modelReviewSelectedPath: null,  // Item currently inspected in the review workspace
@@ -575,9 +580,7 @@ function handleGlobalKeydown(e) {
         const monitor = appState.monitors[Number(e.key) - 1];
         if (monitor) {
             e.preventDefault();
-            appState.selectedMonitor = monitor.name;
-            renderMonitors();
-            refreshImages();
+            switchMonitor(monitor.name);
         }
         return;
     }

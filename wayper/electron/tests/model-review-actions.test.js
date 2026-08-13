@@ -15,6 +15,89 @@ async function flushPromises() {
     await new Promise(resolve => setImmediate(resolve));
 }
 
+async function testStatusRequestsStayScopedToSelectedMonitor() {
+    const pending = [];
+    const context = {
+        API_URL: 'http://127.0.0.1:8080',
+        appState: {
+            selectedMonitor: 'DP-1',
+            monitors: [
+                { name: 'DP-1', orientation: 'landscape' },
+                { name: 'DP-2', orientation: 'portrait' },
+            ],
+            currentOrient: 'landscape',
+            statusRequestId: 0,
+            purity: ['sfw'],
+            mode: 'pool',
+            refreshing: true,
+            status: {
+                running: true,
+                pool_count: 0,
+                favorites_count: 0,
+                blocklist_count: 0,
+                model_review_count: 0,
+            },
+        },
+        console,
+        fetch: url => new Promise(resolve => pending.push({ url, resolve })),
+        updateStatusUI: () => {},
+        updateUI: () => {},
+        refreshImages: () => {},
+        isModelReviewMode: () => false,
+    };
+    context.window = context;
+    const renderer = loadRendererScript(
+        'renderer-data.js',
+        context,
+        ['fetchStatus', 'statusUrl'],
+    );
+
+    const oldRequest = renderer.fetchStatus();
+    context.appState.selectedMonitor = 'DP-2';
+    const currentRequest = renderer.fetchStatus();
+    assert.match(
+        renderer.statusUrl({ monitor: 'DP-2', orient: 'portrait' }),
+        /monitor=DP-2/,
+    );
+
+    const current = pending.find(item => item.url.includes('monitor=DP-2'));
+    const old = pending.find(item => item.url.includes('monitor=DP-1'));
+    assert.ok(current && old, 'both monitor-scoped status requests should be sent');
+    current.resolve({
+        ok: true,
+        json: async () => ({
+            running: true,
+            monitor: 'DP-2',
+            orientation: 'portrait',
+            pool_count: 20,
+            favorites_count: 2,
+            blocklist_count: 0,
+            model_review_count: 1,
+            mode: ['sfw'],
+        }),
+    });
+    await currentRequest;
+
+    old.resolve({
+        ok: true,
+        json: async () => ({
+            running: true,
+            monitor: 'DP-1',
+            orientation: 'landscape',
+            pool_count: 10,
+            favorites_count: 1,
+            blocklist_count: 0,
+            model_review_count: 9,
+            mode: ['sfw'],
+        }),
+    });
+    await oldRequest;
+
+    assert.equal(context.appState.status.monitor, 'DP-2');
+    assert.equal(context.appState.status.pool_count, 20);
+    assert.equal(context.appState.status.model_review_count, 1);
+}
+
 async function testSuggestionRefreshStaysInPlace() {
     let suggestionRenders = 0;
     let resolveSuggestions;
@@ -234,6 +317,7 @@ function testRemovalMountsAndFocusesNextBatchCard() {
     };
     cards = [removedCard];
     const context = {
+        API_URL: 'http://127.0.0.1:8080',
         appState: {
             allImages: [removedCard, nextCard].map(card => ({ path: card.dataset.path })),
             images: [removedCard, nextCard].map(card => ({ path: card.dataset.path })),
@@ -1485,7 +1569,94 @@ async function testLateModelReviewResponseCannotRemountDeckAfterLeaving() {
     assert.equal(renders, 1, 'a stale response must not mount the review workspace again');
 }
 
+async function testModelReviewContextIsRestoredFromCache() {
+    const heldLandscape = { path: '.model-review/sfw/landscape/held.jpg', auto_filtered: true };
+    const heldPortrait = { path: '.model-review/sfw/portrait/held.jpg', auto_filtered: true };
+    const calls = [];
+    const context = {
+        appState: {
+            mode: 'model-review',
+            purity: ['sfw'],
+            currentOrient: 'landscape',
+            imageRequestId: 3,
+            preferenceSuggestionRequestId: 0,
+            modelReviewContextCache: new Map(),
+            config: { wallhaven: { filter_strategy: 'model' } },
+        },
+        console,
+        isModelReviewMode: () => true,
+        renderModelReviewView: () => {},
+        WayperApi: {
+            modelReview: async (_purities, orient) => {
+                calls.push(orient);
+                return {
+                    status: 'ready',
+                    items: [orient === 'landscape' ? heldLandscape : heldPortrait],
+                    pending_count: 1,
+                };
+            },
+            preferenceSuggestions: async () => ({ status: 'ready', items: [] }),
+        },
+    };
+    context.window = context;
+    const renderer = loadRendererScript('renderer-data.js', context, ['fetchModelReview']);
+
+    await renderer.fetchModelReview({ orient: 'landscape', requestId: 3 });
+    await renderer.fetchModelReview({ orient: 'portrait', requestId: 3 });
+    assert.equal(context.appState.modelReviewData.items[0].path, heldPortrait.path);
+
+    const before = calls.length;
+    await renderer.fetchModelReview({ orient: 'landscape', requestId: 3 });
+    assert.equal(context.appState.modelReviewData.items[0].path, heldLandscape.path);
+    assert.equal(calls.length, before + 1, 'cache restore still performs one background refresh');
+}
+
+async function testBlocklistMonitorSwitchKeepsSharedViewMounted() {
+    let renders = 0;
+    let statusRequests = 0;
+    const context = {
+        API_URL: 'http://127.0.0.1:8080',
+        appState: {
+            mode: 'trash',
+            selectedMonitor: 'DP-1',
+            currentOrient: 'landscape',
+            monitors: [
+                { name: 'DP-1', orientation: 'landscape' },
+                { name: 'DP-2', orientation: 'portrait' },
+            ],
+            status: {},
+            imageRequestId: 4,
+            refreshing: true,
+        },
+        console,
+        renderMonitors: () => {},
+        markCurrentWallpaper: () => {},
+        refreshImages: async () => { renders++; },
+        updateStatusUI: () => {},
+        fetch: async () => {
+            statusRequests++;
+            return {
+                ok: true,
+                json: async () => ({
+                    running: false,
+                    monitor: 'DP-2',
+                    orientation: 'portrait',
+                    mode: ['sfw'],
+                }),
+            };
+        },
+    };
+    context.window = context;
+    const renderer = loadRendererScript('renderer-data.js', context, ['switchMonitor']);
+
+    assert.equal(renderer.switchMonitor('DP-2'), true);
+    await flushPromises();
+    assert.equal(renders, 0, 'blocklist must not rebuild for a monitor switch');
+    assert.equal(statusRequests, 1, 'only the scoped status should refresh');
+}
+
 (async () => {
+    await testStatusRequestsStayScopedToSelectedMonitor();
     await testSuggestionRefreshStaysInPlace();
     await testManualDislikeUsesDistinctFeedbackEndpoint();
     await testLightboxBanReturnsFocusToNextCard();
@@ -1496,6 +1667,8 @@ async function testLateModelReviewResponseCannotRemountDeckAfterLeaving() {
     await testAutomaticHoldsStayVisibleWhenAutomaticFilteringIsOff();
     await testHeldCardsRenderBeforeRecommendationRankingFinishes();
     await testLateModelReviewResponseCannotRemountDeckAfterLeaving();
+    await testModelReviewContextIsRestoredFromCache();
+    await testBlocklistMonitorSwitchKeepsSharedViewMounted();
     testReviewRowsUseSpatialArrowNavigation();
     testGridNavigationBridgesModelReview();
     testCarouselSelectionDoesNotRerenderWorkspace();

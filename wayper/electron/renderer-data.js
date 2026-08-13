@@ -298,6 +298,115 @@ function libraryViewContextKey(
     });
 }
 
+function modelReviewContextCache() {
+    if (!(appState.modelReviewContextCache instanceof Map)) {
+        appState.modelReviewContextCache = new Map();
+    }
+    return appState.modelReviewContextCache;
+}
+
+const MODEL_REVIEW_CONTEXT_CACHE_MS = 60_000;
+
+function cacheCurrentModelReviewContext() {
+    const key = appState.modelReviewContextKey;
+    if (!key || !appState.modelReviewData) return;
+    modelReviewContextCache().set(key, {
+        data: appState.modelReviewData,
+        selectedPath: appState.modelReviewSelectedPath,
+        source: appState.modelReviewSource,
+        resolvedPaths: new Set(
+            appState.modelReviewResolvedPaths instanceof Set
+                ? appState.modelReviewResolvedPaths
+                : [],
+        ),
+        loadedAt: Date.now(),
+    });
+}
+
+function cachedModelReviewContext(orient = appState.currentOrient) {
+    const entry = modelReviewContextCache().get(preferenceReviewContextKey(orient));
+    if (!entry || !entry.data) return null;
+    if (entry.loadedAt && Date.now() - entry.loadedAt > MODEL_REVIEW_CONTEXT_CACHE_MS) {
+        modelReviewContextCache().delete(preferenceReviewContextKey(orient));
+        return null;
+    }
+    return entry;
+}
+
+function restoreModelReviewContext(orient = appState.currentOrient) {
+    const entry = cachedModelReviewContext(orient);
+    if (!entry) return false;
+    appState.modelReviewContextKey = preferenceReviewContextKey(orient);
+    appState.modelReviewData = entry.data;
+    appState.modelReviewSelectedPath = entry.selectedPath || null;
+    appState.modelReviewSource = entry.source || null;
+    appState.modelReviewResolvedPaths = new Set(entry.resolvedPaths || []);
+    reconcileModelReviewSelection(appState.modelReviewData);
+    return true;
+}
+
+function activateModelReviewContext(orient = appState.currentOrient) {
+    const key = preferenceReviewContextKey(orient);
+    const previousKey = appState.modelReviewContextKey;
+    const contextChanged = previousKey !== key;
+    const hadCurrentData = Boolean(appState.modelReviewData);
+
+    if (contextChanged) cacheCurrentModelReviewContext();
+    appState.modelReviewContextKey = key;
+
+    if (contextChanged || !appState.modelReviewData) {
+        if (!restoreModelReviewContext(orient)) {
+            appState.modelReviewData = null;
+            appState.modelReviewSelectedPath = null;
+            appState.modelReviewSource = null;
+            appState.modelReviewResolvedPaths = new Set();
+        }
+    }
+    return { contextChanged, hadCurrentData };
+}
+
+function invalidateModelReviewContextCache() {
+    modelReviewContextCache().clear();
+}
+
+function switchMonitor(monitorName) {
+    const next = appState.monitors?.find(item => item.name === monitorName);
+    if (!next || next.name === appState.selectedMonitor) return false;
+
+    const previous = appState.monitors?.find(item => item.name === appState.selectedMonitor);
+    const previousOrient = previous?.orientation || appState.currentOrient || '';
+    appState.selectedMonitor = next.name;
+    appState.currentOrient = next.orientation || 'landscape';
+    renderMonitors();
+    // The image list is reusable for same-orientation monitors, but the
+    // highlighted "current wallpaper" card is physical-monitor specific.
+    markCurrentWallpaper();
+
+    // Pool, Favorites, Review and Blocklist are all keyed by orientation (or
+    // globally), never by a physical display.  A same-orientation monitor
+    // switch therefore only changes the target for the next wallpaper action.
+    if (previous && previousOrient === appState.currentOrient) {
+        if (appState.status && typeof appState.status === 'object') {
+            appState.status.monitor = next.name;
+            appState.status.orientation = appState.currentOrient;
+        }
+        return true;
+    }
+
+    if (appState.mode === 'trash') {
+        // Keep the blocklist DOM and its pager intact.  Only the footer counts
+        // are orientation-scoped, so refresh status without rebuilding the
+        // global blocklist view.
+        appState.imageRequestId++;
+        appState.refreshing = false;
+        void fetchStatus();
+        return true;
+    }
+
+    void refreshImages();
+    return true;
+}
+
 function modelReviewRecommendationCaches() {
     if (!(appState.modelReviewRecommendationCache instanceof Map)) {
         appState.modelReviewRecommendationCache = new Map();
@@ -365,6 +474,13 @@ function invalidateModelReviewRecommendationCache(path = null) {
             loadedAt: 0,
         });
     }
+}
+
+function invalidateModelReviewCaches(path = null) {
+    invalidateModelReviewRecommendationCache(path);
+    // A decision changes the held queue and may change recommendation scores;
+    // do not serve the old context snapshot on the next monitor switch.
+    invalidateModelReviewContextCache();
 }
 
 function scheduleModelReviewPrefetch() {
@@ -571,17 +687,8 @@ function renderProgressiveModelReview() {
 async function fetchModelReview({ orient = appState.currentOrient, requestId = null } = {}) {
     const request = ++appState.preferenceSuggestionRequestId;
     const contextKey = preferenceReviewContextKey(orient);
-    const contextChanged = appState.modelReviewContextKey !== contextKey;
-    const hadCurrentData = !contextChanged && Boolean(appState.modelReviewData);
+    const { contextChanged, hadCurrentData } = activateModelReviewContext(orient);
     const cachedRecommendations = cachedModelReviewRecommendations(orient)?.data || null;
-
-    appState.modelReviewContextKey = contextKey;
-    if (contextChanged) {
-        appState.modelReviewData = null;
-        appState.modelReviewSelectedPath = null;
-        appState.modelReviewSource = null;
-        appState.modelReviewResolvedPaths = new Set();
-    }
     if (!appState.modelReviewData && cachedRecommendations) {
         appState.modelReviewData = {
             status: 'ready',
@@ -592,6 +699,8 @@ async function fetchModelReview({ orient = appState.currentOrient, requestId = n
         };
         reconcileModelReviewSelection(appState.modelReviewData);
     }
+    // Paint the cached queue immediately. The two network requests below are
+    // still useful for freshness, but must never blank a valid deck first.
     renderProgressiveModelReview();
 
     // Held files are cheap to read and render first. Ranking Recommended can
@@ -637,6 +746,7 @@ async function fetchModelReview({ orient = appState.currentOrient, requestId = n
         reconcileModelReviewSelection(appState.modelReviewData, {
             preferHeld: contextChanged || !hadCurrentData,
         });
+        cacheCurrentModelReviewContext();
         renderProgressiveModelReview();
 
         const recommendations = await recommendationsPromise;
@@ -646,6 +756,7 @@ async function fetchModelReview({ orient = appState.currentOrient, requestId = n
             ...modelReviewRecommendationFields(recommendations),
         };
         reconcileModelReviewSelection(appState.modelReviewData);
+        cacheCurrentModelReviewContext();
         renderProgressiveModelReview();
         return true;
     } catch (e) {
@@ -655,6 +766,7 @@ async function fetchModelReview({ orient = appState.currentOrient, requestId = n
             };
             appState.modelReviewSelectedPath = null;
             appState.modelReviewSource = null;
+            cacheCurrentModelReviewContext();
             renderProgressiveModelReview();
         }
         console.error('Failed to fetch automatic model review queue:', e);
@@ -1147,8 +1259,8 @@ async function banImage(
 
 async function dislikeImage(path) {
     invalidateBlocklistSuggestions();
-    if (typeof invalidateModelReviewRecommendationCache === 'function') {
-        invalidateModelReviewRecommendationCache(path);
+    if (typeof invalidateModelReviewCaches === 'function') {
+        invalidateModelReviewCaches(path);
     }
     removeImageFromState(path);
     // Dislike shares Ban's exact-image block/trash behavior, but the backend
@@ -1752,6 +1864,49 @@ function imagePageUrl(offset = 0, { mode = appState.mode, purities = appState.pu
     return `${API_URL}/api/images/page?mode=${mode}&purity=${activePurityParam(purities)}&orient=${orient}&offset=${offset}&limit=${appState.pageSize}`;
 }
 
+// Status is scoped to the selected physical monitor.  The library itself is
+// organized by orientation, so the backend resolves the monitor to the
+// corresponding orientation while retaining the monitor name in the response
+// for stale-response detection.  Keep this helper in one place so every
+// refresh path requests exactly the same scope.
+function statusUrl({
+    monitor = appState.selectedMonitor,
+    orient = null,
+    includeRecoverable = false,
+} = {}) {
+    const monitorInfo = appState.monitors?.find(item => item.name === monitor);
+    const effectiveOrient = orient || monitorInfo?.orientation || '';
+    const params = [`include_recoverable=${includeRecoverable ? 'true' : 'false'}`];
+    if (effectiveOrient) params.unshift(`orient=${encodeURIComponent(effectiveOrient)}`);
+    if (monitor) params.push(`monitor=${encodeURIComponent(monitor)}`);
+    return `${API_URL}/api/status?${params.join('&')}`;
+}
+
+function statusResponseMatchesScope(data, monitor, orient) {
+    if (!data || typeof data !== 'object') return false;
+    // New backends echo the requested scope.  Older backends omit these
+    // fields, so retain compatibility and rely on the request generation
+    // guard in that case.
+    if (Object.hasOwn(data, 'monitor') && data.monitor !== (monitor || null)) return false;
+    if (Object.hasOwn(data, 'orientation') && data.orientation !== (orient || null)) {
+        return false;
+    }
+    return true;
+}
+
+function statusResponseMatchesOrientation(data, orient) {
+    if (!data || typeof data !== 'object') return false;
+    // Library responses are keyed by orientation. A same-orientation monitor
+    // switch must be allowed to finish an already in-flight request even
+    // though its echoed physical monitor name is now stale.
+    return !Object.hasOwn(data, 'orientation') || data.orientation === (orient || null);
+}
+
+function imageResponseMatchesContext(requestId, contextKey) {
+    return requestId === appState.imageRequestId
+        && libraryViewContextKey(appState.mode, appState.currentOrient) === contextKey;
+}
+
 function resetImagePaging() {
     appState.allImages = [];
     appState.images = [];
@@ -1826,12 +1981,31 @@ function connectSSE() {
 }
 
 async function fetchStatus() {
+    const requestedMonitor = appState.selectedMonitor || null;
+    const requestedMonitorInfo = appState.monitors?.find(
+        item => item.name === requestedMonitor,
+    );
+    const requestedOrient = requestedMonitorInfo?.orientation || '';
+    const requestId = Number(appState.statusRequestId || 0) + 1;
+    appState.statusRequestId = requestId;
     try {
-        const monitor = appState.monitors.find(m => m.name === appState.selectedMonitor);
-        const orient = monitor ? monitor.orientation : '';
-        const res = await fetch(`${API_URL}/api/status?orient=${orient}&include_recoverable=false`);
+        const res = await fetch(statusUrl({
+            monitor: requestedMonitor,
+            orient: requestedOrient,
+            includeRecoverable: false,
+        }));
         if (!res.ok) return;
         const data = await res.json();
+
+        // A monitor switch can leave the old request in flight.  Its counts
+        // must never overwrite the newly selected monitor's status.
+        if (
+            requestId !== appState.statusRequestId
+            || requestedMonitor !== (appState.selectedMonitor || null)
+            || !statusResponseMatchesScope(data, requestedMonitor, requestedOrient)
+        ) {
+            return;
+        }
 
         // Check for external mode change (e.g. via CLI)
         const newMode = Array.isArray(data.mode) ? data.mode : [data.mode];
@@ -1872,7 +2046,11 @@ async function fetchStatus() {
             }
         }
     } catch (e) {
-        if (appState.status.running !== false) {
+        if (
+            requestId === appState.statusRequestId
+            && requestedMonitor === (appState.selectedMonitor || null)
+            && appState.status.running !== false
+        ) {
             appState.status = { running: false };
             updateStatusUI();
         }
@@ -1912,19 +2090,25 @@ async function refreshImages(preserveFocus = false) {
     const requestId = ++appState.imageRequestId;
     const renderedTarget = preserveFocus ? appState.currentBatchIndex : 0;
     const monitor = appState.monitors.find(m => m.name === appState.selectedMonitor);
+    const requestedMonitor = appState.selectedMonitor;
     const orient = monitor ? monitor.orientation : 'landscape';
+    const requestedContextKey = libraryViewContextKey(appState.mode, orient);
     appState.currentOrient = orient;
     console.log('[refresh] start', appState.mode, orient);
 
     if (isModelReviewMode()) {
         appState.preferenceSuggestions = null;
-        renderModelReviewView();
         try {
             const [statusData] = await Promise.all([
-                fetch(`${API_URL}/api/status?orient=${orient}&include_recoverable=false`).then(r => r.json()),
+                fetch(statusUrl({ monitor: requestedMonitor, orient, includeRecoverable: false }))
+                    .then(r => r.json()),
                 fetchModelReview({ orient, requestId }),
             ]);
-            if (requestId === appState.imageRequestId && isModelReviewMode()) {
+            if (
+                imageResponseMatchesContext(requestId, requestedContextKey)
+                && statusResponseMatchesOrientation(statusData, orient)
+                && isModelReviewMode()
+            ) {
                 appState.status = statusData;
                 updateStatusUI();
             }
@@ -1939,13 +2123,16 @@ async function refreshImages(preserveFocus = false) {
         els.wallpaperGrid.querySelector('.model-review-panel')?.remove();
         const suggestionsPromise = fetchTagSuggestions({ render: true, requestId });
         try {
-            resetImagePaging();
             const [statusData, blocklistData, pageData] = await Promise.all([
-                fetch(`${API_URL}/api/status?orient=${orient}&include_recoverable=false`).then(r => r.json()),
+                fetch(statusUrl({ monitor: requestedMonitor, orient, includeRecoverable: false }))
+                    .then(r => r.json()),
                 fetchBlocklist(),
                 fetch(imagePageUrl(0)).then(r => r.json()),
             ]);
-            if (requestId === appState.imageRequestId) {
+            if (
+                imageResponseMatchesContext(requestId, requestedContextKey)
+                && statusResponseMatchesOrientation(statusData, orient)
+            ) {
                 appState.allImages = pageData.items || [];
                 appState.totalImages = pageData.total ?? appState.allImages.length;
                 appState.nextOffset = pageData.next_offset;
@@ -1964,11 +2151,14 @@ async function refreshImages(preserveFocus = false) {
         try {
             resetImagePaging();
             const [statusData, pageData] = await Promise.all([
-                fetch(`${API_URL}/api/status?orient=${orient}&include_recoverable=false`)
+                fetch(statusUrl({ monitor: requestedMonitor, orient, includeRecoverable: false }))
                     .then(r => r.json()),
                 fetch(imagePageUrl(0)).then(r => r.json()),
             ]);
-            if (requestId === appState.imageRequestId) {
+            if (
+                imageResponseMatchesContext(requestId, requestedContextKey)
+                && statusResponseMatchesOrientation(statusData, orient)
+            ) {
                 appState.allImages = pageData.items || [];
                 appState.totalImages = pageData.total ?? appState.allImages.length;
                 appState.nextOffset = pageData.next_offset;

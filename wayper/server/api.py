@@ -824,12 +824,25 @@ def control_action(
 
 
 @app.get("/api/status", response_model=StatusResponse)
-def get_status(orient: str = "", include_recoverable: bool = True):
+def get_status(
+    orient: str = "",
+    include_recoverable: bool = True,
+    monitor: str = "",
+):
     config = get_config()
     running, pid = is_daemon_running(config)
     purities = read_mode(config)
 
-    orientations = [orient] if orient in ("landscape", "portrait") else ["landscape", "portrait"]
+    # A monitor is the most precise scope available to the GUI.  Images are
+    # stored by orientation (not by physical display), so a valid monitor
+    # selects its orientation and all monitors sharing that orientation see
+    # the same pool/favorites count.  Keep the old ``orient``-only behavior
+    # for callers that predate the monitor parameter.
+    selected_monitor = next((item for item in config.monitors if item.name == monitor), None)
+    selected_orientation = selected_monitor.orientation if selected_monitor else None
+    if selected_orientation not in ("landscape", "portrait"):
+        selected_orientation = orient if orient in ("landscape", "portrait") else None
+    orientations = [selected_orientation] if selected_orientation else ["landscape", "portrait"]
     pool_c, fav_c = library_counts(
         config,
         purities,
@@ -846,7 +859,17 @@ def get_status(orient: str = "", include_recoverable: bool = True):
     try:
         from wayper.model_review import model_review_status
 
-        review_status = model_review_status(config)
+        if selected_monitor:
+            review_status = model_review_status(
+                config,
+                purities=purities,
+                orientation=selected_orientation,
+                include_learning=False,
+            )
+        else:
+            # Preserve the historical unscoped response for CLI/older GUI
+            # callers that do not identify a monitor.
+            review_status = model_review_status(config)
     except Exception:
         log.debug("Could not read model review status", exc_info=True)
         review_status = {"pending_count": 0, "ready": False}
@@ -854,6 +877,8 @@ def get_status(orient: str = "", include_recoverable: bool = True):
     return StatusResponse(
         running=running,
         pid=pid,
+        monitor=selected_monitor.name if selected_monitor else None,
+        orientation=selected_orientation,
         pool_count=pool_c,
         favorites_count=fav_c,
         blocklist_count=blocklist_c,
@@ -1227,7 +1252,17 @@ def model_review_route(purity: str = "", orient: str = "", limit: int = 100):
 
     config = get_config()
     purities = _parse_purities(purity) if purity else sorted(read_mode(config))
-    status = model_review_status(config)
+    status = model_review_status(
+        config,
+        purities=purities,
+        orientation=orient or None,
+        include_learning=False,
+    )
+    # The full learning snapshot walks the library and is useful for a
+    # dedicated training report, but it needlessly blocks monitor navigation.
+    # The fast ledger/model revision is enough for the review header.
+    learning = _preference_learning_payload(config, fast=True)
+    status["learning"] = learning
     items = list_model_review_items(
         config,
         purities=purities,
@@ -1244,12 +1279,12 @@ def model_review_route(purity: str = "", orient: str = "", limit: int = 100):
     return {
         "status": status.get("status", "untrained"),
         "items": items,
-        # The sidebar status intentionally counts all purities, but the page
-        # count must match the currently selected purity/orientation filters.
+        # The page count must match the currently selected purity/orientation
+        # filters; this is also the scope used for the embedded model status.
         "pending_count": pending_count,
         "filter_strategy": config.wallhaven.filter_strategy,
         "model_filter": status,
-        "learning": status.get("learning"),
+        "learning": learning,
     }
 
 

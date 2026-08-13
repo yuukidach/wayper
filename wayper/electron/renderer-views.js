@@ -6,6 +6,15 @@ function modelReviewModeActive() {
         : appState?.mode === 'model-review';
 }
 
+function modelReviewDataIsCurrent() {
+    const data = appState.modelReviewData;
+    if (!data) return false;
+    const monitor = appState.monitors?.find(item => item.name === appState.selectedMonitor);
+    const orient = monitor?.orientation || appState.currentOrient || '';
+    if (typeof preferenceReviewContextKey !== 'function') return true;
+    return appState.modelReviewContextKey === preferenceReviewContextKey(orient);
+}
+
 function updateUI() {
     els.wallpaperGrid?.classList.toggle('model-review-grid', modelReviewModeActive());
     document.body?.setAttribute?.('data-mode', appState.mode);
@@ -50,7 +59,9 @@ function updateStatusUI() {
         els.countBlocklist.innerText = appState.status.blocklist_count;
     }
     if (els.countModelReview && appState.status.model_review_count !== undefined) {
-        const reviewData = modelReviewModeActive() ? appState.modelReviewData : null;
+        const reviewData = modelReviewModeActive() && modelReviewDataIsCurrent()
+            ? appState.modelReviewData
+            : null;
         const held = Number(
             reviewData?.pending_count ?? appState.status.model_review_count,
         );
@@ -227,9 +238,7 @@ function renderMonitors() {
 
         el.onclick = () => {
             console.log('[monitor] switch to', m.name, m.orientation);
-            appState.selectedMonitor = m.name;
-            renderMonitors();
-            refreshImages();
+            switchMonitor(m.name);
         };
 
         els.monitorsList.appendChild(el);
@@ -2054,7 +2063,9 @@ function applyModelReviewDecisionResult(item, action, result) {
         appState.modelReviewResolvedPaths = new Set();
     }
     appState.modelReviewResolvedPaths.add(item.path);
-    if (typeof invalidateModelReviewRecommendationCache === 'function') {
+    if (typeof invalidateModelReviewCaches === 'function') {
+        invalidateModelReviewCaches(item.path);
+    } else if (typeof invalidateModelReviewRecommendationCache === 'function') {
         invalidateModelReviewRecommendationCache(item.path);
     }
     if (appState.modelReviewData) {
@@ -2117,7 +2128,9 @@ function applyOptimisticModelReviewDecision(item, action) {
         appState.modelReviewResolvedPaths = new Set();
     }
     appState.modelReviewResolvedPaths.add(item.path);
-    if (typeof invalidateModelReviewRecommendationCache === 'function') {
+    if (typeof invalidateModelReviewCaches === 'function') {
+        invalidateModelReviewCaches(item.path);
+    } else if (typeof invalidateModelReviewRecommendationCache === 'function') {
         invalidateModelReviewRecommendationCache(item.path);
     }
     if (!appState.modelReviewData) {
@@ -2180,7 +2193,9 @@ function rollbackOptimisticModelReviewDecision(item, action, snapshot) {
     if (appState.modelReviewResolvedPaths instanceof Set) {
         appState.modelReviewResolvedPaths.delete(item.path);
     }
-    if (typeof invalidateModelReviewRecommendationCache === 'function') {
+    if (typeof invalidateModelReviewCaches === 'function') {
+        invalidateModelReviewCaches();
+    } else if (typeof invalidateModelReviewRecommendationCache === 'function') {
         invalidateModelReviewRecommendationCache();
     }
     const sourceKey = snapshot?.sourceKey

@@ -444,8 +444,20 @@ def resolve_model_review_item(
     return result
 
 
-def model_review_status(config: WayperConfig) -> dict[str, object]:
-    """Return queue and model readiness details for status/API consumers."""
+def model_review_status(
+    config: WayperConfig,
+    *,
+    purities: Iterable[str] | None = None,
+    orientation: str | None = None,
+    include_learning: bool = True,
+) -> dict[str, object]:
+    """Return queue and model readiness details for status/API consumers.
+
+    ``purities`` and ``orientation`` scope the pending queue count to the
+    same library slice shown by the caller.  The model readiness metadata is
+    global to the download directory and is intentionally left unchanged.
+    Omitting both arguments preserves the historical global count.
+    """
     from .preference_model import (
         auto_filter_status,
         load_preference_model,
@@ -458,12 +470,17 @@ def model_review_status(config: WayperConfig) -> dict[str, object]:
     # Keep learning metadata alongside the gate state.  The review page is a
     # feedback loop, so showing only "ready" leaves users unable to tell
     # whether their latest Keep/Dislike decisions will trigger a refresh.
-    try:
-        status["learning"] = preference_learning_status(config, model=model)
-    except Exception:
-        log.debug("Could not read preference learning status", exc_info=True)
-        status["learning"] = None
-    status["pending_count"] = pending_model_review_count(config)
+    if include_learning:
+        try:
+            status["learning"] = preference_learning_status(config, model=model)
+        except Exception:
+            log.debug("Could not read preference learning status", exc_info=True)
+            status["learning"] = None
+    status["pending_count"] = pending_model_review_count(
+        config,
+        purities=purities,
+        orientation=orientation,
+    )
     return status
 
 

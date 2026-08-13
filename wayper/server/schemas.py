@@ -8,6 +8,11 @@ from pydantic import BaseModel, Field
 class StatusResponse(BaseModel):
     running: bool
     pid: int | None = None
+    # Scope echoed by the backend so clients can reject a late response after
+    # the selected monitor changes.  These fields are optional for old API
+    # callers that do not request a monitor-scoped status.
+    monitor: str | None = None
+    orientation: str | None = None
     pool_count: int = 0
     favorites_count: int = 0
     blocklist_count: int = 0
