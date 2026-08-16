@@ -627,18 +627,6 @@ def update_check_route(force: bool = False):
     return check_for_updates(config, force=force)
 
 
-def _dedup_by(items: list, key) -> list:
-    """Compatibility wrapper for the old API helper.
-
-    Configuration writes now live in ``config_service``; keeping this tiny
-    adapter avoids breaking scripts that imported the helper while making the
-    route itself use the shared implementation.
-    """
-    from wayper.server.config_service import _deduplicate
-
-    return _deduplicate(items, key)
-
-
 @app.patch("/api/config")
 def update_config_route(updates: dict = Body(...)):
     config = get_config()
@@ -1581,34 +1569,26 @@ def _thumbnail_response(config: WayperConfig, image_path: str) -> FileResponse:
     return FileResponse(target, headers={"Cache-Control": "public, max-age=86400"})
 
 
-@app.get("/thumbnails")
-def serve_thumbnail_query(path: str):
-    """Serve a cached thumbnail for a relative image path from a query parameter."""
-    config = get_config()
-    return _thumbnail_response(config, path)
-
-
 @app.get("/thumbnails/{path:path}")
+@app.get("/thumbnails")
 def serve_thumbnail(path: str):
-    """Serve a cached thumbnail for a relative image path in the URL."""
+    """Serve a cached thumbnail from either a path segment or query parameter."""
     config = get_config()
     return _thumbnail_response(config, path)
-
-
-@app.get("/images")
-def serve_image_query(path: str):
-    """Serve an image for a relative image path from a query parameter."""
-    config = get_config()
-    img_full = _resolve_image(config, path)
-    return FileResponse(img_full, headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/images/{path:path}")
+@app.get("/images")
 def serve_image(path: str):
-    """Serve images from the currently configured download directory."""
+    """Serve an image from either a path segment or query parameter."""
     config = get_config()
     img_full = _resolve_image(config, path)
     return FileResponse(img_full, headers={"Cache-Control": "public, max-age=86400"})
+
+
+# Keep the historical helper names importable without maintaining duplicate handlers.
+serve_thumbnail_query = serve_thumbnail
+serve_image_query = serve_image
 
 
 def _find_free_port() -> int:

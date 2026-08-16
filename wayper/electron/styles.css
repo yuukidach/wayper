@@ -335,13 +335,13 @@ h1 {
   margin-left: 2px;
 }
 
-.controls button:not(.primary):not(.danger):not(.dislike) {
+.controls button:not(.primary):not(.dislike) {
   background: transparent;
   border-color: transparent;
   color: var(--subtext0);
 }
 
-.controls button:not(.primary):not(.danger):not(.dislike):hover {
+.controls button:not(.primary):not(.dislike):hover {
   color: var(--text);
   background: var(--panel);
   border-color: var(--border-subtle);
@@ -2626,21 +2626,6 @@ footer {
   flex-shrink: 0;
 }
 
-.ai-confidence-high {
-  background: rgba(166, 227, 161, 0.15);
-  color: var(--green);
-}
-
-.ai-confidence-medium {
-  background: rgba(249, 226, 175, 0.15);
-  color: var(--yellow);
-}
-
-.ai-confidence-low {
-  background: rgba(147, 153, 178, 0.15);
-  color: var(--overlay1);
-}
-
 .ai-suggestion-stats {
   font-size: var(--font-size-xs);
   color: var(--overlay1);
@@ -2725,87 +2710,21 @@ footer {
   border-radius: var(--radius-lg);
 }
 
-.model-review-page-intro {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  min-width: 0;
-  padding: 4px 2px 0;
-}
-
-.model-review-page-intro h2 {
-  margin: 0;
-  color: var(--text);
-  font-size: var(--font-size-heading);
-  font-weight: 600;
-}
-
-.model-review-page-intro p {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--overlay1);
-  font-size: var(--font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .model-review-panel:focus-visible {
   outline: none;
   border-color: var(--blue);
   box-shadow: 0 0 0 2px var(--crust), 0 0 0 4px var(--blue);
 }
 
-.model-review-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-}
-
-.model-review-heading {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-
-.model-review-title {
-  color: var(--blue);
-  font-size: var(--font-size-sm);
-  font-weight: 650;
-  letter-spacing: 0.9px;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.model-review-subtitle,
 .model-review-count,
-.model-review-learning,
 .model-review-empty {
   color: var(--overlay1);
   font-size: var(--font-size-sm);
 }
 
-.model-review-subtitle {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .model-review-count {
   color: var(--overlay0);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.model-review-learning {
-  overflow: hidden;
-  text-align: right;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -3033,20 +2952,6 @@ footer {
   color: var(--red);
   background: rgba(243, 139, 168, 0.16);
   border-color: rgba(243, 139, 168, 0.36);
-}
-
-@media (max-width: 560px) {
-  .model-review-header,
-  .model-review-heading {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .model-review-learning {
-    max-width: 100%;
-    text-align: left;
-  }
 }
 
 /* ---------- Filtering workspace ---------- */

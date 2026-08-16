@@ -92,13 +92,6 @@ class MacOSBackend(WallpaperBackend):
             current[_display_id(screen)] = Path(url.path()) if url else None
         return current
 
-    @staticmethod
-    def _screen_for_monitor(monitor: str):
-        for screen in NSScreen.screens():
-            if _display_id(screen) == monitor:
-                return screen
-        return None
-
     def is_locked(self) -> bool:
         """Check if the session is locked."""
         if _HAS_QUARTZ:

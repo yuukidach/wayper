@@ -566,26 +566,6 @@ function formatPreferenceRank(item) {
     return 'Ranked candidate';
 }
 
-function preferenceLearningText(learning) {
-    if (!learning || typeof learning !== 'object') return '';
-    const pending = Number(learning.pending_feedback);
-    const minimum = Number(learning.minimum_feedback);
-    const messages = [];
-    if (Number.isFinite(pending) && pending > 0) {
-        if (Number.isFinite(minimum) && minimum > 0) {
-            messages.push(`${pending}/${minimum} feedback pending`);
-        } else {
-            messages.push(`${pending} feedback pending`);
-        }
-    }
-    if (learning.stale) {
-        messages.push('model update pending');
-    } else if (learning.due) {
-        messages.push('model refresh due');
-    }
-    return messages.join(' · ');
-}
-
 function removePreferenceSuggestion(path) {
     const data = appState.preferenceSuggestions;
     if (!data || !Array.isArray(data.items)) return;
@@ -2587,53 +2567,6 @@ function syncPreferenceReviewLayout() {
     if (preferenceReviewVisibleItems(list).length < limit) {
         void refillPreferenceReviewCandidates();
     }
-}
-
-function createPreferenceReviewPanel() {
-    const data = appState.preferenceSuggestions;
-    if (!data || typeof data !== 'object') return null;
-
-    const panel = document.createElement('section');
-    panel.className = 'model-review-panel';
-    panel.tabIndex = -1;
-    panel.setAttribute('role', 'region');
-    panel.setAttribute('aria-label', 'Model review');
-
-    const header = document.createElement('div');
-    header.className = 'model-review-header';
-    const heading = document.createElement('div');
-    heading.className = 'model-review-heading';
-    const title = document.createElement('span');
-    title.className = 'model-review-title';
-    title.textContent = 'Review';
-    heading.appendChild(title);
-    const subtitle = document.createElement('span');
-    subtitle.className = 'model-review-subtitle';
-    subtitle.textContent = modelReviewModeActive()
-        ? 'Automatically held by the model · inspect, Keep or Dislike · Enter/Space · A/D'
-        : 'Ranked by local tag/context evidence · Tab/Arrows · Enter/Space · A/D';
-    heading.appendChild(subtitle);
-    const count = document.createElement('span');
-    count.className = 'model-review-count';
-    const pending = Number(data.pending_count);
-    count.textContent = preferenceReviewCountText(
-        modelReviewModeActive() && Number.isFinite(pending)
-            ? pending
-            : preferenceReviewVisibleItems().length,
-    );
-    heading.appendChild(count);
-    header.appendChild(heading);
-
-    const learningText = preferenceLearningText(data.learning);
-    if (learningText) {
-        const learning = document.createElement('span');
-        learning.className = 'model-review-learning';
-        learning.textContent = learningText;
-        header.appendChild(learning);
-    }
-    panel.appendChild(header);
-    syncPreferenceReviewRows(panel);
-    return panel;
 }
 
 function selectBlocklistTab(tab) {

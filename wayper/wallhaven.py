@@ -242,38 +242,6 @@ class WallhavenClient:
                 high = mid - 1
         return low
 
-    async def search_with_meta(
-        self,
-        query: str = "",
-        page: int = 1,
-        purity: str = "sfw",
-        **overrides: str,
-    ) -> list[dict]:
-        """Search Wallhaven and return full metadata for each result."""
-        purity_code = _PURITY_CODES.get(purity, "001")
-        params = {
-            "categories": self.config.wallhaven.categories,
-            "purity": purity_code,
-            "topRange": self.config.wallhaven.top_range,
-            "sorting": self.config.wallhaven.sorting,
-            "order": "desc",
-            "ai_art_filter": self.config.wallhaven.ai_art_filter,
-            "page": page,
-            "apikey": self.config.api_key,
-        }
-        exclude_q = self._exclude_query()
-        q_parts = [p for p in (query, exclude_q) if p]
-        if q_parts:
-            params["q"] = " ".join(q_parts)
-        params.update(overrides)
-        try:
-            resp = await self.client.get(SEARCH_URL, params=params)
-            resp.raise_for_status()
-            return resp.json().get("data", [])
-        except Exception:
-            log.warning("Wallhaven search_with_meta failed", exc_info=True)
-            return []
-
     async def wallpaper_info(self, wallpaper_id: str) -> dict:
         """Fetch full details for a single wallpaper (includes tags)."""
         try:

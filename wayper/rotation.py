@@ -157,10 +157,6 @@ class AutoRotationService:
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    @property
-    def paused(self) -> bool:
-        return self._paused
-
     def snapshot(self, config: WayperConfig) -> dict[str, bool]:
         return {
             "auto_rotation": self.running and not self._paused and config.interval > 0,

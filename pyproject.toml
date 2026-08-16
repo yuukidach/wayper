@@ -1,6 +1,6 @@
 [project]
 name = "wayper"
-version = "1.8.0"
+version = "1.8.1"
 description = "Cross-platform wallpaper manager with Wallhaven integration"
 requires-python = ">=3.12"
 dependencies = [
@@ -10,7 +10,6 @@ dependencies = [
     "mcp>=1.0",
     "fastapi>=0.110.0",
     "uvicorn>=0.29.0",
-    "python-multipart>=0.0.9",
     "send2trash>=1.8",
     "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
@@ -31,6 +30,12 @@ wayper-gui = "wayper.server.launcher:run_app"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build]
+exclude = [
+    "/wayper/electron/node_modules",
+    "/wayper/electron/dist",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["wayper"]

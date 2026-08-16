@@ -749,12 +749,6 @@ def fetch_cloud_tags(config: WayperConfig) -> list[str]:
     return [t for t in tags if t]
 
 
-def fetch_cloud_users(config: WayperConfig) -> list[str]:
-    """Fetch user_blacklist from Wallhaven API settings (needs API key, no login)."""
-    users = _fetch_cloud_settings(config).get("user_blacklist", [])
-    return [u for u in users if u]
-
-
 def _merge_blacklist_values(target: list[str], incoming: list[str]) -> int:
     """Append case-insensitively new cloud rules and return the count added."""
     existing = {value.casefold() for value in target}
@@ -767,39 +761,6 @@ def _merge_blacklist_values(target: list[str], incoming: list[str]) -> int:
         additions.append(value)
     target.extend(additions)
     return len(additions)
-
-
-def merge_cloud_tags_into_config(config: WayperConfig) -> bool:
-    """Merge cloud tag_blacklist into local exclude_tags. Returns True if config was modified."""
-    from .config import save_config
-
-    cloud = fetch_cloud_tags(config)
-    if not cloud:
-        return False
-    added = _merge_blacklist_values(config.wallhaven.exclude_tags, cloud)
-    if not added:
-        return False
-    save_config(config)
-    log.info("Merged %d cloud tags into local exclude_tags", added)
-    return True
-
-
-def merge_cloud_users_into_config(config: WayperConfig) -> bool:
-    """Merge cloud user_blacklist into local exclude_uploaders.
-
-    Returns True if config was modified.
-    """
-    from .config import save_config
-
-    cloud = fetch_cloud_users(config)
-    if not cloud:
-        return False
-    added = _merge_blacklist_values(config.wallhaven.exclude_uploaders, cloud)
-    if not added:
-        return False
-    save_config(config)
-    log.info("Merged %d cloud users into local exclude_uploaders", added)
-    return True
 
 
 def merge_cloud_blacklists_into_config(config: WayperConfig) -> bool:

@@ -399,26 +399,5 @@ def score_embedding(head: SemanticHead, embedding: Iterable[float]) -> float:
     return head.bias + sum(coefficient * value for coefficient, value in zip(head.weights, values))
 
 
-def score_metadata(
-    head: SemanticHead,
-    tags: Iterable[object],
-    context_features: Iterable[object] | None = None,
-) -> float:
-    """Embed and score one metadata record."""
-    embedding = embed_metadata([(tags, context_features)], model_name=head.model_name)[0]
-    return score_embedding(head, embedding)
-
-
 def semantic_probability(score: float) -> float:
     return _sigmoid(score)
-
-
-def clear_semantic_runtime_cache() -> None:
-    """Clear test/runtime caches after a model or cache-directory change."""
-    global _embedder, _embedder_name, _embedder_error
-    with _embedder_lock:
-        _embedder = None
-        _embedder_name = None
-        _embedder_error = None
-    with _embedding_cache_lock:
-        _embedding_cache.clear()

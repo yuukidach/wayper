@@ -211,9 +211,6 @@ class ImageCatalog:
                 favorites.update(record.ordered_tags)
         return banned, kept, favorites
 
-    def uploader_keys(self) -> frozenset[str]:
-        return frozenset(record.uploader for record in self if record.uploader)
-
     @property
     def banned_filenames(self) -> frozenset[str]:
         return frozenset(record.filename for record in self if record.banned)
