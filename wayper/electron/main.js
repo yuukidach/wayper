@@ -3,6 +3,7 @@ const path = require('path')
 const { spawn } = require('child_process')
 const fs = require('fs')
 const { waitForApi } = require('./backend-readiness')
+const { createStartupWindowController } = require('./startup-window')
 
 let backendProcess = null
 let mainWindow = null
@@ -12,12 +13,14 @@ let backendPathResolved = false
 let backendPath = null
 let captureInProgress = false
 let isQuitting = false
+let backendReadyPromise = null
 let trayRotationState = { auto_rotation: false, rotation_paused: false }
 let trayLanguage = 'auto'
 
 const CAPTURE_SWITCH = '--wayper-capture'
 const HIDDEN_SWITCH = '--hidden'
 const APP_ID = 'com.wayper.app'
+const BACKEND_START_TIMEOUT = 60000
 
 if (process.platform === 'win32') {
   // Keep development launches grouped under Wayper instead of electron.exe.
@@ -84,18 +87,21 @@ function startBackend() {
   }
 
   console.log(`Starting backend from: ${binaryPath}`)
-  backendProcess = spawn(binaryPath, [], {
+  const launchedProcess = spawn(binaryPath, [], {
     stdio: ['ignore', 'inherit', 'inherit'], // Pipe logs to main process stdout
     env: { ...process.env, WAYPER_GUI: 'electron' },
     windowsHide: true
   })
+  backendProcess = launchedProcess
 
-  backendProcess.on('error', (err) => {
+  launchedProcess.on('error', (err) => {
     console.error('Failed to start backend:', err)
+    if (backendProcess === launchedProcess) backendProcess = null
   })
 
-  backendProcess.on('exit', (code, signal) => {
+  launchedProcess.on('exit', (code, signal) => {
     console.log(`Backend exited with code ${code} signal ${signal}`)
+    if (backendProcess === launchedProcess) backendProcess = null
   })
   return true
 }
@@ -119,9 +125,70 @@ function killBackend() {
   }
 }
 
-function apiUrl(route) {
+function configuredApiPort() {
   const port = Number.parseInt(process.env.WAYPER_API_PORT || '0', 10)
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 0
+}
+
+function apiUrl(route) {
+  const port = configuredApiPort()
   return port > 0 ? `http://127.0.0.1:${port}${route}` : null
+}
+
+function backendStartupLabels() {
+  const isChinese = app.getLocale().toLowerCase().startsWith('zh')
+  const detail = process.platform === 'win32'
+    ? 'The first launch can be delayed by Windows security scanning. You can retry; diagnostic details are in wayper.log inside the Wayper config directory.'
+    : 'The background service took longer than expected to start. You can retry; diagnostic details are in wayper.log inside the Wayper config directory.'
+  const chineseDetail = process.platform === 'win32'
+    ? '首次启动可能会被 Windows 安全扫描拖慢。你可以重试；诊断日志位于 Wayper 配置目录中的 wayper.log。'
+    : '后台服务启动时间超过预期。你可以重试；诊断日志位于 Wayper 配置目录中的 wayper.log。'
+  return isChinese ? {
+    title: 'Wayper 后台服务未启动',
+    message: 'Wayper 暂时无法连接后台服务。',
+    detail: chineseDetail,
+    retry: '重试',
+    quit: '退出',
+  } : {
+    title: 'Wayper backend did not start',
+    message: 'Wayper could not connect to its background service.',
+    detail,
+    retry: 'Retry',
+    quit: 'Quit',
+  }
+}
+
+async function waitForBackendUntilReady() {
+  const configuredPort = configuredApiPort()
+  if (configuredPort > 0) return configuredPort
+
+  while (!isQuitting) {
+    const port = await waitForBackend(BACKEND_START_TIMEOUT)
+    if (port > 0) return port
+    if (isQuitting) break
+
+    const labels = backendStartupLabels()
+    const result = await dialog.showMessageBox({
+      type: 'error',
+      title: labels.title,
+      message: labels.message,
+      detail: labels.detail,
+      buttons: [labels.retry, labels.quit],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    })
+    if (result.response !== 0) {
+      isQuitting = true
+      app.quit()
+      break
+    }
+
+    // A failed child can be restarted. If it is merely slow, keep waiting for
+    // the existing process instead of interrupting a security scan.
+    if (!backendProcess) startBackend()
+  }
+  return 0
 }
 
 async function callApi(route, options = {}) {
@@ -152,7 +219,7 @@ function trayLabels() {
   }
 }
 
-function showMainWindow() {
+function revealMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) {
     createWindow({ show: true })
     return
@@ -160,6 +227,10 @@ function showMainWindow() {
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
+}
+
+function showMainWindow() {
+  startupWindowController.requestShow()
 }
 
 async function setRotationPaused(paused) {
@@ -174,15 +245,17 @@ async function setRotationPaused(paused) {
 
 async function refreshTrayMenu() {
   if (!tray || tray.isDestroyed()) return
-  try {
-    const [status, config] = await Promise.all([
-      callApi('/api/status?include_recoverable=false'),
-      callApi('/api/config'),
-    ])
-    trayRotationState = status
-    trayLanguage = config.language || 'auto'
-  } catch (error) {
-    console.warn('Could not refresh tray status:', error.message)
+  if (configuredApiPort() > 0) {
+    try {
+      const [status, config] = await Promise.all([
+        callApi('/api/status?include_recoverable=false'),
+        callApi('/api/config'),
+      ])
+      trayRotationState = status
+      trayLanguage = config.language || 'auto'
+    } catch (error) {
+      console.warn('Could not refresh tray status:', error.message)
+    }
   }
 
   const labels = trayLabels()
@@ -341,9 +414,12 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
-// IPC handler: renderer asks for the API port (cached by the launcher/readiness check)
-ipcMain.handle('get-api-port', () => {
-  return parseInt(process.env.WAYPER_API_PORT || '0', 10)
+// Keep the renderer on its loading screen until the auto-selected API port is
+// actually accepting requests. Every window shares the same readiness promise.
+ipcMain.handle('get-api-port', async () => {
+  const port = configuredApiPort()
+  if (port > 0) return port
+  return backendReadyPromise ? await backendReadyPromise : 0
 })
 
 ipcMain.handle('select-download-dir', async () => {
@@ -413,6 +489,11 @@ function createWindow ({ show = true } = {}) {
 
 const initialCapturePath = capturePathFromCommandLine(process.argv)
 const initiallyHidden = process.argv.includes(HIDDEN_SWITCH)
+const startupWindowController = createStartupWindowController({
+  initiallyHidden,
+  createWindow,
+  showWindow: revealMainWindow,
+})
 // Pass the capture destination through Electron's single-instance payload as
 // well as the command line.  Some Linux launchers normalize/strip arguments
 // before delivering the `second-instance` event, which otherwise leaves the
@@ -437,19 +518,20 @@ if (!gotTheLock) {
     if (!commandLine.includes(HIDDEN_SWITCH)) showMainWindow()
   })
 
-  app.whenReady().then(async () => {
+  app.whenReady().then(() => {
     const iconPath = getAppIconPath()
     if (process.platform === 'darwin' && app.dock && iconPath) {
       app.dock.setIcon(iconPath)
     }
     buildMenu()
-    const backendStarted = startBackend()
-    // In packaged mode, wait until the API is actually accepting requests.
-    if (backendStarted) {
-      await waitForBackend()
-    }
+    startBackend()
+    backendReadyPromise = waitForBackendUntilReady()
     createTray()
-    createWindow({ show: !initiallyHidden })
+    startupWindowController.finishStartup()
+
+    void backendReadyPromise.then(port => {
+      if (port > 0) void refreshTrayMenu()
+    })
 
     app.on('activate', () => {
       showMainWindow()

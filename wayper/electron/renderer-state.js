@@ -241,32 +241,41 @@ function isModelReviewMode() {
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
-    // Resolve API port from main process (auto-selected free port)
-    if (window.electronAPI?.getApiPort) {
-        const port = await window.electronAPI.getApiPort();
-        if (port > 0) {
+    showLoader();
+    try {
+        // The main process keeps this request pending until the packaged backend
+        // is accepting requests. Never fall back to port 8080 in Electron: the
+        // backend deliberately chooses a fresh free port on every launch.
+        if (window.electronAPI?.getApiPort) {
+            const port = await window.electronAPI.getApiPort();
+            if (!(port > 0)) {
+                console.error('Wayper backend stopped before it became ready');
+                return;
+            }
             API_URL = `http://127.0.0.1:${port}`;
             window.WayperAPI_URL = API_URL;
         }
+        setupEventListeners();
+        setupInfiniteScroll();
+        setupBlocklistInfiniteScroll();
+
+        // Resize listener for grid layout
+        window.addEventListener('resize', debounce(() => {
+            updateGridMetrics();
+            // The review list has its own responsive grid.  Keep its visible window
+            // aligned to complete rows when the app/sidebar is resized.
+            if (typeof syncPreferenceReviewLayout === 'function') {
+                syncPreferenceReviewLayout();
+            }
+        }, 200));
+
+        // Phase 1: config and monitors are independent. The backend owns rotation startup.
+        await Promise.all([fetchConfig(), fetchMonitors()]);
+        // Phase 2: all depend on config/monitors being ready
+        await Promise.all([fetchStatus(), fetchDiskUsage(), refreshImages()]);
+    } finally {
+        hideLoader();
     }
-    setupEventListeners();
-    setupInfiniteScroll();
-    setupBlocklistInfiniteScroll();
-
-    // Resize listener for grid layout
-    window.addEventListener('resize', debounce(() => {
-        updateGridMetrics();
-        // The review list has its own responsive grid.  Keep its visible window
-        // aligned to complete rows when the app/sidebar is resized.
-        if (typeof syncPreferenceReviewLayout === 'function') {
-            syncPreferenceReviewLayout();
-        }
-    }, 200));
-
-    // Phase 1: config and monitors are independent. The backend owns rotation startup.
-    await Promise.all([fetchConfig(), fetchMonitors()]);
-    // Phase 2: all depend on config/monitors being ready
-    await Promise.all([fetchStatus(), fetchDiskUsage(), refreshImages()]);
     if (typeof scheduleModelReviewPrefetch === 'function') {
         scheduleModelReviewPrefetch();
     }

@@ -8,7 +8,7 @@
     "start": "electron .",
     "build:backend": "cd ../.. && uv run pyinstaller --clean wayper.spec",
     "dist": "npm run build:backend && ./node_modules/.bin/electron-builder",
-    "test": "node --check main.js && node --check backend-readiness.js && node --check i18n.js && node --check renderer-state.js && node --check renderer-data.js && node --check renderer-views.js && node --check renderer-lightbox.js && node tests/backend-readiness.test.js && node tests/exclusion-rules.test.js && node tests/blocklist-pager.test.js && node tests/model-review-actions.test.js && node tests/update-indicator.test.js && node tests/i18n.test.js && node tests/settings-layout.test.js"
+    "test": "node --check main.js && node --check backend-readiness.js && node --check startup-window.js && node --check i18n.js && node --check renderer-state.js && node --check renderer-data.js && node --check renderer-views.js && node --check renderer-lightbox.js && node tests/backend-readiness.test.js && node tests/startup-window.test.js && node tests/startup-integration.test.js && node tests/exclusion-rules.test.js && node tests/blocklist-pager.test.js && node tests/model-review-actions.test.js && node tests/update-indicator.test.js && node tests/i18n.test.js && node tests/settings-layout.test.js"
   },
   "build": {
     "appId": "com.wayper.app",
