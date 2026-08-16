@@ -71,15 +71,18 @@ uv pip install -e ".[browser]"  # 可选：浏览器 cookie 提取，用于 Wall
   <img src="../assets/browse.png" alt="GUI 浏览界面" width="720">
 </p>
 
-`wayper-gui` 启动独立应用，浏览、管理和控制壁纸集合。完全支持键盘操作，无需鼠标。
+`wayper-gui` 启动托盘常驻应用，用于浏览、管理和控制壁纸集合。完全支持键盘操作，无需鼠标。
 
 - **浏览与预览** — 网格浏览（缩略图缓存）、灯箱预览、Enter 设为壁纸
 - **标签搜索** — 按 Wallhaven 标签、分类或文件名搜索，支持自动补全
 - **智能建议** — 分析拉黑模式，推荐要排除的标签；共现挖掘找出跨排除个体的共同描述符；支持组合排除（如"tattoo + nude"）精细过滤
 - **AI 分析** — 基于 Codex 的深度分析，支持迭代反馈。识别上传者模式并建议 Wallhaven 用户黑名单候选。点击建议标签可预览匹配图片
-- **自适应过滤** — 可通过侧边栏常驻开关选择 `rules`、`model` 或 `rules + model`。**Review** 将模型自动拦截的下载与普通模型推荐放在两条独立卡牌轨道中；模型漏掉的已有图片可在图库中手动 Dislike
-- **设置** — 在 GUI 中配置下载目录、Wallhaven 查询、排除标签/组合、纯度和显示器。修改即时生效，无需重启 daemon
+- **偏好筛选** — 可通过侧边栏选择仅用规则、仅用偏好模型或两者结合。**待确认** 页面分别展示模型自动拦截的下载和建议检查的图库图片；模型漏掉的已有图片仍可在图库中标记为“不喜欢”
+- **后台自动换壁纸** — 关闭窗口后 Wayper 仍驻留系统托盘，可切换壁纸、暂停自动更换、重新打开窗口或完全退出
+- **设置** — 在 GUI 中配置下载目录、Wallhaven 查询、排除标签/组合、内容级别和显示器；修改会即时生效
 - **全键盘操作** — 每个操作都有快捷键：网格导航、灯箱、收藏、不喜欢、拉黑和撤销
+
+使用 `wayper-gui --hidden` 可直接启动到托盘。Hyprland 的托盘由 Waybar 等状态栏提供，请确保已启用其 `tray` 模块。
 
 **网格浏览：**
 
@@ -116,7 +119,6 @@ uv pip install -e ".[browser]"  # 可选：浏览器 cookie 提取，用于 Wall
 </p>
 
 ```
-wayper daemon               # 启动后台轮换 + 下载
 wayper next                 # 下一张壁纸（历史前进或随机新壁纸）
 wayper prev                 # 上一张壁纸（历史后退）
 wayper fav [--open]         # 收藏当前壁纸
@@ -133,7 +135,7 @@ wayper model train         # 训练轻量的本地元数据排序模型
 wayper model score --tags "tag1,tag2"  # 解释本地“不喜欢”评分
 wayper model status        # 查看已保存模型和近期验证结果
 wayper status               # 查看当前状态
-wayper-gui                  # GUI 应用（浏览、操作、daemon、设置）
+wayper-gui                  # GUI 应用 + 托盘后台自动换壁纸
 wayper setup                # 安装 .desktop（Linux）
 wayper --json status        # JSON 格式输出
 ```
@@ -169,7 +171,7 @@ bind = $mod, F11,      exec, wayper next
 bind = $mod SHIFT, F11,exec, wayper prev
 bind = $mod, F12,      exec, wayper mode
 bind = $mod SHIFT, F12,exec, wayper mode sketchy
-exec-once = wayper daemon
+exec-once = wayper-gui --hidden
 ```
 
 **AeroSpace (macOS)：**

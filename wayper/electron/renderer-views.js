@@ -46,7 +46,8 @@ function updateUI() {
     }
 }
 function updateStatusUI() {
-    const running = appState.status.running;
+    const active = !!appState.status.auto_rotation;
+    const paused = !!appState.status.rotation_paused;
 
     // Update counts
     if (appState.status.pool_count !== undefined) {
@@ -76,22 +77,22 @@ function updateStatusUI() {
             : `${heldCount} auto-held`;
     }
 
-    if (running) {
-        els.daemonDot.classList.add('running');
-        els.daemonStatus.innerText = 'Daemon Active';
-        els.daemonStatus.classList.add('daemon-active');
-        els.daemonStatus.classList.remove('daemon-stopped');
-        els.btnDaemon.innerText = 'Stop Daemon';
-        els.btnDaemon.classList.add('danger');
-        els.btnDaemon.classList.remove('primary');
+    if (active) {
+        els.rotationDot.classList.add('active');
+        els.rotationStatus.innerText = 'Auto Rotation Active';
+        els.rotationStatus.classList.add('rotation-active');
+        els.rotationStatus.classList.remove('rotation-inactive');
+        els.btnAutoRotation.innerText = 'Pause Auto Rotation';
+        els.btnAutoRotation.classList.remove('primary');
     } else {
-        els.daemonDot.classList.remove('running');
-        els.daemonStatus.innerText = 'Daemon Stopped';
-        els.daemonStatus.classList.add('daemon-stopped');
-        els.daemonStatus.classList.remove('daemon-active');
-        els.btnDaemon.innerText = 'Start Daemon';
-        els.btnDaemon.classList.remove('danger');
-        els.btnDaemon.classList.add('primary'); // Encourage starting
+        els.rotationDot.classList.remove('active');
+        els.rotationStatus.innerText = paused ? 'Auto Rotation Paused' : 'Auto Rotation Off';
+        els.rotationStatus.classList.add('rotation-inactive');
+        els.rotationStatus.classList.remove('rotation-active');
+        els.btnAutoRotation.innerText = paused
+            ? 'Resume Auto Rotation'
+            : 'Configure Auto Rotation';
+        els.btnAutoRotation.classList.add('primary');
     }
 }
 

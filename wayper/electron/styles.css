@@ -753,7 +753,7 @@ aside {
   border-top: 1px solid var(--surface0);
 }
 
-.daemon-btn {
+.rotation-btn {
   width: 100%;
   justify-content: center;
   background-color: var(--surface0);
@@ -1742,7 +1742,7 @@ footer {
   transition: background-color 0.3s var(--ease), box-shadow 0.3s var(--ease);
 }
 
-.dot.running {
+.dot.active {
   background-color: var(--green);
   box-shadow: 0 0 6px rgba(166, 227, 161, 0.5);
   animation: dot-pulse 2s ease-in-out infinite;
@@ -1753,12 +1753,12 @@ footer {
   50% { box-shadow: 0 0 10px rgba(166, 227, 161, 0.8); }
 }
 
-/* Daemon status text */
-.daemon-active {
+/* Automatic rotation status text */
+.rotation-active {
   color: var(--text);
 }
 
-.daemon-stopped {
+.rotation-inactive {
   color: var(--overlay1);
 }
 

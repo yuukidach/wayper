@@ -7,7 +7,6 @@ from pathlib import Path
 
 from .backend import query_current
 from .config import WayperConfig
-from .daemon import is_daemon_running
 from .pool import count_images, disk_usage_mb, favorites_dir, pool_dir
 from .state import read_mode
 
@@ -51,10 +50,8 @@ def status_snapshot(config: WayperConfig) -> dict[str, object]:
             }
         )
 
-    daemon_running, _ = is_daemon_running(config)
     return {
         "mode": sorted(purities),
-        "daemon": daemon_running,
         "disk_mb": round(disk_usage_mb(config), 1),
         "quota_mb": config.quota_mb,
         "monitors": monitors,

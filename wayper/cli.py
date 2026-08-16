@@ -50,79 +50,6 @@ def cli(ctx, use_json, config_path):
     ctx.obj["json"] = use_json
 
 
-@cli.group(invoke_without_command=True)
-@click.pass_context
-def daemon(ctx):
-    """Run the wallpaper daemon (download loop + rotation).
-
-    Bare 'wayper daemon' runs in foreground.
-    'wayper daemon start' runs in background.
-    'wayper daemon stop' stops the background daemon.
-    """
-    if ctx.invoked_subcommand is None:
-        config = ctx.obj["config"]
-        from .logging import setup_logging
-
-        setup_logging()
-        from .daemon import run_daemon
-
-        asyncio.run(run_daemon(config))
-
-
-@daemon.command()
-@click.pass_context
-def start(ctx):
-    """Start the daemon in the background."""
-    config = ctx.obj["config"]
-    from .daemon import is_daemon_running
-
-    running, pid = is_daemon_running(config)
-    if running:
-        click.echo(f"Daemon already running (PID {pid})")
-        return
-
-    if config.pid_file.exists():
-        try:
-            config.pid_file.unlink()
-            click.echo("Removed stale PID file.")
-        except OSError as e:
-            click.echo(f"Warning: Could not remove stale PID file: {e}", err=True)
-
-    from .daemon import start_daemon_process
-
-    start_daemon_process()
-    click.echo("Daemon started in background.")
-
-
-@daemon.command()
-@click.pass_context
-def stop(ctx):
-    """Stop the background daemon."""
-    config = ctx.obj["config"]
-    from .daemon import is_daemon_running
-
-    running, pid = is_daemon_running(config)
-    if not running:
-        click.echo("Daemon is not running")
-        return
-
-    if pid:
-        try:
-            from .daemon import request_stop
-
-            if request_stop(config):
-                click.echo(f"Stopped daemon (PID {pid})")
-            else:
-                click.echo("Could not signal daemon", err=True)
-                raise SystemExit(1)
-        except ProcessLookupError:
-            click.echo("Daemon process not found (stale PID file?)")
-            # Cleanup stale pid file?
-            # The next run will overwrite it, or is_daemon_running handles it.
-            # remove_pid_file is in daemon.py, not easily accessible here without import.
-            pass
-
-
 @cli.command("next")
 @click.pass_context
 def next_cmd(ctx):
@@ -139,7 +66,7 @@ def next_cmd(ctx):
     else:
         notify("Wallpaper", "Next wallpaper")
 
-    # Trigger download with same probability as daemon
+    # Refill the pool after a manual change using the same policy as auto rotation.
     purities = read_mode(config)
     download_map = should_download(config, purities)
     to_download = [p for p, needs in download_map.items() if needs]
@@ -340,10 +267,6 @@ def mode(ctx, new_mode):
 
     write_mode(config, result)
 
-    from .daemon import request_mode_reload
-
-    request_mode_reload(config)
-
     label = ", ".join(p for p in ALL_PURITIES if p in result)
     if ctx.obj["json"]:
         click.echo(json_mod.dumps({"action": "mode", "mode": sorted(result)}))
@@ -363,7 +286,6 @@ def status(ctx):
     else:
         mode_label = ", ".join(p for p in ALL_PURITIES if p in snapshot["mode"])
         click.echo(f"Mode: {mode_label}")
-        click.echo(f"Daemon: {'running' if snapshot['daemon'] else 'stopped'}")
         click.echo(f"Disk: {snapshot['disk_mb']:.0f} MB / {snapshot['quota_mb']} MB")
         for m in snapshot["monitors"]:
             click.echo(f"  {m['name']} ({m['orientation']}): {m['image'] or 'none'}")

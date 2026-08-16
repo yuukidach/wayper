@@ -18,7 +18,6 @@ from .core import (
     do_unban,
     do_unfav,
 )
-from .daemon import request_mode_reload
 from .lock import FileLock
 from .pool import (
     IMAGE_EXTENSIONS,
@@ -54,7 +53,7 @@ def _is_managed_wallpaper(config, path: Path) -> bool:
 
 @mcp.tool()
 def status() -> dict:
-    """Get current wallpaper status: mode, daemon state, disk usage, and per-monitor info."""
+    """Get current wallpaper status: mode, disk usage, and per-monitor info."""
     return status_snapshot(_config())
 
 
@@ -163,8 +162,6 @@ def set_mode(mode: str | None = None) -> dict:
         return {"error": f"Invalid mode: {mode}. Use 'sfw' or 'nsfw'."}
 
     write_mode(config, {mode})
-
-    request_mode_reload(config)
 
     notify("Wallpaper", f"Mode: {mode}")
     return {"action": "mode", "mode": mode}

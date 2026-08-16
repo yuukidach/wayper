@@ -49,7 +49,7 @@ let appState = {
     purity: ['sfw'], // active purities: subset of ['sfw', 'sketchy', 'nsfw']
     monitors: [],
     selectedMonitor: null, // monitor name
-    status: { running: false, pid: null },
+    status: { auto_rotation: false, rotation_paused: false },
     statusRequestId: 0, // Invalidates status responses for a previous monitor
     refreshing: false, // true while refreshImages is in-flight
     images: [],
@@ -202,7 +202,7 @@ const els = {
     btnPuritySketchy: document.getElementById('btn-purity-sketchy'),
     btnPurityNsfw: document.getElementById('btn-purity-nsfw'),
 
-    btnDaemon: document.getElementById('btn-daemon'),
+    btnAutoRotation: document.getElementById('btn-auto-rotation'),
     btnSettings: document.getElementById('btn-settings'),
     updateIndicator: document.getElementById('update-indicator'),
 
@@ -218,8 +218,8 @@ const els = {
     btnCancelSettings: document.getElementById('btn-cancel-settings'),
 
     // Footer
-    daemonDot: document.getElementById('daemon-dot'),
-    daemonStatus: document.getElementById('daemon-status'),
+    rotationDot: document.getElementById('rotation-dot'),
+    rotationStatus: document.getElementById('rotation-status'),
     diskUsage: document.getElementById('disk-usage'),
     countPool: document.getElementById('count-pool'),
     countFavorites: document.getElementById('count-favorites'),
@@ -263,8 +263,8 @@ async function init() {
         }
     }, 200));
 
-    // Phase 1: config, monitors, and daemon start are independent
-    await Promise.all([fetchConfig(), fetchMonitors(), ensureDaemon()]);
+    // Phase 1: config and monitors are independent. The backend owns rotation startup.
+    await Promise.all([fetchConfig(), fetchMonitors()]);
     // Phase 2: all depend on config/monitors being ready
     await Promise.all([fetchStatus(), fetchDiskUsage(), refreshImages()]);
     if (typeof scheduleModelReviewPrefetch === 'function') {
@@ -277,7 +277,7 @@ async function init() {
     // SSE for real-time mode changes
     connectSSE();
 
-    // Poll status (counts, daemon state)
+    // Poll counts and automatic rotation state.
     setInterval(() => {
         if (!document.hidden) fetchStatus();
     }, 10000);
@@ -303,7 +303,7 @@ function setupEventListeners() {
 
     // The filtering strategy is a first-class workflow control rather than a
     // buried setting.  It is persisted immediately so the sidebar always
-    // reflects the boundary used by the daemon.
+    // reflects the boundary used by automatic downloads.
     for (const button of [els.btnFilterRules, els.btnFilterModel, els.btnFilterBoth]) {
         if (!button) continue;
         button.onclick = () => setFilterStrategy(button.dataset.strategy);
@@ -319,8 +319,8 @@ function setupEventListeners() {
     els.btnPuritySketchy.onclick = () => toggleSinglePurity('sketchy');
     els.btnPurityNsfw.onclick = () => toggleSinglePurity('nsfw');
 
-    // Sidebar: Daemon
-    els.btnDaemon.onclick = toggleDaemon;
+    // Sidebar: automatic rotation
+    els.btnAutoRotation.onclick = toggleAutoRotation;
 
     // Sidebar: Settings
     els.btnSettings.onclick = () => switchView('settings');

@@ -55,9 +55,23 @@ def _npm_executable(platform: str | None = None) -> str:
     return "npm.cmd" if platform == "win32" else "npm"
 
 
-def _electron_command(electron_dir: Path, platform: str | None = None) -> list[str]:
+def _icon_path() -> Path | None:
+    """Find an icon that Electron can use for source and wheel launches."""
+    candidates = [
+        Path(__file__).resolve().parents[2] / "assets" / "icon-256.png",
+        Path(sys.prefix) / "share" / "icons" / "hicolor" / "256x256" / "apps" / "wayper.png",
+    ]
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
+def _electron_command(
+    electron_dir: Path,
+    platform: str | None = None,
+    arguments: list[str] | None = None,
+) -> list[str]:
     """Build a directly executable Electron command for development launches."""
     platform = platform or sys.platform
+    arguments = arguments or []
     if platform == "win32":
         # node_modules/.bin/electron is a POSIX shell script even on Windows.
         # CreateProcess cannot execute it and raises WinError 193, so use the
@@ -67,8 +81,9 @@ def _electron_command(electron_dir: Path, platform: str | None = None) -> list[s
         electron_bin = electron_dir / "node_modules" / ".bin" / "electron"
 
     if electron_bin.exists():
-        return [str(electron_bin), "."]
-    return [_npm_executable(platform), "start"]
+        return [str(electron_bin), ".", *arguments]
+    command = [_npm_executable(platform), "start"]
+    return [*command, "--", *arguments] if arguments else command
 
 
 def _wait_for_api(timeout: float = 10) -> int:
@@ -122,12 +137,14 @@ def run_app():
     print(f"Starting Electron in {electron_dir}...")
 
     # Run Electron directly where possible so cleanup tracks the actual app PID.
-    cmd = _electron_command(electron_dir)
+    cmd = _electron_command(electron_dir, arguments=sys.argv[1:])
 
     # Pass API port to Electron so preload.js can pick it up
     env = {**os.environ, "WAYPER_DEV": "1"}
     if port > 0:
         env["WAYPER_API_PORT"] = str(port)
+    if icon_path := _icon_path():
+        env["WAYPER_ICON_PATH"] = str(icon_path)
 
     # Start Electron
     proc = subprocess.Popen(

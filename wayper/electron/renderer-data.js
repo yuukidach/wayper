@@ -1014,6 +1014,7 @@ async function saveSettings() {
         await WayperApi.patchConfig(updates);
 
         await fetchConfig(); // Reload config
+        window.electronAPI?.refreshTrayMenu?.();
         invalidateBlocklistSuggestions();
         switchView('grid');
         await Promise.all([fetchStatus(), fetchDiskUsage(), refreshImages()]);
@@ -1125,33 +1126,31 @@ async function setPurities(purities) {
     fetchStatus();
 }
 
-async function ensureDaemon() {
+async function toggleAutoRotation() {
+    const active = !!appState.status.auto_rotation;
+    const paused = !!appState.status.rotation_paused;
+    if (!active && !paused) {
+        switchView('settings');
+        document.getElementById('input-interval')?.focus();
+        return;
+    }
+
+    const action = paused ? 'resume' : 'pause';
+    els.btnAutoRotation.innerText = action === 'resume' ? 'Resuming...' : 'Pausing...';
+    els.btnAutoRotation.disabled = true;
+
     try {
-        await fetch(`${API_URL}/api/daemon/start`, { method: 'POST' });
+        const response = await fetch(`${API_URL}/api/rotation/${action}`, { method: 'POST' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const state = await response.json();
+        appState.status.auto_rotation = !!state.auto_rotation;
+        appState.status.rotation_paused = !!state.rotation_paused;
+        window.electronAPI?.refreshTrayMenu?.();
     } catch (e) {
-        console.error("Auto-start daemon failed", e);
+        console.error("Auto rotation toggle failed", e);
     }
-}
-
-async function toggleDaemon() {
-    const action = appState.status.running ? 'stop' : 'start';
-    els.btnDaemon.innerText = action === 'start' ? 'Starting...' : 'Stopping...';
-    els.btnDaemon.disabled = true;
-
-    try {
-        await fetch(`${API_URL}/api/daemon/${action}`, { method: 'POST' });
-    } catch (e) {
-        console.error("Daemon toggle failed", e);
-    }
-
-    // Poll until state changes or timeout (5s)
-    const wantRunning = action === 'start';
-    for (let i = 0; i < 5; i++) {
-        await new Promise(r => setTimeout(r, 1000));
-        await fetchStatus();
-        if (appState.status.running === wantRunning) break;
-    }
-    els.btnDaemon.disabled = false;
+    els.btnAutoRotation.disabled = false;
+    await fetchStatus();
     updateStatusUI();
 }
 
@@ -2019,7 +2018,8 @@ async function fetchStatus() {
         // Only update DOM if data actually changed
         const prev = appState.status;
         const changed = !prev
-            || data.running !== prev.running
+            || data.auto_rotation !== prev.auto_rotation
+            || data.rotation_paused !== prev.rotation_paused
             || data.pool_count !== prev.pool_count
             || data.favorites_count !== prev.favorites_count
             || data.blocklist_count !== prev.blocklist_count
@@ -2049,9 +2049,9 @@ async function fetchStatus() {
         if (
             requestId === appState.statusRequestId
             && requestedMonitor === (appState.selectedMonitor || null)
-            && appState.status.running !== false
+            && (appState.status.auto_rotation !== false || appState.status.rotation_paused)
         ) {
-            appState.status = { running: false };
+            appState.status = { auto_rotation: false, rotation_paused: false };
             updateStatusUI();
         }
     }

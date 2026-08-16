@@ -31,7 +31,8 @@ async function testStatusRequestsStayScopedToSelectedMonitor() {
             mode: 'pool',
             refreshing: true,
             status: {
-                running: true,
+                auto_rotation: true,
+                rotation_paused: false,
                 pool_count: 0,
                 favorites_count: 0,
                 blocklist_count: 0,
@@ -66,7 +67,8 @@ async function testStatusRequestsStayScopedToSelectedMonitor() {
     current.resolve({
         ok: true,
         json: async () => ({
-            running: true,
+            auto_rotation: true,
+            rotation_paused: false,
             monitor: 'DP-2',
             orientation: 'portrait',
             pool_count: 20,
@@ -81,7 +83,8 @@ async function testStatusRequestsStayScopedToSelectedMonitor() {
     old.resolve({
         ok: true,
         json: async () => ({
-            running: true,
+            auto_rotation: true,
+            rotation_paused: false,
             monitor: 'DP-1',
             orientation: 'landscape',
             pool_count: 10,
@@ -636,7 +639,7 @@ function testGridNavigationBridgesModelReview() {
         'btn-purity-sfw', 'btn-purity-sketchy', 'btn-purity-nsfw',
         'monitors-list', 'search-input', 'search-dropdown', 'search-clear',
         'settings-view', 'btn-save-settings', 'btn-cancel-settings',
-        'daemon-dot', 'daemon-status', 'disk-usage', 'count-pool',
+        'rotation-dot', 'rotation-status', 'disk-usage', 'count-pool',
         'count-favorites', 'count-blocklist', 'search-count',
     ];
     ids.forEach(makeElement);
@@ -1638,7 +1641,8 @@ async function testBlocklistMonitorSwitchKeepsSharedViewMounted() {
             return {
                 ok: true,
                 json: async () => ({
-                    running: false,
+                    auto_rotation: false,
+                    rotation_paused: false,
                     monitor: 'DP-2',
                     orientation: 'portrait',
                     mode: ['sfw'],

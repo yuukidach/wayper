@@ -209,10 +209,6 @@ class WayperConfig:
         """Atomic index for pending and resolved model-review items."""
         return self.download_dir / ".model-review.json"
 
-    @property
-    def pid_file(self) -> Path:
-        return CONFIG_DIR / "wayper.pid"
-
 
 def compact_home(path: Path | str) -> str:
     """Replace home dir prefix with ~ for display/serialization."""

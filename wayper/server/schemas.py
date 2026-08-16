@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field
 
 
 class StatusResponse(BaseModel):
-    running: bool
-    pid: int | None = None
+    auto_rotation: bool
+    rotation_paused: bool = False
     # Scope echoed by the backend so clients can reject a late response after
     # the selected monitor changes.  These fields are optional for old API
     # callers that do not request a monitor-scoped status.

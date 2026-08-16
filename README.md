@@ -71,15 +71,18 @@ uv pip install -e ".[browser]"  # optional: browser cookie extraction for Wallha
   <img src="assets/browse.png" alt="GUI browse view" width="720">
 </p>
 
-`wayper-gui` launches a standalone app for browsing, managing, and controlling your wallpaper collection. Fully operable without a mouse.
+`wayper-gui` launches a tray-resident app for browsing, managing, and controlling your wallpaper collection. Fully operable without a mouse.
 
 - **Browse & preview** — grid view with thumbnail caching, lightbox preview, set wallpaper with Enter
 - **Tag search** — search by Wallhaven tags, category, or filename with autocomplete
 - **Smart suggestions** — analyzes ban patterns to recommend tags to exclude; co-occurrence mining finds common descriptors across excluded individuals; drill into combo exclusions (e.g., "tattoo + nude") for precise filtering
 - **AI analysis** — Codex-powered deep analysis of ban patterns with iterative feedback. Identifies uploader patterns and suggests Wallhaven user blacklist candidates. Click suggested tags to preview matching images
 - **Adaptive filtering** — choose `rules`, `model`, or `rules + model` from the always-visible sidebar control. **Review** keeps automatically held downloads and ordinary model recommendations in separate card lanes; manually Dislike any existing pool image the model missed
-- **Settings** — configure the download folder, Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI. Changes apply to the running daemon instantly
+- **Background rotation** — closing the window keeps Wayper in the system tray, where you can change wallpaper, pause rotation, reopen the window, or quit
+- **Settings** — configure the download folder, Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI. Changes apply to automatic rotation instantly
 - **Keyboard-driven** — every action has a shortcut: grid navigation, lightbox, favorites, Dislike, Ban, and undo
+
+Use `wayper-gui --hidden` to start directly in the tray. On Hyprland, the tray is supplied by a status bar such as Waybar; make sure its `tray` module is enabled.
 
 **Grid view:**
 
@@ -116,7 +119,6 @@ uv pip install -e ".[browser]"  # optional: browser cookie extraction for Wallha
 </p>
 
 ```
-wayper daemon               # start background rotation + downloads
 wayper next                 # next wallpaper (forward history or new random)
 wayper prev                 # previous wallpaper from history
 wayper fav [--open]         # favorite current wallpaper
@@ -133,7 +135,7 @@ wayper model train         # train the lightweight local metadata ranking model
 wayper model score --tags "tag1,tag2"  # explain a local dislike score
 wayper model status        # inspect the saved model and recent validation
 wayper status               # show current state
-wayper-gui                  # GUI app (browse, actions, daemon, settings)
+wayper-gui                  # GUI app + tray background rotation
 wayper setup                # install .desktop entry (Linux)
 wayper --json status        # machine-readable output
 ```
@@ -176,7 +178,7 @@ bind = $mod, F11,      exec, wayper next
 bind = $mod SHIFT, F11,exec, wayper prev
 bind = $mod, F12,      exec, wayper mode
 bind = $mod SHIFT, F12,exec, wayper mode sketchy
-exec-once = wayper daemon
+exec-once = wayper-gui --hidden
 ```
 
 **AeroSpace (macOS):**

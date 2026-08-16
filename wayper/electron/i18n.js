@@ -20,66 +20,68 @@
         'Next Wallpaper': '下一张壁纸',
         'Locate Current Wallpaper': '定位当前壁纸',
         'Undo Last Ban or Dislike': '撤销上次屏蔽或不喜欢',
-        Library: '图库',
-        Pool: '图片池',
+        Library: '我的壁纸',
+        Pool: '图库',
         Favorites: '收藏',
-        Filtering: '筛选',
-        'Filtering workflows': '筛选工作流',
-        Review: '审核',
-        'Review queue': '审核队列',
-        Blocklist: '屏蔽列表',
-        'Blocklist and tag rules': '屏蔽列表和标签规则',
-        'Automatic filtering': '自动筛选',
-        'Automatic filter strategy': '自动筛选策略',
-        'Model decisions only': '仅使用模型决策',
-        'Rules first, then model': '先执行规则，再执行模型',
-        'Rule exclusions only': '仅排除规则',
-        'Rules only': '仅规则',
-        'Model only': '仅模型',
-        'Rules and model': '规则和模型',
+        Filtering: '筛选管理',
+        'Filtering workflows': '筛选与确认',
+        Review: '待确认',
+        'Review queue': '待确认图片',
+        Blocklist: '已屏蔽',
+        'Blocklist and tag rules': '已屏蔽图片与排除规则',
+        'Automatic filtering': '下载筛选方式',
+        'Automatic filter strategy': '选择下载筛选方式',
+        'Model decisions only': '仅按偏好模型判断',
+        'Rules first, then model': '先应用排除规则，再由偏好模型判断',
+        'Rule exclusions only': '仅应用排除规则',
+        'Rules only': '仅使用规则',
+        'Model only': '仅使用偏好模型',
+        'Rules and model': '同时使用规则和偏好模型',
         Rules: '规则',
         Model: '模型',
-        Both: '规则 + 模型',
+        Both: '两者',
         Monitors: '显示器',
-        Purity: '内容分级',
-        Sketchy: '可疑',
-        'Start Daemon': '启动守护进程',
-        'Stop Daemon': '停止守护进程',
-        'Starting...': '正在启动…',
-        'Stopping...': '正在停止…',
-        'Checking daemon...': '正在检查守护进程…',
-        'Daemon Active': '守护进程运行中',
-        'Daemon Stopped': '守护进程已停止',
-        Active: '运行中',
-        Empty: '空',
-        'In Trash': '在回收站',
+        Purity: '内容级别',
+        Sketchy: '轻度敏感',
+        'Pause Auto Rotation': '暂停自动换壁纸',
+        'Resume Auto Rotation': '继续自动换壁纸',
+        'Configure Auto Rotation': '设置自动换壁纸',
+        'Pausing...': '正在暂停…',
+        'Resuming...': '正在恢复…',
+        'Checking auto rotation...': '正在读取自动换壁纸状态…',
+        'Auto Rotation Active': '自动换壁纸已开启',
+        'Auto Rotation Paused': '自动换壁纸已暂停',
+        'Auto Rotation Off': '自动换壁纸已关闭',
+        Active: '正在使用',
+        Empty: '未设置',
+        'In Trash': '可从回收站恢复',
         Deleted: '已删除',
-        Unblock: '取消屏蔽',
+        Unblock: '解除屏蔽',
         'Loading wallpapers...': '正在加载壁纸…',
         'Wayper update available': 'Wayper 有可用更新',
         Settings: '设置',
-        'Configure Wayper behavior and sources': '配置 Wayper 的行为和来源',
-        General: '常规',
+        'Configure Wayper behavior and sources': '设置自动换壁纸、下载来源和存储方式',
+        General: '基本设置',
         Language: '语言',
         'System default': '跟随系统',
         English: '英语',
         'Simplified Chinese': '简体中文',
         'Use the system language unless you choose an override': '除非手动指定，否则使用系统语言',
-        'Interval (minutes)': '间隔（分钟）',
-        'Disk Quota (MB)': '磁盘配额（MB）',
-        'Download Folder': '下载文件夹',
+        'Interval (minutes)': '自动更换间隔（分钟）',
+        'Disk Quota (MB)': '存储上限（MB）',
+        'Download Folder': '壁纸文件夹',
         'Choose Folder': '选择文件夹',
-        'New downloads and library views use this folder': '新下载和图库视图使用此文件夹',
+        'New downloads and library views use this folder': '新下载的壁纸和图库都使用此文件夹',
         Proxy: '代理',
-        'Leave empty for direct connection': '留空以直接连接',
-        'Pause on Lock': '锁屏时暂停',
-        'Pause wallpaper rotation when screen is locked': '锁屏时暂停壁纸轮换',
-        'Safe Mode': '安全模式',
-        'Lock purity to SFW only': '仅允许 SFW 内容',
-        'Blacklist Expiry (days)': '屏蔽过期时间（天）',
+        'Leave empty for direct connection': '不填写则直接连接',
+        'Pause on Lock': '锁屏时暂停换壁纸',
+        'Pause wallpaper rotation when screen is locked': '屏幕锁定期间不自动更换壁纸',
+        'Safe Mode': '仅安全内容',
+        'Lock purity to SFW only': '开启后只显示 SFW 壁纸',
+        'Blacklist Expiry (days)': '屏蔽记录保留（天）',
         'Never expire': '永不过期',
-        'How long disliked images stay blacklisted': '不喜欢的图片在屏蔽列表中保留多久',
-        'Wallhaven Source': 'Wallhaven 来源',
+        'How long disliked images stay blacklisted': '“不喜欢”的壁纸在屏蔽记录中保留多久',
+        'Wallhaven Source': 'Wallhaven 下载设置',
         'API Key': 'API 密钥',
         'Your Wallhaven API key': '你的 Wallhaven API 密钥',
         'Required for NSFW —': 'NSFW 需要密钥 —',
@@ -87,8 +89,8 @@
         'Wallhaven Username': 'Wallhaven 用户名',
         Username: '用户名',
         'Wallhaven Password': 'Wallhaven 密码',
-        'For favorite sync; optional with browser cookies': '用于同步收藏；使用浏览器 Cookie 时可选',
-        'Categories (General/Anime/People)': '分类（普通/动漫/人物）',
+        'For favorite sync; optional with browser cookies': '用于同步收藏；也可以改用浏览器 Cookie 登录',
+        'Categories (General/Anime/People)': '分类（常规 / 动漫 / 人物）',
         '111 = All, 010 = Anime only': '111 = 全部，010 = 仅动漫',
         'Top Range': '热门时间范围',
         'Last Day': '最近一天',
@@ -103,30 +105,30 @@
         Hot: '热门',
         Random: '随机',
         Views: '浏览量',
-        'AI Art Filter': 'AI 艺术筛选',
-        'Allow AI': '允许 AI',
-        'Block AI': '屏蔽 AI',
-        'Download Batch Size': '下载批量大小',
-        'Maximum wallpapers to download per mode and orientation': '每种模式和方向最多下载的壁纸数量',
-        'Minimum Favorites': '最低收藏数',
-        'Skip Wallhaven downloads below this favorite count': '跳过收藏数低于此值的 Wallhaven 图片',
+        'AI Art Filter': 'AI 生成图片',
+        'Allow AI': '允许 AI 生成图片',
+        'Block AI': '排除 AI 生成图片',
+        'Download Batch Size': '每批下载数量',
+        'Maximum wallpapers to download per mode and orientation': '每种内容级别和屏幕方向单次最多下载多少张',
+        'Minimum Favorites': 'Wallhaven 最低收藏数',
+        'Skip Wallhaven downloads below this favorite count': '不下载 Wallhaven 收藏数低于此值的图片',
         'Exclusion Rules': '排除规则',
         'Exclude Tags': '排除标签',
         'Tag name...': '标签名称…',
         Add: '添加',
         'Tags to exclude from Wallhaven downloads': '从 Wallhaven 下载中排除的标签',
-        'Exclude Combos': '排除组合',
-        'Tag combinations — image excluded when ALL tags match': '标签组合——全部标签匹配时排除图片',
+        'Exclude Combos': '组合规则',
+        'Tag combinations — image excluded when ALL tags match': '图片同时包含组合内所有标签时跳过下载',
         'Exclude Uploaders': '排除上传者',
         'Username...': '用户名…',
-        'Uploaders to exclude — synced to Wallhaven user blacklist': '要排除的上传者——同步到 Wallhaven 用户黑名单',
+        'Uploaders to exclude — synced to Wallhaven user blacklist': '跳过这些上传者，并同步到 Wallhaven 用户黑名单',
         Cancel: '取消',
         'Save Changes': '保存更改',
         'Saving...': '正在保存…',
         'Disk usage': '磁盘使用量',
         'Banned / kept / favorites': '屏蔽 / 保留 / 收藏',
-        'Suggested exclusions': '建议排除项',
-        'Click a signal to review matching wallpapers': '点击信号查看匹配的壁纸',
+        'Suggested exclusions': '排除建议',
+        'Click a signal to review matching wallpapers': '点击一项依据，查看匹配的壁纸',
         Tags: '标签',
         Combos: '组合',
         tag: '标签',
@@ -140,9 +142,9 @@
         Removed: '已移除',
         'Suggested Additions': '建议添加',
         'Suggested Removals': '建议移除',
-        'Cannot read images from Trash — grant': '无法读取回收站中的图片——请在系统设置中为终端授予',
+        'Cannot read images from Trash — grant': '无法读取回收站中的图片——请为终端开启',
         'Full Disk Access': '完全磁盘访问权限',
-        'to your terminal in System Settings > Privacy & Security.': '到终端（系统设置 > 隐私与安全性）。',
+        'to your terminal in System Settings > Privacy & Security.': '（系统设置 > 隐私与安全性）。',
         'Open System Settings': '打开系统设置',
         'Open Settings': '打开设置',
         Analyzing: '分析中',
@@ -158,68 +160,68 @@
         'Open on Wallhaven (O)': '在 Wallhaven 打开（O）',
         'Set Wallpaper (Enter)': '设置为壁纸（Enter）',
         'Favorite (F)': '收藏（F）',
-        'Dislike and teach the model (D)': '不喜欢并教会模型（D）',
-        'Ban this exact image only (X)': '仅屏蔽这张图片（X）',
-        'Restore to Pool': '恢复到图片池',
+        'Dislike and teach the model (D)': '标记为“不喜欢”并让模型学习（D）',
+        'Ban this exact image only (X)': '只屏蔽这张图，不用于训练模型（X）',
+        'Restore to Pool': '移回图库',
         'Close (Esc)': '关闭（Esc）',
         'Previous card (Left arrow)': '上一张卡片（左方向键）',
-        'Previous review card': '上一张审核卡片',
+        'Previous review card': '上一张待确认图片',
         'Next card (Right arrow)': '下一张卡片（右方向键）',
-        'Review preview; use left and right arrows to switch candidates': '审核预览；使用左右方向键切换候选项',
+        'Review preview; use left and right arrows to switch candidates': '待确认图片预览；使用左右方向键切换',
         'Wallpaper preview': '壁纸预览',
         'Previous image': '上一张图片',
         'Next image': '下一张图片',
-        'All Blocked': '全部已屏蔽',
+        'All Blocked': '全部屏蔽记录',
         Recoverable: '可恢复',
         Back: '返回',
-        'Refine with': '进一步筛选',
+        'Refine with': '继续添加条件',
         Exclude: '排除',
-        'Exclude combo': '排除组合',
-        'in pool': '在图片池中',
-        candidate: '候选项',
-        candidates: '候选项',
-        'Ranked candidate': '已排序候选项',
-        'Auto-held': '自动暂存',
-        Recommended: '推荐',
-        Counter: '相反证据',
-        'Similar to Dislike': '类似不喜欢样本',
+        'Exclude combo': '添加组合规则',
+        'in pool': '在图库中',
+        candidate: '候选图片',
+        candidates: '候选图片',
+        'Ranked candidate': '模型候选图片',
+        'Auto-held': '已自动拦截',
+        Recommended: '建议检查',
+        Counter: '保留依据',
+        'Similar to Dislike': '与“不喜欢”相似',
         'No individual feature explanation available': '暂无单独的特征说明',
-        'Model review': '模型审核',
-        'Review source': '审核来源',
-        'Model review card deck': '模型审核卡片堆',
-        'Automatically held model review cards': '自动暂存的模型审核卡片',
-        'Model recommendation cards': '模型推荐卡片',
-        'Ranked by local tag/context evidence · Tab/Arrows · Enter/Space · A/D': '按本地标签/上下文证据排序 · Tab/方向键 · Enter/空格 · A/D',
-        'Automatically held by the model · inspect, Keep or Dislike · Enter/Space · A/D': '模型自动暂存 · 查看并选择保留或不喜欢 · Enter/空格 · A/D',
-        'There are no model recommendations waiting. Rules continue to filter new downloads.': '没有等待处理的模型推荐。规则仍会筛选新下载。',
-        'There are no auto-held images or recommendations waiting for this monitor.': '此显示器没有自动暂存图片或待处理推荐。',
-        'No automatically filtered images are waiting for review.': '没有等待审核的自动筛选图片。',
-        'Automatic model filtering is off. Choose Model or Rules + model in Settings.': '自动模型筛选已关闭，请在设置中选择“模型”或“规则 + 模型”。',
-        'Train a local preference model to start reviewing candidates.': '训练本地偏好模型后即可开始审核候选项。',
-        'Updating the local ranking model; review will appear shortly.': '正在更新本地排序模型，审核项即将出现。',
-        'No learned dislike-evidence candidates for this monitor and purity.': '此显示器和内容分级下没有基于不喜欢证据的候选项。',
-        'Recommended is ready; Auto-held will activate after the next calibration refresh.': '推荐已就绪；自动暂存将在下一次校准刷新后启用。',
-        'Keep or Dislike a few wallpapers to build enough preference feedback.': '保留或标记几张壁纸为不喜欢，以积累足够的偏好反馈。',
-        'Wayper could not update the review queue. Your wallpapers are unchanged.': 'Wayper 无法更新审核队列，壁纸未发生变化。',
+        'Model review': '确认模型筛选结果',
+        'Review source': '候选来源',
+        'Model review card deck': '待确认图片',
+        'Automatically held model review cards': '模型自动拦截的图片',
+        'Model recommendation cards': '建议检查的图库图片',
+        'Ranked by local tag/context evidence · Tab/Arrows · Enter/Space · A/D': '根据本地标签和使用情境排序 · Tab/方向键 · Enter/空格 · A/D',
+        'Automatically held by the model · inspect, Keep or Dislike · Enter/Space · A/D': '已被模型自动拦截 · 确认保留或标记为不喜欢 · Enter/空格 · A/D',
+        'There are no model recommendations waiting. Rules continue to filter new downloads.': '暂无建议检查的图片；排除规则仍会继续筛选新下载。',
+        'There are no auto-held images or recommendations waiting for this monitor.': '当前显示器没有自动拦截或建议检查的图片。',
+        'No automatically filtered images are waiting for review.': '没有需要确认的自动筛选图片。',
+        'Automatic model filtering is off. Choose Model or Rules + model in Settings.': '偏好模型筛选未开启，请在设置中选择“模型”或“两者”。',
+        'Train a local preference model to start reviewing candidates.': '训练本地偏好模型后，Wayper 才能找出需要确认的图片。',
+        'Updating the local ranking model; review will appear shortly.': '正在更新本地偏好模型，稍后会显示待确认图片。',
+        'No learned dislike-evidence candidates for this monitor and purity.': '当前显示器和内容级别下，没有与“不喜欢”反馈相似的图片。',
+        'Recommended is ready; Auto-held will activate after the next calibration refresh.': '已可查看“建议检查”；“自动拦截”会在下次模型校准后启用。',
+        'Keep or Dislike a few wallpapers to build enough preference feedback.': '请对几张壁纸选择“保留”或“不喜欢”，帮助模型了解你的偏好。',
+        'Wayper could not update the review queue. Your wallpapers are unchanged.': 'Wayper 无法刷新待确认图片；现有壁纸没有变化。',
         'Open full preview (Enter / Space)': '打开完整预览（Enter / 空格）',
         'Open full preview (Enter/Space)': '打开完整预览（Enter/空格）',
         'Remove': '移除',
         'Click to preview matching images': '点击预览匹配的图片',
-        'Next review card': '下一张审核卡片',
-        'Needs attention': '需要注意',
-        'Review is temporarily unavailable': '审核暂时不可用',
+        'Next review card': '下一张待确认图片',
+        'Needs attention': '需要处理',
+        'Review is temporarily unavailable': '暂时无法加载待确认内容',
         'Try again': '重试',
         'Getting ready': '准备中',
-        'The model is still learning': '模型仍在学习',
-        'Browse Pool': '浏览图片池',
-        'Queue clear': '队列已清空',
-        'You’re all caught up': '已全部处理完毕',
-        'Back to Pool': '返回图片池',
+        'The model is still learning': '模型还在了解你的偏好',
+        'Browse Pool': '浏览图库',
+        'Queue clear': '暂无待确认内容',
+        'You’re all caught up': '都确认完了',
+        'Back to Pool': '返回图库',
         'No wallpapers in': '没有壁纸：',
         'No matches for': '没有匹配项：',
         'No recoverable images in trash': '回收站中没有可恢复的图片',
         'No blocked images': '没有已屏蔽的图片',
-        'No model recommendations waiting': '没有等待处理的模型推荐',
+        'No model recommendations waiting': '没有建议检查的图片',
     };
 
     const EN = Object.fromEntries(Object.keys(ZH).map(key => [key, key]));
@@ -292,23 +294,26 @@
         match = source.match(/^No wallpapers in (.+)$/);
         if (match) {
             const context = match[1]
-                .replace(/\bpool\b/gi, '图片池')
+                .replace(/\bpool\b/gi, '图库')
                 .replace(/\bfavorites\b/gi, '收藏')
                 .replace(/\btrash\b/gi, '回收站')
                 .replace(/\bsfw\b/gi, 'SFW')
-                .replace(/\bsketchy\b/gi, '可疑')
+                .replace(/\bsketchy\b/gi, '轻度敏感')
                 .replace(/\bnsfw\b/gi, 'NSFW');
-            return `没有壁纸：${context}`;
+            const [location, purity] = context.split(/\s*\/\s*/, 2);
+            if (purity === '轻度敏感') return `${location}中没有轻度敏感内容的壁纸`;
+            if (purity) return `${location}中没有 ${purity} 壁纸`;
+            return `${location}中没有壁纸`;
         }
         match = source.match(/^(landscape|portrait) · (Active|Empty)$/i);
         if (match) {
             const orientation = match[1].toLowerCase() === 'portrait' ? '竖屏' : '横屏';
-            return `${orientation} · ${match[2].toLowerCase() === 'active' ? '运行中' : '空'}`;
+            return `${orientation} · ${match[2].toLowerCase() === 'active' ? '正在使用' : '未设置'}`;
         }
         match = source.match(/^(.+), (landscape|portrait), (active wallpaper|empty)$/i);
         if (match) {
             const orientation = match[2].toLowerCase() === 'portrait' ? '竖屏' : '横屏';
-            const state = match[3].toLowerCase() === 'empty' ? '空' : '当前壁纸';
+            const state = match[3].toLowerCase() === 'empty' ? '未设置' : '正在使用';
             return `${match[1]}，${orientation}，${state}`;
         }
         match = source.match(/^(\d+) (tag|combo|uploader)s?$/i);
@@ -317,31 +322,31 @@
             return `${match[1]} 个${kind}`;
         }
         match = source.match(/^(\d+) candidate(s?)$/);
-        if (match) return `${match[1]} 个候选项`;
+        if (match) return `${match[1]} 张候选图片`;
         match = source.match(/^(\d+) (?:auto-held|recommended)$/);
         if (match) return source.endsWith('recommended')
-            ? `${match[1]} 个推荐`
-            : `${match[1]} 个自动暂存`;
+            ? `${match[1]} 张建议检查`
+            : `${match[1]} 张已自动拦截`;
         match = source.match(/^(\d+) banned$/);
-        if (match) return `${match[1]} 个已屏蔽`;
+        if (match) return `${match[1]} 张已屏蔽`;
         match = source.match(/^(\d+) in pool$/);
-        if (match) return `${match[1]} 个在图片池中`;
+        if (match) return `${match[1]} 张在图库中`;
         match = source.match(/^Analyzing (\d+)s$/);
         if (match) return `分析中 ${match[1]} 秒`;
         match = source.match(/^(.+) feedback pending$/);
-        if (match) return `${match[1]} 条反馈待处理`;
+        if (match) return `${match[1]} 条反馈等待模型更新`;
         match = source.match(/^No learned dislike-evidence candidates; strongest review score (.+)$/);
-        if (match) return `没有基于不喜欢证据的候选项；最强审核分数 ${match[1]}`;
+        if (match) return `没有与“不喜欢”反馈相似的图片；最高待确认分数为 ${match[1]}`;
         match = source.match(/^model update pending$/i);
-        if (match) return '模型更新待处理';
+        if (match) return '等待更新模型';
         match = source.match(/^model refresh due$/i);
-        if (match) return '模型需要刷新';
+        if (match) return '模型需要更新';
         match = source.match(/^(.+) · boundary (.+)$/);
-        if (match) return `${match[1]} · 边界 ${match[2]}`;
+        if (match) return `${match[1]} · 判定阈值 ${match[2]}`;
         match = source.match(/^Similar to Dislike: (.+)$/);
-        if (match) return `类似不喜欢样本：${match[1]}`;
+        if (match) return `与“不喜欢”相似：${match[1]}`;
         match = source.match(/^Nearest explicit Dislike \((.+) similarity\)$/);
-        if (match) return `最近的不喜欢样本（相似度 ${match[1]}）`;
+        if (match) return `最接近的“不喜欢”反馈（相似度 ${match[1]}）`;
         match = source.match(/^Preview (.+) \((Enter\/?Space)\)$/);
         if (match) return `预览 ${match[1]}（${match[2].replace('/', ' / ')}）`;
         match = source.match(/^Preview (.+) full image$/);
@@ -349,13 +354,13 @@
         match = source.match(/^Keep (.+) \(A\)$/);
         if (match) return `保留 ${match[1]}（A）`;
         match = source.match(/^Dislike (.+) and teach the model \(D\)$/);
-        if (match) return `标记 ${match[1]} 为不喜欢并教会模型（D）`;
+        if (match) return `将 ${match[1]} 标记为“不喜欢”并让模型学习（D）`;
         match = source.match(/^Dislike (.+) \(D\)$/);
         if (match) return `标记 ${match[1]} 为不喜欢（D）`;
         match = source.match(/^Open full preview of (.+)$/);
         if (match) return `打开 ${match[1]} 的完整预览`;
         match = source.match(/^Review "([^"]+)" in blocklist/);
-        if (match) return `在屏蔽列表中查看“${match[1]}”`;
+        if (match) return `在已屏蔽图片中查看“${match[1]}”`;
         match = source.match(/^Review combo "([^"]+)"/);
         if (match) return `查看组合“${match[1]}”`;
         match = source.match(/^Remove "([^"]+)" from combo$/);
@@ -363,11 +368,11 @@
         match = source.match(/^Add "([^"]+)" to combo/);
         if (match) return `将“${match[1]}”加入组合`;
         match = source.match(/^(.+) · (\d+(?:\.\d+)?)% pool$/);
-        if (match) return `${match[1]} · 图片池的 ${match[2]}%`;
+        if (match) return `${match[1]} · 占图库 ${match[2]}%`;
         match = source.match(/^#(\d+) · (\d+(?:\.\d+)?)% pool$/);
-        if (match) return `第 ${match[1]} 名 · 图片池的 ${match[2]}%`;
+        if (match) return `第 ${match[1]} 名 · 占图库 ${match[2]}%`;
         match = source.match(/^Could not change automatic filter: (.+)$/);
-        if (match) return `无法更改自动筛选：${match[1]}`;
+        if (match) return `无法更改下载筛选方式：${match[1]}`;
         match = source.match(/^Failed to save settings: (.+)$/);
         if (match) return `保存设置失败：${match[1]}`;
         match = source.match(/^Connection error: (.+)$/);

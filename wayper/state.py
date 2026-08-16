@@ -91,7 +91,7 @@ def read_last_wallpaper_change(config: WayperConfig) -> float | None:
 
 
 def record_wallpaper_change(config: WayperConfig, when: float | None = None) -> None:
-    """Record the timestamp used to schedule the next daemon rotation."""
+    """Record the timestamp used to schedule the next automatic rotation."""
     config.download_dir.mkdir(parents=True, exist_ok=True)
     atomic_write(
         config.download_dir / ".last_rotation", str(when if when is not None else time.time())

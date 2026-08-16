@@ -4,6 +4,7 @@ import asyncio
 import json as json_mod
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException
@@ -30,13 +31,6 @@ from wayper.core import (
     do_unban,
     do_unfav,
 )
-from wayper.daemon import (
-    is_daemon_running,
-    request_config_reload,
-    request_mode_reload,
-    request_stop,
-    start_daemon_process,
-)
 from wayper.lock import FileLock
 from wayper.pool import (
     ensure_directories,
@@ -47,6 +41,7 @@ from wayper.pool import (
     pool_dir,
     remove_from_blacklist,
 )
+from wayper.rotation import AutoRotationService
 from wayper.server.config_service import apply_config_updates, config_payload
 from wayper.server.schemas import (
     ActionRequest,
@@ -125,7 +120,7 @@ __all__ = [
     "model_review_route",
     "model_review_action_route",
     "model_review_feedback_route",
-    "daemon_action",
+    "rotation_action",
     "search_images",
     "tag_suggestions",
     "uploader_suggestions",
@@ -143,7 +138,19 @@ __all__ = [
     "run",
 ]
 
-app = FastAPI()
+rotation_service = AutoRotationService()
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    await rotation_service.start()
+    try:
+        yield
+    finally:
+        await rotation_service.stop()
+
+
+app = FastAPI(lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -647,7 +654,7 @@ def update_config_route(updates: dict = Body(...)):
             raise HTTPException(400, f"Cannot create download directory: {e}") from e
 
     save_config(config)
-    request_config_reload(config)
+    rotation_service.request_reload()
     global _cached_config, _cached_mtime
     _cached_config = config
     _cached_mtime = 0  # force reload on next get_config if file changes again
@@ -698,7 +705,7 @@ def set_mode_route(req: SetModeRequest):
         if img_path and purity_from_path(config, img_path) not in purities:
             do_next(config, monitor_name)
 
-    request_mode_reload(config)
+    rotation_service.wake()
 
     return {"status": "ok", "purities": sorted(purities)}
 
@@ -830,7 +837,7 @@ def get_status(
     monitor: str = "",
 ):
     config = get_config()
-    running, pid = is_daemon_running(config)
+    rotation = rotation_service.snapshot(config)
     purities = read_mode(config)
 
     # A monitor is the most precise scope available to the GUI.  Images are
@@ -875,8 +882,8 @@ def get_status(
         review_status = {"pending_count": 0, "ready": False}
 
     return StatusResponse(
-        running=running,
-        pid=pid,
+        auto_rotation=rotation["auto_rotation"],
+        rotation_paused=rotation["rotation_paused"],
         monitor=selected_monitor.name if selected_monitor else None,
         orientation=selected_orientation,
         pool_count=pool_c,
@@ -1321,26 +1328,17 @@ def model_review_feedback_route(req: ModelReviewActionRequest):
     return _resolve_model_review_action(req)
 
 
-@app.post("/api/daemon/{action}")
-def daemon_action(action: str):
-    if action not in ["start", "stop"]:
+@app.post("/api/rotation/{action}")
+def rotation_action(action: str):
+    if action not in {"pause", "resume"}:
         raise HTTPException(status_code=400, detail="Invalid action")
 
     config = get_config()
-
-    if action == "start":
-        running, _ = is_daemon_running(config)
-        if running:
-            return {"status": "already_running"}
-        start_daemon_process()
-        return {"status": "ok"}
-
-    # stop
-    running, pid = is_daemon_running(config)
-    if not running or not pid:
-        return {"status": "not_running"}
-    request_stop(config)
-    return {"status": "ok"}
+    if action == "pause":
+        rotation_service.pause()
+    else:
+        rotation_service.resume()
+    return {"status": "ok", **rotation_service.snapshot(config)}
 
 
 @app.get("/api/search")

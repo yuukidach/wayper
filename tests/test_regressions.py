@@ -96,7 +96,10 @@ class RegressionTest(unittest.TestCase):
 
             with (
                 patch("wayper.server.api.get_config", return_value=config),
-                patch("wayper.server.api.is_daemon_running", return_value=(False, None)),
+                patch(
+                    "wayper.server.api.rotation_service.snapshot",
+                    return_value={"auto_rotation": True, "rotation_paused": False},
+                ),
             ):
                 landscape = get_status(monitor="landscape-monitor", include_recoverable=False)
                 portrait = get_status(monitor="portrait-monitor", include_recoverable=False)
@@ -120,7 +123,7 @@ class RegressionTest(unittest.TestCase):
         with (
             patch("wayper.server.api.get_config", return_value=config),
             patch("wayper.server.api.save_config") as save_config,
-            patch("wayper.server.api.request_config_reload"),
+            patch("wayper.server.api.rotation_service.request_reload"),
             patch("wayper.server.api._cached_config", None),
             patch("wayper.server.api._cached_mtime", 0),
         ):
@@ -137,7 +140,7 @@ class RegressionTest(unittest.TestCase):
         with (
             patch("wayper.server.api.get_config", return_value=config),
             patch("wayper.server.api.save_config"),
-            patch("wayper.server.api.request_config_reload"),
+            patch("wayper.server.api.rotation_service.request_reload"),
             patch("wayper.server.api._cached_config", None),
             patch("wayper.server.api._cached_mtime", 0),
         ):
@@ -289,7 +292,7 @@ class RegressionTest(unittest.TestCase):
             self.assertEqual(read_last_wallpaper_change(config), 1234.5)
 
     def test_seconds_until_next_rotation_uses_last_wallpaper_change(self) -> None:
-        from wayper.daemon import seconds_until_next_rotation
+        from wayper.rotation import seconds_until_next_rotation
         from wayper.state import record_wallpaper_change
 
         with tempfile.TemporaryDirectory() as td:

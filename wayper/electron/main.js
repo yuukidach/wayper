@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, shell, ipcMain, dialog, screen } = require('electron')
+const { app, BrowserWindow, Menu, Tray, shell, ipcMain, dialog, screen } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const fs = require('fs')
@@ -6,11 +6,17 @@ const { waitForApi } = require('./backend-readiness')
 
 let backendProcess = null
 let mainWindow = null
+let tray = null
+let trayRefreshTimer = null
 let backendPathResolved = false
 let backendPath = null
 let captureInProgress = false
+let isQuitting = false
+let trayRotationState = { auto_rotation: false, rotation_paused: false }
+let trayLanguage = 'auto'
 
 const CAPTURE_SWITCH = '--wayper-capture'
+const HIDDEN_SWITCH = '--hidden'
 const APP_ID = 'com.wayper.app'
 
 if (process.platform === 'win32') {
@@ -61,12 +67,13 @@ function getPortFilePath() {
 function getAppIconPath() {
   const iconName = process.platform === 'win32' ? 'icon.ico' : 'icon-256.png'
   const candidates = [
+    process.env.WAYPER_ICON_PATH,
     // electron-builder copies runtime icons beside the packaged app resources.
     path.join(process.resourcesPath, iconName),
     // Source/development launch from wayper/electron.
     path.join(__dirname, '../../assets', iconName),
   ]
-  return candidates.find(candidate => fs.existsSync(candidate)) || null
+  return candidates.find(candidate => candidate && fs.existsSync(candidate)) || null
 }
 
 function startBackend() {
@@ -112,6 +119,122 @@ function killBackend() {
   }
 }
 
+function apiUrl(route) {
+  const port = Number.parseInt(process.env.WAYPER_API_PORT || '0', 10)
+  return port > 0 ? `http://127.0.0.1:${port}${route}` : null
+}
+
+async function callApi(route, options = {}) {
+  const url = apiUrl(route)
+  if (!url) throw new Error('Wayper backend port is unavailable')
+  const response = await fetch(url, options)
+  if (!response.ok) throw new Error(`Wayper backend returned HTTP ${response.status}`)
+  return response.json()
+}
+
+function trayLabels() {
+  const isChinese = trayLanguage === 'zh'
+    || (trayLanguage === 'auto' && app.getLocale().toLowerCase().startsWith('zh'))
+  return isChinese ? {
+    show: '打开 Wayper',
+    next: '下一张壁纸',
+    pause: '暂停自动换壁纸',
+    resume: '继续自动换壁纸',
+    disabled: '自动换壁纸已关闭',
+    quit: '退出 Wayper',
+  } : {
+    show: 'Open Wayper',
+    next: 'Next Wallpaper',
+    pause: 'Pause Auto Rotation',
+    resume: 'Resume Auto Rotation',
+    disabled: 'Auto Rotation Off',
+    quit: 'Quit Wayper',
+  }
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow({ show: true })
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+async function setRotationPaused(paused) {
+  const action = paused ? 'pause' : 'resume'
+  try {
+    trayRotationState = await callApi(`/api/rotation/${action}`, { method: 'POST' })
+  } catch (error) {
+    console.error(`Could not ${action} automatic rotation:`, error)
+  }
+  await refreshTrayMenu()
+}
+
+async function refreshTrayMenu() {
+  if (!tray || tray.isDestroyed()) return
+  try {
+    const [status, config] = await Promise.all([
+      callApi('/api/status?include_recoverable=false'),
+      callApi('/api/config'),
+    ])
+    trayRotationState = status
+    trayLanguage = config.language || 'auto'
+  } catch (error) {
+    console.warn('Could not refresh tray status:', error.message)
+  }
+
+  const labels = trayLabels()
+  const active = !!trayRotationState.auto_rotation
+  const paused = !!trayRotationState.rotation_paused
+  const rotationLabel = active ? labels.pause : paused ? labels.resume : labels.disabled
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: labels.show, click: showMainWindow },
+    {
+      label: labels.next,
+      click: () => {
+        void callApi('/api/control/next', { method: 'POST' }).catch(error => {
+          console.error('Could not change wallpaper from tray:', error)
+        })
+      },
+    },
+    { type: 'separator' },
+    {
+      label: rotationLabel,
+      enabled: active || paused,
+      click: () => void setRotationPaused(active),
+    },
+    { type: 'separator' },
+    {
+      label: labels.quit,
+      click: () => {
+        isQuitting = true
+        app.quit()
+      },
+    },
+  ]))
+}
+
+function createTray() {
+  if (tray && !tray.isDestroyed()) return
+  const iconPath = getAppIconPath()
+  if (!iconPath) {
+    console.error('Could not create system tray: Wayper icon is missing')
+    return
+  }
+  try {
+    tray = new Tray(iconPath)
+    tray.setToolTip('Wayper')
+    tray.on('click', showMainWindow)
+    void refreshTrayMenu()
+    trayRefreshTimer = setInterval(() => void refreshTrayMenu(), 30000)
+  } catch (error) {
+    tray = null
+    console.error('Could not create system tray:', error)
+  }
+}
+
 function capturePathFromCommandLine(commandLine = []) {
   for (let index = 0; index < commandLine.length; index += 1) {
     const argument = String(commandLine[index] || '')
@@ -130,7 +253,10 @@ function capturePathFromCommandLine(commandLine = []) {
 async function settleRendererForCapture(webContents) {
   await webContents.executeJavaScript(`
     (async () => {
-      if (document.fonts && document.fonts.ready) await document.fonts.ready;
+      const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+      if (document.fonts && document.fonts.ready) {
+        await Promise.race([document.fonts.ready, delay(1000)]);
+      }
       const visibleImages = [...document.images].filter(image => {
         const rect = image.getBoundingClientRect();
         return rect.bottom > 0 && rect.right > 0
@@ -140,7 +266,10 @@ async function settleRendererForCapture(webContents) {
         image.decode ? image.decode().catch(() => undefined) : Promise.resolve(),
         new Promise(resolve => setTimeout(resolve, 1500)),
       ])));
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      await Promise.race([
+        new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+        delay(250),
+      ]);
       return true;
     })()
   `, true)
@@ -228,7 +357,11 @@ ipcMain.handle('select-download-dir', async () => {
   return result.filePaths[0]
 })
 
-function createWindow () {
+ipcMain.on('refresh-tray-menu', () => {
+  void refreshTrayMenu()
+})
+
+function createWindow ({ show = true } = {}) {
   const isMac = process.platform === 'darwin'
   const iconPath = getAppIconPath()
   const availableHeight = screen.getPrimaryDisplay().workAreaSize.height
@@ -238,12 +371,28 @@ function createWindow () {
     backgroundColor: '#11111b',
     autoHideMenuBar: !isMac,
     titleBarStyle: 'default',
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     }
   }
   if (iconPath) windowOptions.icon = iconPath
   mainWindow = new BrowserWindow(windowOptions)
+
+  mainWindow.once('ready-to-show', () => {
+    if (show && mainWindow && !mainWindow.isDestroyed()) mainWindow.show()
+  })
+
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault()
+      mainWindow.hide()
+    }
+  })
+
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
 
   mainWindow.loadFile('index.html')
 
@@ -263,6 +412,7 @@ function createWindow () {
 }
 
 const initialCapturePath = capturePathFromCommandLine(process.argv)
+const initiallyHidden = process.argv.includes(HIDDEN_SWITCH)
 // Pass the capture destination through Electron's single-instance payload as
 // well as the command line.  Some Linux launchers normalize/strip arguments
 // before delivering the `second-instance` event, which otherwise leaves the
@@ -283,11 +433,8 @@ if (!gotTheLock) {
       void captureCurrentWindow(capturePath)
       return
     }
-    // Someone tried to run a second interactive instance, so focus the window.
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.focus()
-    }
+    // A normal second launch reopens the resident app. Hidden launches stay hidden.
+    if (!commandLine.includes(HIDDEN_SWITCH)) showMainWindow()
   })
 
   app.whenReady().then(async () => {
@@ -301,20 +448,25 @@ if (!gotTheLock) {
     if (backendStarted) {
       await waitForBackend()
     }
-    createWindow()
+    createTray()
+    createWindow({ show: !initiallyHidden })
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow()
-      }
+      showMainWindow()
     })
   })
 }
 
+app.on('before-quit', () => {
+  isQuitting = true
+})
+
 app.on('will-quit', () => {
+  if (trayRefreshTimer) clearInterval(trayRefreshTimer)
+  if (tray && !tray.isDestroyed()) tray.destroy()
   killBackend()
 })
 
 app.on('window-all-closed', () => {
-  app.quit()
+  // Wayper remains available from the system tray until the user chooses Quit.
 })

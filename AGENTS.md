@@ -23,9 +23,7 @@ a FastAPI backend for the Electron GUI, and a stdio MCP server.
 ## Common Commands
 
 - Run CLI commands with `uv run wayper ...` or `wayper ...` after installing the package.
-- Start the daemon with `wayper daemon`; use `wayper daemon start` only when backgrounding is
-  specifically needed.
-- Launch the GUI with `wayper-gui`.
+- Launch the GUI with `wayper-gui`, or use `wayper-gui --hidden` to start in the system tray.
 - Start the MCP stdio server with `wayper-mcp`.
 - Lint Python with `ruff check wayper/` when `ruff` is installed. If not, use
   `uvx ruff check wayper/` or `pre-commit run ruff --all-files`.
@@ -43,10 +41,11 @@ a FastAPI backend for the Electron GUI, and a stdio MCP server.
   and `wayper/electron/` contains the frontend.
 - The API server auto-selects a free port and writes it to `~/.config/wayper/api.port`.
   Electron reads that port through IPC.
+- `wayper/rotation.py` owns automatic rotation inside the FastAPI process. FastAPI owns the
+  service lifecycle, while Electron owns the tray and application lifecycle.
 - File-based state is intentional: TOML config, plain-text blacklist/undo files, JSON history,
   and per-download-dir state files.
 - File locks prevent concurrent state modifications.
-- The daemon uses SIGUSR1 for forced rotation and SIGUSR2 for mode reload.
 
 ## Code Conventions
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from wayper.server.launcher import _electron_command
+from wayper.server.launcher import _electron_command, _icon_path
 
 
 def _touch(path: Path) -> Path:
@@ -32,9 +32,32 @@ def test_missing_electron_falls_back_to_platform_npm(tmp_path: Path) -> None:
     assert _electron_command(tmp_path, platform="linux") == ["npm", "start"]
 
 
+def test_hidden_argument_is_forwarded_to_electron(tmp_path: Path) -> None:
+    shim = _touch(tmp_path / "node_modules" / ".bin" / "electron")
+
+    assert _electron_command(tmp_path, platform="linux", arguments=["--hidden"]) == [
+        str(shim),
+        ".",
+        "--hidden",
+    ]
+
+
+def test_hidden_argument_is_forwarded_through_npm(tmp_path: Path) -> None:
+    assert _electron_command(tmp_path, platform="linux", arguments=["--hidden"]) == [
+        "npm",
+        "start",
+        "--",
+        "--hidden",
+    ]
+
+
 def test_wayper_gui_uses_windowed_entry_point() -> None:
     project_root = Path(__file__).resolve().parents[1]
     metadata = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert "wayper-gui" not in metadata["project"]["scripts"]
     assert metadata["project"]["gui-scripts"]["wayper-gui"] == ("wayper.server.launcher:run_app")
+
+
+def test_source_launcher_finds_repository_icon() -> None:
+    assert _icon_path() is not None

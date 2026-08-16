@@ -118,7 +118,7 @@ class WallhavenClient:
         return self._filter_strategy in {"model", "rules+model"}
 
     def _download_sorting(self) -> str:
-        """Return sorting used for daemon downloads.
+        """Return sorting used for automatic downloads.
 
         Wallhaven has no minimum-favorites search parameter. Sorting by favorites
         when the threshold is enabled keeps the API URL aligned with the filter
