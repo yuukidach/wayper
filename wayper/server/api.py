@@ -1625,6 +1625,25 @@ def port_file() -> Path:
     return CONFIG_DIR / "api.port"
 
 
+def _acquire_api_lock() -> FileLock | None:
+    """Own the API/rotation lifecycle, or return ``None`` for a second launch."""
+    lock = FileLock(blocking=False, path=port_file().with_suffix(".lock"))
+    try:
+        lock.__enter__()
+    except SystemExit:
+        return None
+    return lock
+
+
+def _remove_owned_port_file(path: Path, port: int) -> None:
+    """Remove only the port file written by this server instance."""
+    try:
+        if path.read_text().strip() == str(port):
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def run():
     import atexit
 
@@ -1634,18 +1653,26 @@ def run():
 
     setup_logging()
 
-    port = _find_free_port()
-    pf = port_file()
-    pf.parent.mkdir(parents=True, exist_ok=True)
-    pf.write_text(str(port))
-    atexit.register(lambda: pf.unlink(missing_ok=True))
+    api_lock = _acquire_api_lock()
+    if api_lock is None:
+        log.info("API server already running; reusing the existing instance")
+        return
 
-    log.info("API server starting on port %d", port)
-    # PyInstaller's windowed Windows executable has no stdout/stderr streams.
-    # Uvicorn's default formatter probes sys.stdout.isatty(), which crashes the
-    # backend before it starts listening. Wayper already configured its file
-    # logger above, so avoid Uvicorn's console-oriented logging configuration.
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info", log_config=None)
+    try:
+        port = _find_free_port()
+        pf = port_file()
+        pf.parent.mkdir(parents=True, exist_ok=True)
+        pf.write_text(str(port))
+        atexit.register(_remove_owned_port_file, pf, port)
+
+        log.info("API server starting on port %d", port)
+        # PyInstaller's windowed Windows executable has no stdout/stderr streams.
+        # Uvicorn's default formatter probes sys.stdout.isatty(), which crashes the
+        # backend before it starts listening. Wayper already configured its file
+        # logger above, so avoid Uvicorn's console-oriented logging configuration.
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="info", log_config=None)
+    finally:
+        api_lock.__exit__(None, None, None)
 
 
 if __name__ == "__main__":
