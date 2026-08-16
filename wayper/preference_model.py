@@ -685,11 +685,21 @@ def _build_curated_preference_examples(
     return examples
 
 
-def collect_preference_training_snapshot(config: WayperConfig) -> PreferenceTrainingSnapshot:
+def collect_preference_training_snapshot(
+    config: WayperConfig,
+    *,
+    allow_legacy_bootstrap: bool = False,
+) -> PreferenceTrainingSnapshot:
     """Collect current local labels and a stable fingerprint for retraining.
 
     Only live pool/favorite files become positive examples.  Historical metadata
     that survived quota eviction stays out of the positive class.
+
+    Once explicit Review feedback exists, normal refreshes use only those
+    deliberate labels.  A fresh GUI installation has no Review candidates until
+    its first model exists, though, so callers creating that first model may use
+    the legacy pool/blacklist snapshot until the explicit labels contain the
+    minimum number of both classes.
     """
     from .pool import favorites_dir, list_blacklist, list_images, load_metadata, pool_dir
     from .state import ALL_PURITIES
@@ -738,10 +748,14 @@ def collect_preference_training_snapshot(config: WayperConfig) -> PreferenceTrai
     has_curated_feedback = any(
         _is_curated_preference_feedback(event) for event in feedback["events"]
     )
-    examples = curated_examples if has_curated_feedback else legacy_examples
+    curated_ready = _has_both_classes(list(curated_examples), MIN_TRAINING_PER_CLASS)
+    use_legacy_bootstrap = allow_legacy_bootstrap and not curated_ready
+    examples = (
+        curated_examples if has_curated_feedback and not use_legacy_bootstrap else legacy_examples
+    )
     # Keep the persisted source name stable for existing model files. It now
     # covers both Review decisions and manual Dislike actions.
-    label_source = "model_review" if has_curated_feedback else "legacy"
+    label_source = "model_review" if has_curated_feedback and not use_legacy_bootstrap else "legacy"
     return PreferenceTrainingSnapshot(
         examples=examples,
         feedback_revision=int(feedback["revision"]),
@@ -764,7 +778,11 @@ def train_local_preference_model(
 ) -> tuple[PreferenceModel, PreferenceTrainingSnapshot]:
     """Fit one model from a consistent local snapshot without writing it yet."""
     _bootstrap_historical_preference_bans(config)
-    snapshot = collect_preference_training_snapshot(config)
+    existing_model = load_preference_model(preference_model_path(config))
+    snapshot = collect_preference_training_snapshot(
+        config,
+        allow_legacy_bootstrap=existing_model is None,
+    )
     model = train_preference_model(
         list(snapshot.examples),
         combo_min_support=combo_min_support,
@@ -820,7 +838,11 @@ def _save_manual_preference_model(
     # automatic fit whose feedback arrived while the manual fit was running.
     with FileLock(path=_preference_model_lock_path(path)):
         with FileLock():
-            current = collect_preference_training_snapshot(config)
+            current_model = load_preference_model(path)
+            current = collect_preference_training_snapshot(
+                config,
+                allow_legacy_bootstrap=current_model is None,
+            )
             if (
                 current.data_signature != snapshot.data_signature
                 or current.label_source != snapshot.label_source
@@ -1031,8 +1053,16 @@ def preference_learning_status(
     snapshot: PreferenceTrainingSnapshot | None = None,
 ) -> dict[str, object]:
     """Describe whether enough new local feedback has accumulated to refresh."""
-    snapshot = snapshot or collect_preference_training_snapshot(config)
     model = model or load_preference_model(preference_model_path(config))
+    snapshot = snapshot or collect_preference_training_snapshot(
+        config,
+        allow_legacy_bootstrap=model is None,
+    )
+    banned_examples = sum(example.label == 1 for example in snapshot.examples)
+    retained_examples = sum(example.label == 0 for example in snapshot.examples)
+    training_ready = (
+        banned_examples >= MIN_TRAINING_PER_CLASS and retained_examples >= MIN_TRAINING_PER_CLASS
+    )
     if model is None:
         return {
             "status": "untrained",
@@ -1043,7 +1073,11 @@ def preference_learning_status(
             "changed_examples": len(snapshot.examples),
             "weight_refresh_due": False,
             "minimum_feedback": AUTO_RETRAIN_MIN_FEEDBACK,
-            "due": False,
+            "minimum_per_class": MIN_TRAINING_PER_CLASS,
+            "banned_examples": banned_examples,
+            "retained_examples": retained_examples,
+            "training_ready": training_ready,
+            "due": training_ready,
         }
 
     summary = model.training_summary
@@ -1105,12 +1139,19 @@ def preference_learning_status(
         "changed_examples": changed_examples,
         "weight_refresh_due": weight_refresh_due,
         "minimum_feedback": AUTO_RETRAIN_MIN_FEEDBACK,
-        "due": upgrade_due
-        or stale
+        "minimum_per_class": MIN_TRAINING_PER_CLASS,
+        "banned_examples": banned_examples,
+        "retained_examples": retained_examples,
+        "training_ready": training_ready,
+        "due": training_ready
         and (
-            pending_feedback >= AUTO_RETRAIN_MIN_FEEDBACK
-            or changed_examples >= AUTO_RETRAIN_MIN_CHANGED_EXAMPLES
-            or weight_refresh_due
+            upgrade_due
+            or stale
+            and (
+                pending_feedback >= AUTO_RETRAIN_MIN_FEEDBACK
+                or changed_examples >= AUTO_RETRAIN_MIN_CHANGED_EXAMPLES
+                or weight_refresh_due
+            )
         ),
     }
 
@@ -1210,7 +1251,10 @@ def preference_deletion_suggestions(
 
     model_path = preference_model_path(config)
     model = load_preference_model(model_path)
-    snapshot = collect_preference_training_snapshot(config)
+    snapshot = collect_preference_training_snapshot(
+        config,
+        allow_legacy_bootstrap=model is None,
+    )
     learning = preference_learning_status(config, model, snapshot)
     if model is None:
         return {
@@ -1729,9 +1773,18 @@ def schedule_preference_model_retrain(config: WayperConfig, *, force: bool = Fal
     reserved for callers that already calculated a due filesystem/weight
     refresh.
     """
-    if not preference_model_path(config).exists():
-        return
-    if not force and not _has_pending_preference_feedback_refresh(config):
+    model = load_preference_model(preference_model_path(config))
+    if model is None:
+        feedback_revision = int(load_preference_feedback(config)["revision"])
+        if not force and feedback_revision < AUTO_RETRAIN_MIN_FEEDBACK:
+            return
+        snapshot = collect_preference_training_snapshot(
+            config,
+            allow_legacy_bootstrap=True,
+        )
+        if not _has_both_classes(list(snapshot.examples), MIN_TRAINING_PER_CLASS):
+            return
+    elif not force and not _has_pending_preference_feedback_refresh(config):
         return
     token = _claim_or_touch_auto_retrain_worker(config)
     if token is None:
@@ -1781,7 +1834,10 @@ def run_scheduled_preference_model_retrain(
     if outcome in {"settled", "retry"}:
         try:
             model = load_preference_model(preference_model_path(config))
-            snapshot = collect_preference_training_snapshot(config)
+            snapshot = collect_preference_training_snapshot(
+                config,
+                allow_legacy_bootstrap=model is None,
+            )
             if preference_learning_status(config, model, snapshot).get("due"):
                 schedule_preference_model_retrain(config, force=True)
         except Exception:
@@ -1803,13 +1859,16 @@ def _save_automatic_preference_model(
     path.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(path=_preference_model_lock_path(path)):
         with FileLock():
-            current = collect_preference_training_snapshot(config)
+            current_model = load_preference_model(path)
+            current = collect_preference_training_snapshot(
+                config,
+                allow_legacy_bootstrap=current_model is None,
+            )
             if (
                 current.data_signature != snapshot.data_signature
                 or current.label_source != snapshot.label_source
             ):
                 return False
-            current_model = load_preference_model(path)
             current_summary = current_model.training_summary if current_model is not None else {}
             current_threshold = current_summary.get(
                 "auto_filter_threshold",
@@ -1851,19 +1910,34 @@ def _run_auto_retrain(config: WayperConfig) -> str:
     not self-reschedule forever; the next user action can request a fresh run.
     """
     model = load_preference_model(preference_model_path(config))
-    if model is None:
-        return "failed"
     try:
         _bootstrap_historical_preference_bans(config)
-        snapshot = collect_preference_training_snapshot(config)
+        snapshot = collect_preference_training_snapshot(
+            config,
+            allow_legacy_bootstrap=model is None,
+        )
         learning = preference_learning_status(config, model, snapshot)
         if not learning["due"]:
             return "settled"
-        epochs = int(model.training_summary.get("epochs", DEFAULT_EPOCHS))
-        validation_days = int(
-            model.training_summary.get("validation_days", model.validation.get("holdout_days", 14))
+        epochs = (
+            int(model.training_summary.get("epochs", DEFAULT_EPOCHS))
+            if model is not None
+            else DEFAULT_EPOCHS
         )
-        upgrading = bool(learning.get("upgrade_due"))
+        validation_days = (
+            int(
+                model.training_summary.get(
+                    "validation_days",
+                    model.validation.get("holdout_days", 14),
+                )
+            )
+            if model is not None
+            else 14
+        )
+        upgrading = model is None or bool(learning.get("upgrade_due"))
+        semantic_model = DEFAULT_SEMANTIC_MODEL
+        if model is not None and model.semantic_model:
+            semantic_model = model.semantic_model
         refreshed = train_preference_model(
             list(snapshot.examples),
             combo_min_support=(DEFAULT_COMBO_MIN_SUPPORT if upgrading else model.combo_min_support),
@@ -1875,7 +1949,7 @@ def _run_auto_retrain(config: WayperConfig) -> str:
             validation_days=max(0, validation_days),
             feedback_revision=snapshot.feedback_revision,
             retrain_mode="automatic",
-            semantic_model=(model.semantic_model or DEFAULT_SEMANTIC_MODEL),
+            semantic_model=semantic_model,
             label_source=snapshot.label_source,
         )
         _warm_semantic_cache(refreshed, snapshot)
@@ -1886,7 +1960,8 @@ def _run_auto_retrain(config: WayperConfig) -> str:
 
         if _save_automatic_preference_model(config, refreshed, snapshot):
             log.info(
-                "Preference model refreshed after %d feedback events (%d changed examples)",
+                "Preference model %s after %d feedback events (%d changed examples)",
+                "created" if model is None else "refreshed",
                 learning["pending_feedback"],
                 learning["changed_examples"],
             )

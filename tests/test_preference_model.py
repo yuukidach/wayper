@@ -71,6 +71,29 @@ def _examples(
     ]
 
 
+def _write_cold_start_library(config: WayperConfig) -> dict[str, dict[str, object]]:
+    pool = config.download_dir / "sfw" / "landscape"
+    pool.mkdir(parents=True)
+    metadata: dict[str, dict[str, object]] = {}
+    for index in range(10):
+        filename = f"dislike{index}.jpg"
+        metadata[filename] = {"tags": ["bad", "detail"], "downloaded_at": 1_700_000_000}
+        record_preference_feedback(
+            config,
+            "dislike",
+            filename,
+            source="core",
+            context="manual_dislike",
+            timestamp=1_700_000_000 + index,
+        )
+    for index in range(10):
+        filename = f"keep{index}.jpg"
+        metadata[filename] = {"tags": ["good", "detail"], "downloaded_at": 1_700_001_000}
+        (pool / filename).touch()
+    config.metadata_file.write_text(json.dumps(metadata))
+    return metadata
+
+
 class PreferenceModelTest(unittest.TestCase):
     def test_pid_probe_does_not_terminate_current_process(self) -> None:
         self.assertTrue(_pid_is_running(os.getpid()))
@@ -1184,6 +1207,67 @@ class PreferenceModelTest(unittest.TestCase):
         self.assertEqual(status["changed_examples"], 0)
         self.assertTrue(status["weight_refresh_due"])
         self.assertTrue(status["due"])
+
+    def test_untrained_gui_feedback_bootstraps_and_saves_the_first_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            metadata = _write_cold_start_library(config)
+
+            explicit_snapshot = collect_preference_training_snapshot(config)
+            learning = preference_learning_status(config)
+            token = _claim_or_touch_auto_retrain_worker(config)
+            self.assertIsNotNone(token)
+            assert token is not None
+            run_scheduled_preference_model_retrain(config, token, delay_seconds=0)
+            model = load_preference_model(config.preference_model_file)
+
+            candidate = config.download_dir / "sfw" / "landscape" / "candidate.jpg"
+            candidate.touch()
+            metadata[candidate.name] = {
+                "tags": ["bad", "detail"],
+                "downloaded_at": 1_700_002_000,
+            }
+            config.metadata_file.write_text(json.dumps(metadata))
+            suggestions = preference_deletion_suggestions(
+                config,
+                purities=("sfw",),
+                orientation="landscape",
+            )
+
+        self.assertEqual(explicit_snapshot.label_source, "model_review")
+        self.assertEqual(
+            {example.label for example in explicit_snapshot.examples},
+            {1},
+        )
+        self.assertEqual(learning["label_source"], "legacy")
+        self.assertTrue(learning["training_ready"])
+        self.assertTrue(learning["due"])
+        self.assertIsNotNone(model)
+        assert model is not None
+        self.assertEqual(model.training_summary["label_source"], "legacy")
+        self.assertEqual(model.training_summary["banned"], 10)
+        self.assertEqual(model.training_summary["retained"], 10)
+        self.assertEqual(suggestions["status"], "ready")
+        self.assertIn("candidate.jpg", {item["name"] for item in suggestions["items"]})
+
+    def test_scheduler_starts_frozen_worker_for_first_trainable_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            _write_cold_start_library(config)
+            with (
+                patch.object(sys, "frozen", True, create=True),
+                patch("wayper.preference_model.subprocess.Popen") as popen,
+            ):
+                popen.return_value.pid = os.getpid()
+                schedule_preference_model_retrain(config)
+
+            self.assertEqual(popen.call_count, 1)
+            command = popen.call_args.args[0]
+            self.assertEqual(command[0], sys.executable)
+            self.assertEqual(command[1:3], ["model", "refresh"])
+            self.assertNotIn("wayper.cli", command)
+            lease = json.loads(_auto_retrain_lease_path(config).read_text())
+            _release_auto_retrain_worker(config, lease["token"])
 
     def test_scheduler_detaches_one_worker_for_short_lived_callers(self) -> None:
         examples = [
