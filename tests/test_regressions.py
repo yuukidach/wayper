@@ -65,6 +65,47 @@ class _FakeAsyncClient:
 
 
 class RegressionTest(unittest.TestCase):
+    def test_blocklist_finds_recoverable_images_in_download_volume_trash(self) -> None:
+        from wayper.server.api import _blocklist_payload
+        from wayper.trash import find_in_trash, find_many_in_trash, restore_from_trash
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            mount = root / "external"
+            download_dir = mount / "wallpapers"
+            volume_trash = mount / ".Trash-1000" / "files"
+            volume_info = volume_trash.parent / "info"
+            download_dir.mkdir(parents=True)
+            volume_trash.mkdir(parents=True)
+            volume_info.mkdir()
+            config = WayperConfig(download_dir=download_dir)
+            config.blacklist_file.write_text("100 disliked.jpg\n101 banned.png\n")
+            for filename in ("disliked.jpg", "banned.png"):
+                (volume_trash / filename).touch()
+                (volume_info / f"{filename}.trashinfo").touch()
+
+            with (
+                patch(
+                    "wayper.trash._device_id",
+                    side_effect=lambda path: 2 if mount in path.parents else 1,
+                ),
+                patch("wayper.trash._mount_point", return_value=mount),
+                patch("wayper.trash.os.getuid", return_value=1000),
+            ):
+                found = find_many_in_trash(config, {"disliked.jpg", "banned.png"})
+                payload = _blocklist_payload(config)
+                self.assertEqual(
+                    find_in_trash(config, "disliked.jpg"),
+                    volume_trash / "disliked.jpg",
+                )
+                restored = restore_from_trash(config, "disliked.jpg", download_dir / "restored")
+                self.assertEqual(set(found), {"disliked.jpg", "banned.png"})
+                self.assertEqual(payload["recoverable_count"], 2)
+                self.assertTrue(all(entry["recoverable"] for entry in payload["entries"]))
+                self.assertEqual(restored, download_dir / "restored" / "disliked.jpg")
+                self.assertTrue(restored.exists())
+                self.assertFalse((volume_info / "disliked.jpg.trashinfo").exists())
+
     def test_status_counts_follow_selected_monitor_orientation(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             config = WayperConfig(

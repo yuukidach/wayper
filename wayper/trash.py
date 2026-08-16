@@ -24,21 +24,69 @@ def _system_trash_dirs() -> list[Path]:
     return [xdg_data / "Trash" / "files"]
 
 
-def _trash_search_dirs() -> list[Path]:
-    """Return system trash directories to search."""
-    return _system_trash_dirs()
+def _existing_ancestor(path: Path) -> Path:
+    """Return the nearest existing ancestor without escaping the filesystem root."""
+    current = path.expanduser().resolve(strict=False)
+    while not current.exists() and current.parent != current:
+        current = current.parent
+    return current
 
 
-def _cleanup_trashinfo(filename: str) -> None:
-    """Remove .trashinfo metadata for a restored file (Linux/freedesktop only)."""
+def _device_id(path: Path) -> int | None:
+    try:
+        return _existing_ancestor(path).stat().st_dev
+    except OSError:
+        return None
+
+
+def _mount_point(path: Path) -> Path:
+    """Find the mount containing path, mirroring send2trash's Linux routing."""
+    current = _existing_ancestor(path)
+    while current.parent != current and not current.is_mount():
+        current = current.parent
+    return current
+
+
+def _volume_trash_dirs(config: WayperConfig) -> list[Path]:
+    """Return freedesktop trash locations for the configured download volume."""
+    if sys.platform in ("darwin", "win32"):
+        return []
+
+    source_device = _device_id(config.download_dir)
+    home_device = _device_id(Path.home())
+    if source_device is None or source_device == home_device:
+        return []
+
+    mount = _mount_point(config.download_dir)
+    uid = os.getuid()
+    # send2trash prefers the shared sticky-bit trash and falls back to the
+    # per-user directory. Search both because either may already contain files.
+    return [mount / ".Trash" / str(uid) / "files", mount / f".Trash-{uid}" / "files"]
+
+
+def _trash_search_dirs(config: WayperConfig | None = None) -> list[Path]:
+    """Return all system trash directories that can contain wayper images."""
+    directories = _system_trash_dirs()
+    if config is not None:
+        directories.extend(_volume_trash_dirs(config))
+    return list(dict.fromkeys(directories))
+
+
+def _cleanup_trashinfo(filename: str, trashed: Path | None = None) -> None:
+    """Remove freedesktop metadata paired with a restored trash file."""
     if sys.platform in ("darwin", "win32"):
         return
+
+    info_files: list[Path] = []
+    if trashed is not None and trashed.parent.name == "files":
+        info_files.append(trashed.parent.parent / "info" / f"{trashed.name}.trashinfo")
     xdg_data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
-    trashinfo = xdg_data / "Trash" / "info" / f"{filename}.trashinfo"
-    try:
-        trashinfo.unlink(missing_ok=True)
-    except OSError:
-        pass
+    info_files.append(xdg_data / "Trash" / "info" / f"{filename}.trashinfo")
+    for trashinfo in dict.fromkeys(info_files):
+        try:
+            trashinfo.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _read_trash_map(config: WayperConfig) -> dict[str, str]:
@@ -73,7 +121,7 @@ def find_in_trash(config: WayperConfig, filename: str) -> Path | None:
             return p
 
     # Fallback: scan system trash dirs (requires FDA on macOS)
-    for d in _trash_search_dirs():
+    for d in _trash_search_dirs(config):
         candidate = d / filename
         if candidate.exists():
             return candidate
@@ -112,7 +160,7 @@ def find_many_in_trash(config: WayperConfig, filenames: set[str]) -> dict[str, P
     if not remaining:
         return found
 
-    for directory in _trash_search_dirs():
+    for directory in _trash_search_dirs(config):
         if not directory.is_dir():
             continue
         try:
@@ -137,7 +185,7 @@ def trash_state_token(config: WayperConfig) -> tuple[int, ...]:
         except OSError:
             return 0
 
-    return (mtime(config.trash_map_file), *(mtime(path) for path in _trash_search_dirs()))
+    return (mtime(config.trash_map_file), *(mtime(path) for path in _trash_search_dirs(config)))
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +319,7 @@ def restore_from_trash(config: WayperConfig, filename: str, dest_dir: Path) -> P
     dest = dest_dir / filename
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(trashed), str(dest))
-    _cleanup_trashinfo(filename)
+    _cleanup_trashinfo(filename, trashed)
 
     mapping = _read_trash_map(config)
     mapping.pop(filename, None)
