@@ -26,6 +26,19 @@ async function run() {
 
     assert.equal(await waitForApi(portFile, { timeout: 1000 }), address.port)
 
+    fs.unlinkSync(portFile)
+    assert.equal(await waitForApi(portFile, {
+      timeout: 1000,
+      preferredPort: address.port,
+    }), address.port)
+
+    fs.writeFileSync(portFile, String(address.port))
+    assert.equal(await waitForApi(portFile, {
+      timeout: 1000,
+      preferredPort: address.port === 65535 ? 65534 : address.port + 1,
+      probe: async port => port === address.port,
+    }), address.port)
+
     let probes = 0
     const unavailable = await waitForApi(portFile, {
       timeout: 20,

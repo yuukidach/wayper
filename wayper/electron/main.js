@@ -107,7 +107,13 @@ function startBackend() {
 }
 
 async function waitForBackend(timeout = 10000) {
-  const port = await waitForApi(getPortFilePath(), { timeout })
+  // The Python launcher can pass the selected port before Uvicorn has finished
+  // its lifespan startup. A port number identifies the backend, but does not
+  // prove that it is accepting requests yet.
+  const port = await waitForApi(getPortFilePath(), {
+    timeout,
+    preferredPort: configuredApiPort(),
+  })
   if (port > 0) {
     console.log(`API ready on port: ${port}`)
     process.env.WAYPER_API_PORT = String(port)
@@ -159,9 +165,6 @@ function backendStartupLabels() {
 }
 
 async function waitForBackendUntilReady() {
-  const configuredPort = configuredApiPort()
-  if (configuredPort > 0) return configuredPort
-
   while (!isQuitting) {
     const port = await waitForBackend(BACKEND_START_TIMEOUT)
     if (port > 0) return port
@@ -417,8 +420,9 @@ function buildMenu() {
 // Keep the renderer on its loading screen until the auto-selected API port is
 // actually accepting requests. Every window shares the same readiness promise.
 ipcMain.handle('get-api-port', async () => {
-  const port = configuredApiPort()
-  if (port > 0) return port
+  // Do not expose a launcher-provided port until the readiness probe succeeds.
+  // Otherwise the renderer can race Uvicorn startup, fail its one-time initial
+  // requests, and remain on the placeholder loading screen indefinitely.
   return backendReadyPromise ? await backendReadyPromise : 0
 })
 

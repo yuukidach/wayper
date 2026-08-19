@@ -47,11 +47,20 @@ async function waitForApi(portFile, options = {}) {
   const pollInterval = options.pollInterval ?? 200
   const requestTimeout = options.requestTimeout ?? 1000
   const probe = options.probe ?? probeApi
+  const preferredPort = Number.parseInt(options.preferredPort || '0', 10)
   const deadline = Date.now() + timeout
 
   while (Date.now() <= deadline) {
-    const port = readPortFile(portFile)
-    if (port > 0 && await probe(port, requestTimeout)) return port
+    const filePort = readPortFile(portFile)
+    const candidates = [preferredPort, filePort].filter((port, index, ports) => (
+      Number.isInteger(port)
+      && port > 0
+      && port <= 65535
+      && ports.indexOf(port) === index
+    ))
+    for (const port of candidates) {
+      if (await probe(port, requestTimeout)) return port
+    }
 
     const remaining = deadline - Date.now()
     if (remaining <= 0) break

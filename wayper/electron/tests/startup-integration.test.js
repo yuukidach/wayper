@@ -95,7 +95,9 @@ async function run() {
   try {
     process.argv = originalArgv.filter(argument => argument !== '--hidden')
     process.argv.push('--hidden')
-    delete process.env.WAYPER_API_PORT
+    // A launcher-provided port still needs to pass the readiness probe before
+    // the renderer may use it.
+    process.env.WAYPER_API_PORT = '45123'
     process.resourcesPath = path.join(__dirname, 'missing-resources')
     global.fetch = async url => ({
       ok: true,
@@ -112,6 +114,7 @@ async function run() {
         return {
           waitForApi: (_portFile, options) => {
             assert.equal(options.timeout, 60000)
+            assert.equal(options.preferredPort, 45123)
             return readiness
           },
         }
