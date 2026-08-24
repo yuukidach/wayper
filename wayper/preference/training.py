@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
 import math
 import random
@@ -11,15 +12,13 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 
 from .model import (
-    DEFAULT_AUTO_FILTER_NEIGHBOR_THRESHOLD,
     DEFAULT_COMBO_MIN_SUPPORT,
+    DEFAULT_DECISION_THRESHOLD,
     DEFAULT_EPOCHS,
     DEFAULT_FEATURE_NORMALIZATION,
     DEFAULT_MAX_COMBO_FEATURES,
     DEFAULT_NEIGHBOR_K,
-    DEFAULT_RECOMMENDATION_THRESHOLD,
-    DEFAULT_REVIEW_THRESHOLD,
-    DEFAULT_THRESHOLD,
+    DEFAULT_TRAINING_MAX_EXAMPLES,
     MIN_TRAINING_PER_CLASS,
     MIN_VALIDATION_PER_CLASS,
     MODEL_SCHEMA_VERSION,
@@ -29,6 +28,7 @@ from .model import (
     _active_feature_values,
     _context_min_support,
     _ftrl_weight,
+    _has_dislike_neighbor_evidence,
     _model_tags,
     _normalize_context_features,
     _pair_is_eligible,
@@ -36,23 +36,18 @@ from .model import (
     _sigmoid,
     _storage_feature_key,
     build_neighbor_prototypes,
-    preference_review_decision_score,
-    preference_review_has_dislike_evidence,
+    preference_decision_score,
+    select_preference_examples,
 )
 
-REVIEW_CALIBRATION_FRACTION = 0.20
-REVIEW_TARGET_PRECISION = 0.80
-REVIEW_CALIBRATION_VERSION = 4
-REVIEW_CALIBRATION_OBJECTIVE = "auto_filter_precision_at_least_0_80"
-
-
-def _default_auto_boundary(model: PreferenceModel) -> float:
-    """Choose a scale-correct fallback for neighbour and legacy heads."""
-    return (
-        DEFAULT_AUTO_FILTER_NEIGHBOR_THRESHOLD
-        if model.neighbor_head_ready
-        else DEFAULT_REVIEW_THRESHOLD
-    )
+DECISION_CALIBRATION_FRACTION = 0.20
+DECISION_TARGET_PRECISION = 0.80
+DECISION_CALIBRATION_VERSION = 6
+DECISION_CALIBRATION_MAX_PER_CLASS = 320
+DECISION_MINIMUM_BOUNDARY = 0.50
+DECISION_CALIBRATION_OBJECTIVE = "two_stage_precision_at_least_0_80"
+# Public import compatibility; there is only one calibration path now.
+REVIEW_CALIBRATION_VERSION = DECISION_CALIBRATION_VERSION
 
 
 def _attach_neighbor_head(
@@ -64,6 +59,8 @@ def _attach_neighbor_head(
     model.neighbor_k = DEFAULT_NEIGHBOR_K
     model.neighbor_prototypes = prototypes
     model._neighbor_feature_index = None
+    model._semantic_neighbor_runtime = None
+    model._semantic_neighbor_failed = False
     return "ready" if model.neighbor_head_ready else "insufficient_explicit_feedback"
 
 
@@ -80,21 +77,24 @@ def _attach_semantic_head(
 
         semantic_head = fit_semantic_head(examples, model_name=semantic_model)
     except Exception as exc:  # pragma: no cover - optional runtime/environment dependent
-        return f"unavailable: {type(exc).__name__}", None
+        detail = " ".join(str(exc).strip().split())[:180]
+        suffix = f": {detail}" if detail else ""
+        return f"unavailable: {type(exc).__name__}{suffix}", None
     if semantic_head is None:
         return "insufficient_feedback", None
     model.semantic_model = semantic_head.model_name
     model.semantic_bias = semantic_head.bias
     model.semantic_weights = semantic_head.weights
     model.semantic_blend = semantic_head.blend
-    model.semantic_rank_weight = semantic_head.rank_weight
+    model._semantic_neighbor_runtime = None
+    model._semantic_neighbor_failed = False
     return "trained", semantic_head
 
 
-def _review_calibration_split(
+def _decision_calibration_split(
     examples: list[PreferenceExample],
 ) -> tuple[list[PreferenceExample], list[PreferenceExample]]:
-    """Reserve the most recent 20% of each explicit class for Review calibration."""
+    """Reserve a bounded recent holdout and bound the model's working set."""
     explicit = [
         example
         for example in examples
@@ -109,34 +109,52 @@ def _review_calibration_split(
     training: list[PreferenceExample] = []
     holdout: list[PreferenceExample] = []
     for label in (0, 1):
-        ordered = sorted(
+        holdout_count = max(
+            MIN_VALIDATION_PER_CLASS,
+            round(len(grouped[label]) * DECISION_CALIBRATION_FRACTION),
+        )
+        holdout_count = min(
+            holdout_count,
+            DECISION_CALIBRATION_MAX_PER_CLASS,
+            len(grouped[label]) - MIN_TRAINING_PER_CLASS,
+        )
+        recent = heapq.nlargest(
+            holdout_count,
             grouped[label],
             key=lambda example: (example.timestamp, example.filename),
         )
-        holdout_count = max(
-            MIN_VALIDATION_PER_CLASS,
-            round(len(ordered) * REVIEW_CALIBRATION_FRACTION),
-        )
-        holdout_count = min(holdout_count, len(ordered) - MIN_TRAINING_PER_CLASS)
-        training.extend(ordered[:-holdout_count])
-        holdout.extend(ordered[-holdout_count:])
-    return training, holdout
+        recent_ids = {id(example) for example in recent}
+        training.extend(example for example in grouped[label] if id(example) not in recent_ids)
+        holdout.extend(recent)
+    bounded_training = list(
+        select_preference_examples(training, limit=DEFAULT_TRAINING_MAX_EXAMPLES)
+    )
+    return bounded_training, sorted(
+        holdout,
+        key=lambda example: (example.timestamp, example.filename, example.label),
+    )
 
 
-def _calibrate_review_boundary(
+def _calibrate_decision_boundary(
     model: PreferenceModel,
     holdout: list[PreferenceExample],
 ) -> dict[str, object]:
-    """Select a precision-weighted automatic boundary from unseen decisions."""
+    """Select the highest-recall boundary meeting the precision policy."""
     predictions = model.predict_many(
-        [(example.tags, None, example.context_features) for example in holdout],
+        [
+            (
+                example.tags,
+                {"_semantic_tag_items": example.semantic_tags},
+                example.context_features,
+            )
+            for example in holdout
+        ],
         top_n=12,
     )
     scored = [
         (
-            preference_review_decision_score(model, prediction),
-            preference_review_has_dislike_evidence(prediction)
-            and (not model.neighbor_head_ready or prediction.neighbor_available),
+            preference_decision_score(model, prediction),
+            _has_dislike_neighbor_evidence(prediction),
             example.label,
         )
         for example, prediction in zip(holdout, predictions, strict=True)
@@ -144,21 +162,21 @@ def _calibrate_review_boundary(
     values = sorted({score for score, evidence, _ in scored if evidence})
     if not values:
         return {
-            "version": REVIEW_CALIBRATION_VERSION,
+            "version": DECISION_CALIBRATION_VERSION,
             "available": False,
             "reason": "holdout produced no scores",
-            "threshold": _default_auto_boundary(model),
-            "objective": REVIEW_CALIBRATION_OBJECTIVE,
+            "threshold": DEFAULT_DECISION_THRESHOLD,
+            "objective": DECISION_CALIBRATION_OBJECTIVE,
         }
 
     thresholds = [
         max(values) + 1e-9,
         *((lower + upper) / 2 for lower, upper in zip(values, values[1:])),
-        DEFAULT_RECOMMENDATION_THRESHOLD,
+        DECISION_MINIMUM_BOUNDARY,
         min(values) - 1e-9,
     ]
     thresholds = sorted(
-        {boundary for boundary in thresholds if boundary >= DEFAULT_RECOMMENDATION_THRESHOLD},
+        {boundary for boundary in thresholds if boundary >= DECISION_MINIMUM_BOUNDARY},
         reverse=True,
     )
     positives = sum(label == 1 for _, _, label in scored)
@@ -192,14 +210,14 @@ def _calibrate_review_boundary(
             1.25 * precision * recall / (0.25 * precision + recall) if precision and recall else 0.0
         )
         payload: dict[str, object] = {
-            "version": REVIEW_CALIBRATION_VERSION,
+            "version": DECISION_CALIBRATION_VERSION,
             "available": True,
             # Keep the source label stable for existing CLI/API consumers;
             # ``method`` records the new ranking head explicitly.
             "source": "stratified_recent_holdout",
-            "method": "content_knn",
-            "objective": REVIEW_CALIBRATION_OBJECTIVE,
-            "target_precision": REVIEW_TARGET_PRECISION,
+            "method": "two_stage_tag_semantic_knn",
+            "objective": DECISION_CALIBRATION_OBJECTIVE,
+            "target_precision": DECISION_TARGET_PRECISION,
             "threshold": round(boundary, 6),
             "examples": len(scored),
             "banned": positives,
@@ -220,23 +238,23 @@ def _calibrate_review_boundary(
 
     if not rows:
         return {
-            "version": REVIEW_CALIBRATION_VERSION,
+            "version": DECISION_CALIBRATION_VERSION,
             "available": False,
             "reason": "holdout had too few positive predictions",
-            "threshold": _default_auto_boundary(model),
-            "objective": REVIEW_CALIBRATION_OBJECTIVE,
+            "threshold": DEFAULT_DECISION_THRESHOLD,
+            "objective": DECISION_CALIBRATION_OBJECTIVE,
         }
-    precise = [row for row in rows if row[0] >= REVIEW_TARGET_PRECISION]
+    precise = [row for row in rows if row[0] >= DECISION_TARGET_PRECISION]
     if not precise:
         # Do not manufacture a review queue when held-out decisions cannot
         # support the requested precision. A later retrain can reopen the gate.
         return {
-            "version": REVIEW_CALIBRATION_VERSION,
+            "version": DECISION_CALIBRATION_VERSION,
             "available": False,
             "reason": "held-out precision target was not reached",
             "threshold": round(max(values) + 1e-6, 6),
-            "objective": REVIEW_CALIBRATION_OBJECTIVE,
-            "target_precision": REVIEW_TARGET_PRECISION,
+            "objective": DECISION_CALIBRATION_OBJECTIVE,
+            "target_precision": DECISION_TARGET_PRECISION,
             "examples": len(scored),
         }
     # Among boundaries that meet the precision target, retain as much recall
@@ -260,6 +278,7 @@ def _training_example_payload(example: PreferenceExample, *, include_weight: boo
         example.temporal_label_known,
         example.is_explicit_ban,
         list(example.context_features),
+        [list(item) for item in example.semantic_tags],
     ]
     if include_weight:
         values.append(round(example.base_weight, 10))
@@ -291,109 +310,51 @@ def train_preference_model(
     *,
     combo_min_support: int = DEFAULT_COMBO_MIN_SUPPORT,
     max_combo_features: int = DEFAULT_MAX_COMBO_FEATURES,
-    threshold: float = DEFAULT_THRESHOLD,
     epochs: int = DEFAULT_EPOCHS,
-    validation_days: int = 14,
     feedback_revision: int = 0,
     retrain_mode: str = "manual",
     semantic_model: str | None = None,
     label_source: str = "legacy",
 ) -> PreferenceModel:
     """Fit the sparse model and an optional metadata-only semantic head."""
-    examples = sorted(
-        examples,
-        key=lambda example: (
-            example.timestamp,
-            example.filename,
-            example.label,
-            example.tags,
-            example.context_features,
-            example.is_favorite,
-            example.is_explicit_keep,
-            example.is_control,
-            example.temporal_label_known,
-            example.is_explicit_ban,
-        ),
-    )
     _validate_training_examples(examples)
     if combo_min_support < 2:
         raise ValueError("combo_min_support must be at least 2")
     if max_combo_features < 0:
         raise ValueError("max_combo_features cannot be negative")
-    if not 0 < threshold < 1:
-        raise ValueError("threshold must be between 0 and 1")
     if epochs < 1:
         raise ValueError("epochs must be positive")
 
-    implicit_retained_excluded = sum(
-        example.label == 0 and (example.is_control or not example.temporal_label_known)
-        for example in examples
-    )
-    training, holdout = _temporal_split(examples, validation_days)
-    validation_reason = (
-        "validation disabled"
-        if validation_days <= 0
-        else "not enough temporally observed labelled data"
-    )
-    validation: dict[str, object] = {
-        "available": False,
-        "calibrated": False,
-        "reason": validation_reason,
-        "excluded_implicit_retained": implicit_retained_excluded,
-        "excluded_controls": implicit_retained_excluded,
-    }
-    if _has_both_classes(training, MIN_VALIDATION_PER_CLASS) and _has_both_classes(
-        holdout, MIN_VALIDATION_PER_CLASS
-    ):
-        validation_model = _fit(
-            training,
-            combo_min_support=combo_min_support,
-            max_combo_features=max_combo_features,
-            threshold=threshold,
-            epochs=epochs,
-        )
-        validation = _evaluate(validation_model, holdout, threshold)
-        validation.update(
-            {
-                "available": True,
-                "holdout_days": validation_days,
-                "excluded_implicit_retained": implicit_retained_excluded,
-                "excluded_controls": implicit_retained_excluded,
-            }
-        )
-
-    calibration_training, calibration_holdout = _review_calibration_split(examples)
-    review_calibration: dict[str, object] = {
-        "version": REVIEW_CALIBRATION_VERSION,
+    calibration_training, calibration_holdout = _decision_calibration_split(examples)
+    decision_calibration: dict[str, object] = {
+        "version": DECISION_CALIBRATION_VERSION,
         "available": False,
         "reason": "not enough explicit Keep/Dislike decisions",
-        "threshold": DEFAULT_REVIEW_THRESHOLD,
-        "objective": REVIEW_CALIBRATION_OBJECTIVE,
+        "threshold": DEFAULT_DECISION_THRESHOLD,
+        "objective": DECISION_CALIBRATION_OBJECTIVE,
     }
     if calibration_training and calibration_holdout:
         calibration_model = _fit(
             calibration_training,
             combo_min_support=combo_min_support,
             max_combo_features=max_combo_features,
-            threshold=threshold,
             epochs=epochs,
         )
         _attach_neighbor_head(calibration_model, calibration_training)
         _attach_semantic_head(calibration_model, calibration_training, semantic_model)
-        review_calibration = _calibrate_review_boundary(
-            calibration_model,
-            calibration_holdout,
-        )
+        decision_calibration = _calibrate_decision_boundary(calibration_model, calibration_holdout)
 
+    working_examples = list(
+        select_preference_examples(examples, limit=DEFAULT_TRAINING_MAX_EXAMPLES)
+    )
     model = _fit(
-        examples,
+        working_examples,
         combo_min_support=combo_min_support,
         max_combo_features=max_combo_features,
-        threshold=threshold,
         epochs=epochs,
     )
     neighbor_status = _attach_neighbor_head(model, examples)
-    semantic_status, semantic_head = _attach_semantic_head(model, examples, semantic_model)
+    semantic_status, semantic_head = _attach_semantic_head(model, working_examples, semantic_model)
     if semantic_head is not None:
         model.training_summary.update(
             {
@@ -403,14 +364,16 @@ def train_preference_model(
                 "semantic_dimension": semantic_head.dimension,
             }
         )
-    model.validation = validation
     model.training_summary.update(
         {
             "feedback_revision": feedback_revision,
             "training_data_signature": _training_data_signature(examples),
-            "example_ids": _training_example_ids(examples),
-            "validation_days": validation_days,
+            "working_example_ids": _training_example_ids(working_examples),
             "retrain_mode": retrain_mode,
+            "total_examples": len(examples),
+            "working_examples": len(working_examples),
+            "banned": sum(example.label == 1 for example in examples),
+            "retained": sum(example.label == 0 for example in examples),
             "explicit_keeps": sum(example.is_explicit_keep for example in examples),
             "explicit_bans": sum(example.is_explicit_ban for example in examples),
             "controls": sum(example.is_control for example in examples),
@@ -424,16 +387,9 @@ def train_preference_model(
             "neighbor_keeps": sum(prototype.label == 0 for prototype in model.neighbor_prototypes),
             "neighbor_k": model.neighbor_k,
             "label_source": label_source,
-            "auto_filter_threshold": review_calibration["threshold"],
-            "auto_filter_calibration": review_calibration,
-            "recommendation_threshold": DEFAULT_RECOMMENDATION_THRESHOLD,
-            "recommendation_strategy": (
-                "content_knn_top_k" if neighbor_status == "ready" else "sparse_cold_start"
-            ),
-            # Compatibility aliases for clients written before the automatic
-            # and human-review decisions became separate lanes.
-            "review_threshold": review_calibration["threshold"],
-            "review_calibration": review_calibration,
+            "decision_threshold": decision_calibration["threshold"],
+            "decision_calibration": decision_calibration,
+            "recommendation_strategy": "two_stage_tag_semantic_knn",
         }
     )
     return model
@@ -444,7 +400,6 @@ def _fit(
     *,
     combo_min_support: int,
     max_combo_features: int,
-    threshold: float,
     epochs: int,
 ) -> PreferenceModel:
     feature_space = _build_feature_space(examples, combo_min_support, max_combo_features)
@@ -488,10 +443,8 @@ def _fit(
         tag_weights=tag_weights,
         combo_weights=combo_weights,
         context_weights=context_weights,
-        threshold=threshold,
         trained_at=datetime.now(UTC).isoformat(),
         training_summary=summary,
-        validation={},
         combo_min_support=combo_min_support,
         max_combo_features=max_combo_features,
         schema_version=MODEL_SCHEMA_VERSION,
@@ -606,65 +559,6 @@ def _sample_weights(examples: list[PreferenceExample]) -> tuple[list[float], flo
     return weights, math.log(positive_total / negative_total)
 
 
-def _evaluate(
-    model: PreferenceModel, examples: Iterable[PreferenceExample], threshold: float
-) -> dict[str, object]:
-    predicted = [
-        (
-            model.predict(example.tags, context_features=example.context_features).probability,
-            example.label,
-        )
-        for example in examples
-    ]
-    true_positive = sum(probability >= threshold and label == 1 for probability, label in predicted)
-    false_positive = sum(
-        probability >= threshold and label == 0 for probability, label in predicted
-    )
-    false_negative = sum(probability < threshold and label == 1 for probability, label in predicted)
-    predicted_at_threshold = true_positive + false_positive
-    total = len(predicted)
-    correct = sum((probability >= 0.5) == bool(label) for probability, label in predicted)
-    roc_auc = _roc_auc(predicted)
-    return {
-        "examples": total,
-        "calibrated": False,
-        "precision_at_threshold": round(true_positive / predicted_at_threshold, 3)
-        if predicted_at_threshold
-        else None,
-        "predicted_at_threshold": predicted_at_threshold,
-        "precision_lower_bound": round(
-            _wilson_lower_bound(true_positive, predicted_at_threshold), 3
-        )
-        if predicted_at_threshold
-        else None,
-        "recall_at_threshold": round(true_positive / (true_positive + false_negative), 3)
-        if true_positive + false_negative
-        else None,
-        "roc_auc": round(roc_auc, 3) if roc_auc is not None else None,
-        "accuracy_at_0_5": round(correct / total, 3) if total else None,
-    }
-
-
-def _roc_auc(predicted: list[tuple[float, int]]) -> float | None:
-    """Compute ROC AUC with average ranks, without a numeric dependency."""
-    positives = sum(label == 1 for _, label in predicted)
-    negatives = sum(label == 0 for _, label in predicted)
-    if not positives or not negatives:
-        return None
-    ordered = sorted(predicted, key=lambda item: item[0])
-    positive_rank_sum = 0.0
-    index = 0
-    while index < len(ordered):
-        end = index + 1
-        score = ordered[index][0]
-        while end < len(ordered) and ordered[end][0] == score:
-            end += 1
-        average_rank = (index + 1 + end) / 2
-        positive_rank_sum += average_rank * sum(label == 1 for _, label in ordered[index:end])
-        index = end
-    return (positive_rank_sum - positives * (positives + 1) / 2) / (positives * negatives)
-
-
 def _wilson_lower_bound(successes: int, total: int, z: float = 1.96) -> float:
     if total <= 0:
         return 0.0
@@ -673,21 +567,6 @@ def _wilson_lower_bound(successes: int, total: int, z: float = 1.96) -> float:
     center = proportion + z * z / (2 * total)
     margin = z * math.sqrt((proportion * (1 - proportion) + z * z / (4 * total)) / total)
     return max(0.0, (center - margin) / denominator)
-
-
-def _temporal_split(
-    examples: list[PreferenceExample], validation_days: int
-) -> tuple[list[PreferenceExample], list[PreferenceExample]]:
-    if validation_days <= 0 or not examples:
-        return examples, []
-    observed = [example for example in examples if example.temporal_label_known]
-    if not observed:
-        return [], []
-    cutoff = max(example.timestamp for example in observed) - validation_days * 86400
-    return (
-        [example for example in observed if example.timestamp < cutoff],
-        [example for example in observed if example.timestamp >= cutoff],
-    )
 
 
 def _has_both_classes(examples: Iterable[PreferenceExample], minimum: int) -> bool:

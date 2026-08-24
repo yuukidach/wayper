@@ -727,15 +727,16 @@ def _fetch_cloud_settings(config: WayperConfig) -> dict:
     if not config.api_key:
         return {}
     try:
+        request_headers = {
+            "User-Agent": USER_AGENT,
+            "X-API-Key": config.api_key,
+        }
         with httpx.Client(
             proxy=config.proxy,
             timeout=httpx.Timeout(15, connect=10),
-            headers={"User-Agent": USER_AGENT},
+            headers=request_headers,
         ) as client:
-            resp = client.get(
-                "https://wallhaven.cc/api/v1/settings",
-                params={"apikey": config.api_key},
-            )
+            resp = client.get("https://wallhaven.cc/api/v1/settings")
             resp.raise_for_status()
             return resp.json().get("data", {})
     except Exception:

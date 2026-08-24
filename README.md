@@ -134,6 +134,8 @@ wayper suggest --ai        # AI-powered analysis via Codex CLI
 wayper model train         # train the lightweight local metadata ranking model
 wayper model score --tags "tag1,tag2"  # explain a local dislike score
 wayper model status        # inspect the saved model and recent validation
+wayper metadata status     # inspect cached Wallhaven metadata completeness
+wayper metadata backfill   # resumably fetch missing full wallpaper/tag details
 wayper status               # show current state
 wayper-gui                  # GUI app + tray background rotation
 wayper setup                # install .desktop entry (Linux)
@@ -142,15 +144,25 @@ wayper --json status        # machine-readable output
 
 `wayper model train` learns from local Wallhaven metadata only: normalized tags and
 compact color/category/purity context. It never opens image files or reads pixels.
-The base model uses the standard library. Install `uv pip install -e '.[semantic]'`
-to add the optional FastEmbed `BAAI/bge-small-en-v1.5` text head; embeddings are
-metadata-only and cached locally.
+FastEmbed is installed with Wayper; `BAAI/bge-small-en-v1.5` is downloaded and cached on
+first use to provide the semantic path. Every
+explicit Keep/Dislike remains available to KNN retrieval: an IDF-weighted pooled matrix
+does coarse retrieval, then only the top candidates are reranked with exact overlap,
+per-tag MaxSim, category/color/purity context, and balanced Keep/Dislike evidence. The
+global sparse+dense head fits a balanced recent working set of at most 2,048 examples,
+while the KNN memory is not truncated. The final decision keeps 80% of the local vote
+and 20% of the global preference probability, then applies one boundary calibrated on
+at most 640 held-out decisions for at least 80% precision. Embeddings are metadata-only
+and cached locally.
+New downloads preserve complete Wallhaven tag objects; use `wayper metadata backfill`
+to repair older live/model-relevant records without exceeding the API rate limit.
 
 Before any **Review** feedback exists, older blacklist/favorite data may bootstrap
 the model. After the first Review decision or manual **Dislike**, only explicit
 Keep/Dislike decisions become labels; **Ban** remains an exact-image block. Images
 that merely sit in the pool are background examples, not proof that you like them.
-The model learns related metadata, filters likely blocks into a recoverable queue,
+Filtering stays off until both explicit classes and held-out calibration are available.
+The model then learns related metadata, filters likely blocks into a recoverable queue,
 and ranks suggestions. It never changes the blacklist automatically, and refreshes
 locally after enough feedback.
 

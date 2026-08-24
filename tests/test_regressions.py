@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 from wayper.config import MonitorConfig, WallhavenConfig, WayperConfig, load_config
 from wayper.model_review import queue_model_review_item
-from wayper.pool import load_metadata, save_metadata
+from wayper.pool import hydrate_tag_details, load_metadata, save_metadata
 from wayper.server.api import (
     ActionRequest,
     ModelReviewActionRequest,
@@ -65,6 +65,21 @@ class _FakeAsyncClient:
 
 
 class RegressionTest(unittest.TestCase):
+    def test_wallhaven_auth_uses_header_instead_of_query_string(self) -> None:
+        config = WayperConfig(api_key="secret-api-key")
+        client = WallhavenClient(config)
+        try:
+            self.assertEqual(client.client.headers["X-API-Key"], "secret-api-key")
+            client.client.get = AsyncMock(
+                return_value=_FakeResponse(200, {"data": {"id": "abc123"}})
+            )
+            detail = asyncio.run(client.wallpaper_info("abc123", retries=0))
+        finally:
+            asyncio.run(client.close())
+
+        self.assertEqual(detail["id"], "abc123")
+        self.assertNotIn("params", client.client.get.call_args.kwargs)
+
     def test_blocklist_finds_recoverable_images_in_download_volume_trash(self) -> None:
         from wayper.server.api import _blocklist_payload
         from wayper.trash import find_in_trash, find_many_in_trash, restore_from_trash
@@ -222,7 +237,7 @@ class RegressionTest(unittest.TestCase):
 
         self.assertEqual(max_page, 3)
 
-    def test_model_filter_quarantines_hits_without_validation_gate(self) -> None:
+    def test_model_filter_fails_open_without_semantic_calibration(self) -> None:
         from wayper.model_review import list_model_review_items
         from wayper.preference_model import PreferenceModel, save_preference_model
 
@@ -237,10 +252,8 @@ class RegressionTest(unittest.TestCase):
                 tag_weights={"likely block": 3.0},
                 combo_weights={},
                 context_weights={},
-                threshold=0.98,
                 trained_at="test",
                 training_summary={},
-                validation={"available": False, "calibrated": False},
                 combo_min_support=20,
                 max_combo_features=0,
             )
@@ -272,10 +285,59 @@ class RegressionTest(unittest.TestCase):
                 asyncio.run(client.close())
 
             held = list_model_review_items(config)
+            downloaded = (config.download_dir / "sfw" / "landscape" / "candidate.jpg").exists()
 
-        self.assertEqual(len(held), 1)
-        self.assertEqual(held[0]["name"], "candidate.jpg")
-        self.assertTrue(held[0]["auto_filtered"])
+        self.assertEqual(held, [])
+        self.assertTrue(downloaded)
+
+    def test_remote_favorite_fetches_complete_details_before_saving(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(
+                download_dir=Path(td),
+                api_key="test",
+                wallhaven_username="tester",
+                monitors=[],
+            )
+            listing = {
+                "id": "abc123",
+                "path": "https://wallhaven.test/wallhaven-abc123.jpg",
+                "purity": "sfw",
+                "resolution": "1920x1080",
+            }
+            detail = {
+                **listing,
+                "tags": [{"id": 5, "name": "forest", "category": "Nature"}],
+                "uploader": {"username": "artist"},
+            }
+            client = WallhavenClient(config)
+
+            async def get(url: str, params: dict | None = None) -> _FakeResponse:
+                del params
+                if url.endswith("/collections"):
+                    return _FakeResponse(200, {"data": [{"id": 1}]})
+                return _FakeResponse(
+                    200,
+                    {"data": [listing], "meta": {"last_page": 1}},
+                )
+
+            async def download(_url: str, destination: Path) -> bool:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"favorite")
+                return True
+
+            client.client.get = AsyncMock(side_effect=get)
+            client.wallpaper_info = AsyncMock(return_value=detail)
+            client.download_image = AsyncMock(side_effect=download)
+            try:
+                synced, _ = asyncio.run(client.sync_remote_favorites())
+            finally:
+                asyncio.run(client.close())
+            record = load_metadata(config)["wallhaven-abc123.jpg"]
+
+        self.assertEqual(synced, 1)
+        self.assertEqual(record["tags"], ["forest"])
+        self.assertEqual(record["tag_details"][0]["category"], "Nature")
+        self.assertTrue(record["metadata_complete"])
 
     def test_metadata_load_tolerates_trailing_data_and_save_repairs_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -289,14 +351,154 @@ class RegressionTest(unittest.TestCase):
                 "new.jpg",
                 {
                     "id": "new",
-                    "tags": [{"name": "b"}],
-                    "uploader": {"username": "user"},
+                    "short_url": "https://whvn.cc/new",
+                    "dimension_x": 1920,
+                    "dimension_y": 1080,
+                    "path": "https://wallhaven.test/new.jpg",
+                    "thumbs": {"small": "https://wallhaven.test/new-small.jpg"},
+                    "future_api_field": {"preserved": True},
+                    "tags": [
+                        {
+                            "id": 7,
+                            "name": "b",
+                            "alias": "bee",
+                            "category_id": 3,
+                            "category": "Letters",
+                            "purity": "sfw",
+                        }
+                    ],
+                    "uploader": {"username": "user", "group": "User"},
                 },
+                complete=True,
+                fetched_at=123,
             )
 
             repaired = json.loads(config.metadata_file.read_text())
             self.assertIn("old.jpg", repaired)
             self.assertEqual(repaired["new.jpg"]["tags"], ["b"])
+            self.assertEqual(repaired["new.jpg"]["tag_details"][0]["alias"], "bee")
+            self.assertEqual(repaired["new.jpg"]["uploader"], "user")
+            self.assertEqual(repaired["new.jpg"]["uploader_details"]["group"], "User")
+            self.assertEqual(repaired["new.jpg"]["dimension_x"], 1920)
+            self.assertEqual(
+                repaired["new.jpg"]["thumbs"]["small"], ("https://wallhaven.test/new-small.jpg")
+            )
+            self.assertTrue(repaired["new.jpg"]["metadata_complete"])
+            self.assertTrue(repaired["new.jpg"]["tag_details_complete"])
+            self.assertTrue(repaired["new.jpg"]["future_api_field"]["preserved"])
+            self.assertEqual(repaired["new.jpg"]["metadata_fetched_at"], 123)
+
+    def test_metadata_backfill_repairs_live_records_and_is_resumable(self) -> None:
+        from wayper.core import do_backfill_metadata
+
+        class FakeWallhavenClient:
+            calls: list[str] = []
+
+            def __init__(self, _config: WayperConfig) -> None:
+                pass
+
+            async def wallpaper_info(self, wallpaper_id: str, *, retries: int = 2) -> dict:
+                self.calls.append(wallpaper_id)
+                return {
+                    "id": wallpaper_id,
+                    "tags": [{"id": 1, "name": "forest", "category": "Nature"}],
+                    "uploader": {"username": "artist"},
+                }
+
+            async def close(self) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            image = config.download_dir / "sfw" / "landscape" / "wallhaven-abc123.jpg"
+            image.parent.mkdir(parents=True)
+            image.touch()
+            config.metadata_file.write_text(json.dumps({image.name: {"id": "abc123", "tags": []}}))
+
+            with patch("wayper.wallhaven.WallhavenClient", FakeWallhavenClient):
+                first = asyncio.run(
+                    do_backfill_metadata(
+                        config,
+                        missing_tags_only=True,
+                        delay_seconds=0,
+                    )
+                )
+                second = asyncio.run(
+                    do_backfill_metadata(
+                        config,
+                        missing_tags_only=True,
+                        delay_seconds=0,
+                    )
+                )
+
+            record = load_metadata(config)[image.name]
+
+        self.assertEqual(FakeWallhavenClient.calls, ["abc123"])
+        self.assertEqual(first.extra["updated"], 1)
+        self.assertEqual(second.extra["targeted"], 0)
+        self.assertEqual(record["tags"], ["forest"])
+        self.assertTrue(record["metadata_complete"])
+
+    def test_metadata_hydration_propagates_known_tag_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            config.metadata_file.write_text(
+                json.dumps(
+                    {
+                        "complete.jpg": {
+                            "tags": ["Forest"],
+                            "tag_details": [
+                                {
+                                    "id": 7,
+                                    "name": "Forest",
+                                    "alias": "woodland",
+                                    "category": "Nature",
+                                }
+                            ],
+                        },
+                        "legacy.jpg": {"tags": ["forest", "unknown"]},
+                    }
+                )
+            )
+
+            result = hydrate_tag_details(config)
+            metadata = load_metadata(config)
+
+        self.assertEqual(result["known_tags"], 1)
+        self.assertEqual(metadata["legacy.jpg"]["tag_details"][0]["alias"], "woodland")
+        self.assertFalse(metadata["legacy.jpg"]["tag_details_complete"])
+        self.assertTrue(metadata["complete.jpg"]["tag_details_complete"])
+
+    def test_metadata_backfill_records_unavailable_remote_images(self) -> None:
+        from wayper.core import do_backfill_metadata, metadata_backfill_status
+
+        class MissingWallhavenClient:
+            def __init__(self, _config: WayperConfig) -> None:
+                pass
+
+            async def wallpaper_info(self, _wallpaper_id: str, *, retries: int = 2) -> dict:
+                return {}
+
+            async def close(self) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            image = config.download_dir / "sfw" / "landscape" / "wallhaven-gone12.jpg"
+            image.parent.mkdir(parents=True)
+            image.touch()
+
+            with patch("wayper.wallhaven.WallhavenClient", MissingWallhavenClient):
+                result = asyncio.run(do_backfill_metadata(config, delay_seconds=0))
+
+            record = load_metadata(config)[image.name]
+            status = metadata_backfill_status(config)
+
+        self.assertEqual(result.extra["failed"], 1)
+        self.assertEqual(result.extra["remaining"], 1)
+        self.assertTrue(record["metadata_unavailable"])
+        self.assertEqual(record["metadata_error"], "unavailable_or_request_failed")
+        self.assertEqual(status["unavailable_records"], 1)
 
     def test_trash_routes_support_head_for_permission_probe(self) -> None:
         methods_by_path: dict[str, set[str]] = {}
@@ -493,7 +695,7 @@ class RegressionTest(unittest.TestCase):
                         "schema_version": 2,
                         "feature_score": -0.25,
                         "review_score": 1.25,
-                        "strongest_review_dislike_score": 1.0,
+                        "neighbor_preference_gap": 1.0,
                         "rank": 1,
                     },
                 ),

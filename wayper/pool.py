@@ -5,46 +5,101 @@ from __future__ import annotations
 import json
 import logging
 import random
-from collections.abc import Iterable
+import time
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TypedDict
 
 from .config import WayperConfig
 from .lock import FileLock
 from .state import ALL_PURITIES
+from .tags import normalize_tag
 from .util import atomic_write
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 ORIENTATIONS = ("landscape", "portrait")
+METADATA_SCHEMA_VERSION = 2
 log = logging.getLogger("wayper.pool")
+
+
+class TagMetadata(TypedDict, total=False):
+    id: int
+    name: str
+    alias: str
+    category_id: int
+    category: str
+    purity: str
+    created_at: str
 
 
 class ImageMetadata(TypedDict, total=False):
     id: str
     tags: list[str]
+    tag_details: list[TagMetadata]
     category: str
     purity: str
+    dimension_x: int
+    dimension_y: int
     resolution: str
     ratio: str
     views: int
     favorites: int
     url: str
+    short_url: str
     source: str
     colors: list[str]
     file_size: int
     file_type: str
     uploader: str
+    uploader_details: dict[str, object]
     created_at: str
+    path: str
+    thumbs: dict[str, str]
     downloaded_at: int
+    metadata_fetched_at: int
+    metadata_checked_at: int
+    metadata_complete: bool
+    metadata_unavailable: bool
+    metadata_error: str
+    tag_details_complete: bool
+    metadata_schema_version: int
 
 
-def extract_tag_names(tags: list) -> list[str]:
+def extract_tag_names(tags: object) -> list[str]:
     """Extract tag name strings from Wallhaven's mixed tag format."""
-    if not tags:
+    if not isinstance(tags, list | tuple) or not tags:
         return []
-    if isinstance(tags[0], dict):
-        return [t.get("name", "") for t in tags]
-    return list(tags)
+    names: list[str] = []
+    for tag in tags:
+        name = tag.get("name", "") if isinstance(tag, Mapping) else tag
+        clean = str(name).strip()
+        if clean:
+            names.append(clean)
+    return names
+
+
+def extract_tag_details(tags: object) -> list[TagMetadata]:
+    """Return the useful, JSON-safe fields from Wallhaven tag objects."""
+    if not isinstance(tags, list | tuple):
+        return []
+    details: list[TagMetadata] = []
+    for raw in tags:
+        if not isinstance(raw, Mapping):
+            continue
+        name = str(raw.get("name", "")).strip()
+        if not name:
+            continue
+        detail: TagMetadata = {"name": name}
+        for key in ("alias", "category", "purity", "created_at"):
+            value = raw.get(key)
+            if value not in (None, ""):
+                detail[key] = str(value)
+        for key in ("id", "category_id"):
+            value = raw.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                detail[key] = value
+        details.append(detail)
+    return details
 
 
 def list_images(directory: Path) -> list[Path]:
@@ -275,34 +330,164 @@ def should_download(config: WayperConfig, purities: set[str]) -> dict[str, bool]
     return result
 
 
-def save_metadata(config: WayperConfig, filename: str, item: dict) -> None:
-    """Persist Wallhaven metadata for a downloaded image."""
-    import time
+def _metadata_record(
+    item: Mapping[str, object],
+    previous: Mapping[str, object] | None,
+    *,
+    complete: bool | None,
+    fetched_at: int,
+) -> ImageMetadata:
+    """Merge one API payload without discarding fields unknown to older clients."""
+    previous = previous if isinstance(previous, Mapping) else {}
+    # API responses are JSON objects. Keeping their top-level fields makes new
+    # Wallhaven additions available without another schema migration, while the
+    # compatibility fields below retain the old wayper shape.
+    record: dict[str, object] = {**previous, **item}
+    raw_tags = item.get("tags")
+    tag_names = extract_tag_names(raw_tags)
+    tag_details = extract_tag_details(raw_tags)
+    if tag_names or "tags" in item:
+        record["tags"] = tag_names
+    else:
+        record["tags"] = extract_tag_names(previous.get("tags"))
+    if tag_details:
+        record["tag_details"] = tag_details
+    elif "tag_details" in previous:
+        record["tag_details"] = previous["tag_details"]
+    if "tags" in item:
+        record["tag_details_complete"] = len(tag_details) == len(tag_names)
+    elif "tag_details_complete" in previous:
+        record["tag_details_complete"] = bool(previous["tag_details_complete"])
 
+    uploader = item.get("uploader")
+    if isinstance(uploader, Mapping):
+        record["uploader"] = str(uploader.get("username", "")).strip()
+        record["uploader_details"] = dict(uploader)
+    elif uploader is not None:
+        record["uploader"] = str(uploader).strip()
+    else:
+        record["uploader"] = str(previous.get("uploader", "")).strip()
+
+    downloaded_at = previous.get("downloaded_at", fetched_at)
+    record["downloaded_at"] = (
+        downloaded_at
+        if isinstance(downloaded_at, int) and not isinstance(downloaded_at, bool)
+        else fetched_at
+    )
+    if complete is None:
+        complete = bool(tag_details)
+    was_complete = previous.get("metadata_complete") is True
+    record["metadata_complete"] = was_complete or complete
+    if complete:
+        record["metadata_fetched_at"] = fetched_at
+        record.pop("metadata_unavailable", None)
+        record.pop("metadata_error", None)
+        record.pop("metadata_checked_at", None)
+    elif "metadata_fetched_at" in previous:
+        record["metadata_fetched_at"] = previous["metadata_fetched_at"]
+    record["metadata_schema_version"] = METADATA_SCHEMA_VERSION
+    return record  # type: ignore[return-value]
+
+
+def save_metadata_batch(
+    config: WayperConfig,
+    items: Mapping[str, Mapping[str, object]],
+    *,
+    complete: bool | None = None,
+    fetched_at: int | None = None,
+) -> int:
+    """Atomically merge a batch of Wallhaven metadata records."""
+    if not items:
+        return 0
+    timestamp = int(time.time()) if fetched_at is None else int(fetched_at)
     mf = config.metadata_file
-    tags = item.get("tags") or []
-    uploader = item.get("uploader") or {}
     with FileLock():
         data = _read_metadata_file(mf)
-        data[filename] = {
-            "id": item.get("id", ""),
-            "tags": extract_tag_names(tags),
-            "category": item.get("category", ""),
-            "purity": item.get("purity", ""),
-            "resolution": item.get("resolution", ""),
-            "ratio": item.get("ratio", ""),
-            "views": item.get("views", 0),
-            "favorites": item.get("favorites", 0),
-            "url": item.get("url", ""),
-            "source": item.get("source", ""),
-            "colors": item.get("colors", []),
-            "file_size": item.get("file_size", 0),
-            "file_type": item.get("file_type", ""),
-            "uploader": uploader.get("username", "") if isinstance(uploader, dict) else uploader,
-            "created_at": item.get("created_at", ""),
-            "downloaded_at": int(time.time()),
-        }
+        for raw_filename, item in items.items():
+            filename = Path(raw_filename).name
+            if not filename or not isinstance(item, Mapping):
+                continue
+            data[filename] = _metadata_record(
+                item,
+                data.get(filename),
+                complete=complete,
+                fetched_at=timestamp,
+            )
         atomic_write(mf, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    return len(items)
+
+
+def save_metadata(
+    config: WayperConfig,
+    filename: str,
+    item: Mapping[str, object],
+    *,
+    complete: bool | None = None,
+    fetched_at: int | None = None,
+) -> None:
+    """Persist one Wallhaven metadata payload without losing full API details."""
+    save_metadata_batch(
+        config,
+        {filename: item},
+        complete=complete,
+        fetched_at=fetched_at,
+    )
+
+
+def hydrate_tag_details(config: WayperConfig) -> dict[str, int]:
+    """Propagate known Wallhaven tag objects to legacy records with the same tag names."""
+    mf = config.metadata_file
+    with FileLock():
+        data = _read_metadata_file(mf)
+        catalog: dict[str, TagMetadata] = {}
+        for record in data.values():
+            if not isinstance(record, Mapping):
+                continue
+            details = extract_tag_details(record.get("tag_details"))
+            for detail in details:
+                key = normalize_tag(detail.get("name"))
+                if key:
+                    catalog[key] = {**catalog.get(key, {}), **detail}
+
+        changed_records = complete_records = 0
+        for record in data.values():
+            if not isinstance(record, dict):
+                continue
+            tags = extract_tag_names(record.get("tags"))
+            if not tags:
+                continue
+            current = {
+                normalize_tag(detail.get("name")): detail
+                for detail in extract_tag_details(record.get("tag_details"))
+            }
+            hydrated: list[TagMetadata | None] = []
+            for tag in tags:
+                key = normalize_tag(tag)
+                known = catalog.get(key)
+                existing = current.get(key)
+                if known and existing:
+                    hydrated.append({**known, **existing})
+                else:
+                    hydrated.append(existing or known)
+            available = [detail for detail in hydrated if detail is not None]
+            is_complete = len(available) == len(tags)
+            record_changed = False
+            if available and record.get("tag_details") != available:
+                record["tag_details"] = available
+                record["metadata_schema_version"] = METADATA_SCHEMA_VERSION
+                record_changed = True
+            if record.get("tag_details_complete") != is_complete:
+                record["tag_details_complete"] = is_complete
+                record_changed = True
+            changed_records += int(record_changed)
+            complete_records += int(is_complete)
+        if changed_records:
+            atomic_write(mf, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    return {
+        "known_tags": len(catalog),
+        "tag_complete_records": complete_records,
+        "changed_records": changed_records,
+    }
 
 
 def _read_metadata_file(path: Path) -> dict:

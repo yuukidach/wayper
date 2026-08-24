@@ -12,6 +12,7 @@ import click
 from .backend import notify
 from .config import load_config
 from .core import (
+    do_backfill_metadata,
     do_ban,
     do_dislike,
     do_fav,
@@ -19,6 +20,7 @@ from .core import (
     do_prev,
     do_unban,
     do_unfav,
+    metadata_backfill_status,
 )
 from .pool import favorite_filenames, should_download
 from .state import ALL_PURITIES, read_mode, toggle_base, toggle_purity, write_mode
@@ -292,6 +294,98 @@ def status(ctx):
             click.echo(f"    Pool: {m['pool_count']}, Favorites: {m['favorites_count']}")
 
 
+@cli.group("metadata")
+def metadata_group():
+    """Inspect and repair locally cached Wallhaven metadata."""
+
+
+@metadata_group.command("status")
+@click.option("--include-history", is_flag=True, help="Inspect every historical record.")
+@click.pass_context
+def metadata_status_cmd(ctx, include_history: bool):
+    """Show completeness of locally cached Wallhaven metadata."""
+    result = metadata_backfill_status(
+        ctx.obj["config"],
+        include_history=include_history,
+    )
+    if ctx.obj["json"]:
+        click.echo(json_mod.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        click.echo(
+            f"Metadata: {result['complete_records']}/{result['records']} complete; "
+            f"{result['missing_tag_inputs']} missing tag inputs, "
+            f"{result['incomplete_records']} need full details, "
+            f"{result['unavailable_records']} unavailable on last check"
+        )
+        click.echo(
+            "Tag details: "
+            f"{result['tag_details_complete_records']} complete, "
+            f"{result['partial_tag_detail_records']} partial, "
+            f"{result['missing_tag_detail_records']} missing"
+        )
+
+
+@metadata_group.command("backfill")
+@click.option(
+    "--include-history",
+    is_flag=True,
+    help="Include every historical metadata record, not only live/model-relevant images.",
+)
+@click.option(
+    "--missing-tags-only",
+    is_flag=True,
+    help="Fetch only records with no usable tags; leave legacy partial records for later.",
+)
+@click.option("--limit", type=click.IntRange(1), default=None, help="Process at most N records.")
+@click.option(
+    "--delay",
+    "delay_seconds",
+    type=click.FloatRange(0),
+    default=1.4,
+    show_default=True,
+    help="Delay between API requests; 1.4s stays below Wallhaven's documented rate limit.",
+)
+@click.pass_context
+def metadata_backfill_cmd(
+    ctx,
+    include_history: bool,
+    missing_tags_only: bool,
+    limit: int | None,
+    delay_seconds: float,
+):
+    """Backfill complete Wallhaven details for local images and preference labels."""
+    config = ctx.obj["config"]
+    use_json = ctx.obj["json"]
+
+    def progress(payload: dict[str, int]) -> None:
+        if not use_json:
+            click.echo(
+                "Metadata: "
+                f"{payload['attempted']}/{payload['targeted']} checked, "
+                f"{payload['updated']} updated, {payload['failed']} failed"
+            )
+
+    result = asyncio.run(
+        do_backfill_metadata(
+            config,
+            include_history=include_history,
+            missing_tags_only=missing_tags_only,
+            limit=limit,
+            delay_seconds=delay_seconds,
+            progress=progress,
+        )
+    )
+    if use_json:
+        click.echo(
+            json_mod.dumps({"action": result.action, "status": result.status, **result.extra})
+        )
+    else:
+        click.echo(
+            f"Metadata backfill {result.status}: {result.extra['updated']} updated, "
+            f"{result.extra['failed']} failed, {result.extra['remaining']} remaining"
+        )
+
+
 @cli.command()
 @click.option("--ai", "use_ai", is_flag=True, help="Use Codex for intelligent analysis.")
 @click.pass_context
@@ -383,16 +477,9 @@ def preference_model(ctx):
     show_default=True,
     help="Number of pair features; 0 uses the recommended tag-only model.",
 )
-@click.option(
-    "--validation-days",
-    type=click.IntRange(0),
-    default=14,
-    show_default=True,
-    help="Reserve this recent time window for a report-only validation pass.",
-)
 @click.option("--epochs", type=click.IntRange(1), default=6, show_default=True)
 @click.pass_context
-def train_preference_model_cmd(ctx, combo_min_support, max_combos, validation_days, epochs):
+def train_preference_model_cmd(ctx, combo_min_support, max_combos, epochs):
     """Train the lightweight local metadata preference model."""
     from .preference_model import (
         model_report,
@@ -407,7 +494,6 @@ def train_preference_model_cmd(ctx, combo_min_support, max_combos, validation_da
             config,
             combo_min_support=combo_min_support,
             max_combo_features=max_combos,
-            validation_days=validation_days,
             epochs=epochs,
         )
         path = preference_model_path(config)
@@ -433,7 +519,8 @@ def train_preference_model_cmd(ctx, combo_min_support, max_combos, validation_da
             "Training: "
             f"{training['banned']} banned, {training['retained']} retained "
             f"({training.get('controls', 0)} controls), "
-            f"{training['favorites']} / {training['favorite_files']} favorites with usable metadata"
+            f"{training.get('favorite_metadata_files', training['favorites'])} / "
+            f"{training['favorite_files']} favorites with usable metadata"
         )
         click.echo(
             f"Features: {report['tag_features']} tags, "
@@ -446,11 +533,7 @@ def train_preference_model_cmd(ctx, combo_min_support, max_combos, validation_da
                 f"{report.get('neighbor_prototypes', 0)} explicit prototypes, "
                 f"k={report.get('neighbor_k')}"
             )
-            click.echo(
-                "Review boundaries: "
-                f"Recommended >= {float(report.get('recommendation_threshold', 0.5)):.2f}, "
-                f"Auto-held >= {float(report.get('auto_filter_threshold', 0.8)):.2f}"
-            )
+            click.echo(f"Decision boundary: >= {float(report.get('decision_threshold', 0.8)):.3f}")
         else:
             click.echo("Content-neighbor head: waiting for explicit Keep/Dislike feedback")
         click.echo(f"Labels: {report.get('label_source', 'legacy')}")
@@ -467,23 +550,15 @@ def train_preference_model_cmd(ctx, combo_min_support, max_combos, validation_da
                 "unavailable" if status and str(status).startswith("unavailable") else "not trained"
             )
             click.echo(f"Semantic head: {semantic_label}")
-        validation = report["validation"]
-        if isinstance(validation, dict) and validation.get("available"):
+        calibration = report.get("decision_calibration")
+        if isinstance(calibration, dict) and calibration.get("available"):
             click.echo(
-                "Recent validation: "
-                f"precision {validation.get('precision_at_threshold')}, "
-                f"recall {validation.get('recall_at_threshold')} at threshold {model.threshold:.0%}"
-            )
-            click.echo(
-                "Automatic filtering safety gate: "
-                f"{'ready' if report['auto_skip_ready'] else 'not ready'}"
+                "Held-out calibration: "
+                f"precision {calibration.get('precision')}, "
+                f"recall {calibration.get('recall')}"
             )
         else:
-            reason = validation.get("reason") if isinstance(validation, dict) else None
-            click.echo(
-                "Recent validation: "
-                + ("disabled" if reason == "validation disabled" else "insufficient labelled data")
-            )
+            click.echo("Held-out calibration: insufficient labelled data")
 
 
 @preference_model.command("refresh", hidden=True)
@@ -538,7 +613,7 @@ def preference_model_status(ctx):
         if isinstance(training, dict):
             banned = training.get("banned")
             retained = training.get("retained")
-            favorites = training.get("favorites")
+            favorites = training.get("favorite_metadata_files", training.get("favorites"))
             favorite_files = training.get("favorite_files", favorites)
             if all(
                 isinstance(value, int) for value in (banned, retained, favorites, favorite_files)
@@ -564,11 +639,7 @@ def preference_model_status(ctx):
                 f"{report.get('neighbor_prototypes', 0)} explicit prototypes, "
                 f"k={report.get('neighbor_k')}"
             )
-            click.echo(
-                "Review boundaries: "
-                f"Recommended >= {float(report.get('recommendation_threshold', 0.5)):.2f}, "
-                f"Auto-held >= {float(report.get('auto_filter_threshold', 0.8)):.2f}"
-            )
+            click.echo(f"Decision boundary: >= {float(report.get('decision_threshold', 0.8)):.3f}")
         else:
             click.echo("Content-neighbor head: waiting for explicit Keep/Dislike feedback")
         click.echo(f"Labels: {report.get('label_source', 'legacy')}")
@@ -588,24 +659,15 @@ def preference_model_status(ctx):
                 else "not trained"
             )
             click.echo(f"Semantic head: {semantic_label}")
-        click.echo(f"Auto-skip threshold (not enabled by default): {model.threshold:.0%}")
-        validation = report["validation"]
-        if isinstance(validation, dict) and validation.get("available"):
+        calibration = report.get("decision_calibration")
+        if isinstance(calibration, dict) and calibration.get("available"):
             click.echo(
-                "Recent validation: "
-                f"precision {validation.get('precision_at_threshold')}, "
-                f"recall {validation.get('recall_at_threshold')} at threshold {model.threshold:.0%}"
+                "Held-out calibration: "
+                f"precision {calibration.get('precision')}, "
+                f"recall {calibration.get('recall')}"
             )
         else:
-            reason = validation.get("reason") if isinstance(validation, dict) else None
-            click.echo(
-                "Recent validation: "
-                + ("disabled" if reason == "validation disabled" else "insufficient labelled data")
-            )
-        click.echo(
-            "Automatic filtering safety gate: "
-            f"{'ready' if report['auto_skip_ready'] else 'not ready'}"
-        )
+            click.echo("Held-out calibration: insufficient labelled data")
         if learning["stale"]:
             click.echo(
                 "Online refresh: "
@@ -661,15 +723,14 @@ def preference_model_score(ctx, filename, tags):
         raise click.UsageError(message)
 
     from .preference_model import (
-        auto_skip_ready,
-        preference_recommendation_candidate,
-        preference_review_candidate,
+        preference_candidate,
+        preference_decision_score,
+        preference_decision_threshold,
     )
 
     prediction = model.predict(input_tags, metadata=input_metadata)
-    safe_to_skip = auto_skip_ready(model)
-    auto_hold_candidate = preference_review_candidate(model, prediction)
-    recommendation_candidate = preference_recommendation_candidate(model, prediction)
+    candidate = preference_candidate(model, prediction)
+    decision_score = preference_decision_score(model, prediction)
     result = {
         "filename": label,
         "probability": prediction.probability,
@@ -685,12 +746,14 @@ def preference_model_score(ctx, filename, tags):
         "neighbor_dislike_count": prediction.neighbor_dislike_count,
         "neighbor_keep_count": prediction.neighbor_keep_count,
         "neighbor_max_similarity": prediction.neighbor_max_similarity,
+        "neighbor_exact_max_similarity": prediction.neighbor_exact_max_similarity,
+        "neighbor_semantic_max_similarity": prediction.neighbor_semantic_max_similarity,
+        "neighbor_preference_gap": prediction.neighbor_preference_gap,
         "neighbor_nearest_dislike": prediction.neighbor_nearest_dislike,
         "neighbor_nearest_keep": prediction.neighbor_nearest_keep,
-        "threshold": model.threshold,
-        "would_skip": safe_to_skip and prediction.probability >= model.threshold,
-        "would_auto_hold": auto_hold_candidate,
-        "would_recommend": recommendation_candidate,
+        "decision_score": decision_score,
+        "decision_threshold": preference_decision_threshold(model),
+        "would_auto_hold": candidate,
         "contributions": list(prediction.contributions),
         "dislike_evidence": [
             item for item in prediction.contributions if item.get("direction") == "dislike"
@@ -714,11 +777,9 @@ def preference_model_score(ctx, filename, tags):
                 f"{prediction.neighbor_keep_count} Keep neighbours)"
             )
         click.echo(
-            "Model lanes: "
-            f"Auto-held {'yes' if auto_hold_candidate else 'no'}, "
-            f"Recommended {'yes' if recommendation_candidate else 'no'}"
+            f"Semantic decision: {'candidate' if candidate else 'keep'} "
+            f"({decision_score:.1%} / {preference_decision_threshold(model):.1%})"
         )
-        click.echo(f"Automatic skip safety gate: {'ready' if safe_to_skip else 'not ready'}")
         if prediction.contributions:
             click.echo("Top evidence:")
             for contribution in prediction.contributions:

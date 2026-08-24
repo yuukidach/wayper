@@ -387,10 +387,8 @@ def _model_review_item_details(
         "schema_version",
         "feature_normalization",
         "trained_at",
-        "review_threshold",
-        "auto_filter_threshold",
-        "recommendation_threshold",
-        "auto_filter_threshold_kind",
+        "decision_threshold",
+        "decision_strategy",
     ):
         value = model.get(key)
         if isinstance(value, str | int | float | bool):
@@ -398,11 +396,7 @@ def _model_review_item_details(
     for key in (
         "score",
         "feature_score",
-        "review_score",
         "decision_score",
-        "hybrid_score",
-        "strongest_review_dislike_score",
-        "strongest_review_keep_score",
         "semantic_score",
         "semantic_probability",
         "semantic_available",
@@ -413,8 +407,9 @@ def _model_review_item_details(
         "neighbor_keep_count",
         "neighbor_similarity_sum",
         "neighbor_max_similarity",
-        "ranking_source",
-        "recommendation_score",
+        "neighbor_exact_max_similarity",
+        "neighbor_semantic_max_similarity",
+        "neighbor_preference_gap",
         "probability",
         "calibrated",
         "rank",
@@ -474,10 +469,9 @@ def _model_review_feedback(config: WayperConfig, image: Path) -> dict[str, objec
         from wayper.preference_model import (
             load_preference_model,
             model_report,
+            preference_candidate,
+            preference_decision_score,
             preference_model_path,
-            preference_recommendation_candidate,
-            preference_review_decision_score,
-            preference_review_score,
         )
 
         model_path = preference_model_path(config)
@@ -485,12 +479,11 @@ def _model_review_feedback(config: WayperConfig, image: Path) -> dict[str, objec
         if model is None:
             return None
         prediction = model.predict(metadata.get("tags", []), metadata=metadata, top_n=20)
-        if not preference_recommendation_candidate(model, prediction):
+        if not preference_candidate(model, prediction):
             return None
         item = {
             **prediction.to_dict(),
-            "review_score": preference_review_score(prediction),
-            "decision_score": preference_review_decision_score(model, prediction),
+            "decision_score": preference_decision_score(model, prediction),
         }
         return _model_review_item_details(model_report(model, model_path), item)
     except Exception:
@@ -589,14 +582,13 @@ def _preference_learning_payload(
         if fast:
             from wayper.preference_model import (
                 AUTO_RETRAIN_MIN_FEEDBACK,
-                load_preference_feedback,
+                _current_feedback_revision,
                 load_preference_model,
                 preference_model_path,
             )
 
             model = load_preference_model(preference_model_path(config))
-            feedback = load_preference_feedback(config)
-            revision = int(feedback.get("revision", 0))
+            revision = _current_feedback_revision(config)
             previous = int(model.training_summary.get("feedback_revision", 0)) if model else 0
             pending = max(0, revision - previous)
             return {

@@ -134,6 +134,8 @@ wayper suggest --ai        # 通过 Codex CLI 进行 AI 分析
 wayper model train         # 训练轻量的本地元数据排序模型
 wayper model score --tags "tag1,tag2"  # 解释本地“不喜欢”评分
 wayper model status        # 查看已保存模型和近期验证结果
+wayper metadata status     # 查看本地 Wallhaven 元数据完整度
+wayper metadata backfill   # 可续跑地补齐图片和 tag 完整详情
 wayper status               # 查看当前状态
 wayper-gui                  # GUI 应用 + 托盘后台自动换壁纸
 wayper setup                # 安装 .desktop（Linux）
@@ -141,14 +143,20 @@ wayper --json status        # JSON 格式输出
 ```
 
 `wayper model train` 只根据本地 Wallhaven 元数据（规范化 tag、颜色/分类/纯度）训练，
-不会打开图片或读取像素。基础模型只依赖 Python 标准库；安装
-`uv pip install -e '.[semantic]'` 可启用 FastEmbed 的 `BAAI/bge-small-en-v1.5` 文本 head，
-embedding 只来自元数据并保存在本地。
+不会打开图片或读取像素。FastEmbed 随 Wayper 安装；首次使用时会下载并缓存
+`BAAI/bge-small-en-v1.5` tag 模型，用于提供语义路径。
+每条明确的 Keep/Dislike 都会保留在 KNN 邻居库中：先用 IDF 加权 pooled embedding 矩阵粗召回，
+再只对候选结合精确 tag 重合、逐 tag MaxSim、分类/颜色/纯度上下文和平衡的 Keep/Dislike 证据细排。
+全局 sparse+dense 分类头最多拟合 2,048 条类别均衡且偏近期的工作样本，但不会截断 KNN 的历史记忆。
+最终决策保留 80% 的局部对比投票，并融合 20% 的全局偏好概率；随后使用最多 640 条独立决策校准出的
+单一阈值，目标精确率不低于 80%。embedding 只来自元数据并缓存在本地。
+新下载会保存 Wallhaven 的完整 tag 对象；旧的活跃及模型相关记录可通过
+`wayper metadata backfill` 在遵守 API 限速的前提下补齐。
 
 在还没有 **Review** 反馈时，Wayper 可以暂时用旧的黑名单/收藏数据启动。第一次 Review 决策或手动
 **Dislike** 之后，新的训练标签只来自明确的 Keep/Dislike；**Ban** 仍只是单图拉黑。仅出现在图库中的图片
-不会被当成「喜欢」。模型会学习相近的元数据，把疑似拉黑项放入可恢复的队列并给出推荐；它不会自动修改黑名单，
-积累足够反馈后会在本地刷新。
+不会被当成「喜欢」。在明确的两类反馈和独立校准都可用前，模型过滤保持关闭。就绪后模型会学习相近的元数据，
+把疑似拉黑项放入可恢复的队列并给出推荐；它不会自动修改黑名单，积累足够反馈后会在本地刷新。
 
 打开 **Review** 来教模型。侧边栏可为新下载选择 `Rules`、`Model` 或 `Both`（`Rules + model`）。
 **Auto-held** 是被模型暂存的下载，**Recommended** 是图库中可能需要拉黑的图片，Auto-held 会优先显示。

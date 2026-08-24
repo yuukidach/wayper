@@ -2,39 +2,41 @@
 
 from __future__ import annotations
 
+import heapq
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 
 from ..tags import normalize_tag
 
-# Schema 4 adds a bounded, persisted content-neighbour head.  Keep the older
-# values named explicitly: model files are user data and must remain readable
-# across upgrades so a background refresh can replace them safely.
-MODEL_SCHEMA_VERSION = 4
+# Schema 4 adds a bounded, persisted content-neighbour head. Schema 5 retains
+# normalized tag text on each prototype for two-stage semantic retrieval. Schema 6
+# removes the old exact-only and sparse fallback decisions and uses one calibrated
+# boundary for the semantic two-stage strategy. Older model files remain readable so
+# the background refresh can replace them safely, but they are never used for actions.
+MODEL_SCHEMA_VERSION = 6
 LEGACY_MODEL_SCHEMA_VERSION = 1
 SPARSE_MODEL_SCHEMA_VERSION = 2
 CALIBRATED_MODEL_SCHEMA_VERSION = 3
+CONTENT_NEIGHBOR_MODEL_SCHEMA_VERSION = 4
+TAG_SEMANTIC_MODEL_SCHEMA_VERSION = 5
 DEFAULT_COMBO_MIN_SUPPORT = 20
 DEFAULT_MAX_COMBO_FEATURES = 0
 DEFAULT_UPLOADER_MIN_SUPPORT = 10
 DEFAULT_EPOCHS = 6
-DEFAULT_THRESHOLD = 0.98
-# Review decisions are recoverable, but false positives still create manual
-# work.  New models replace this fallback with a boundary learned from held-out
-# Keep/Dislike decisions.
-DEFAULT_REVIEW_THRESHOLD = 0.20
-DEFAULT_REVIEW_DISLIKE_BOOST = 1.5
 DEFAULT_NEIGHBOR_K = 35
-DEFAULT_NEIGHBOR_MAX_PROTOTYPES = 2048
+DEFAULT_TRAINING_MAX_EXAMPLES = 2048
 DEFAULT_NEIGHBOR_MIN_SIMILARITY = 0.15
-DEFAULT_RECOMMENDATION_THRESHOLD = 0.50
-# This is a probability boundary, unlike DEFAULT_REVIEW_THRESHOLD which is a
-# legacy sparse-logit margin.  It is deliberately conservative and is replaced
-# by a held-out boundary when enough explicit feedback exists.
-DEFAULT_AUTO_FILTER_NEIGHBOR_THRESHOLD = 0.80
-NEIGHBOR_HEAD_SCHEMA_VERSION = 1
+# New models replace this conservative fallback with a boundary calibrated on
+# unseen Keep/Dislike decisions.
+DEFAULT_DECISION_THRESHOLD = 0.80
+# The class-balanced MaxSim vote remains the primary signal. A small share of
+# the global sparse+dense probability recovers consistent preference evidence
+# that no single local neighbour expresses.
+DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT = 0.80
+NEIGHBOR_HEAD_SCHEMA_VERSION = 2
+LEGACY_NEIGHBOR_HEAD_SCHEMA_VERSION = 1
 DEFAULT_FAVORITE_WEIGHT = 4.0
 DEFAULT_RECENCY_HALF_LIFE_DAYS = 90
 DEFAULT_FEATURE_NORMALIZATION = "field_l2"
@@ -43,7 +45,6 @@ MIN_VALIDATION_PER_CLASS = 5
 
 _PAIR_SEPARATOR = "\x1f"
 _CONTEXT_FIELDS = frozenset({"color", "category", "purity", "uploader"})
-_BROAD_REVIEW_FEATURE_TYPES = frozenset({"color", "purity"})
 _NON_PREFERENCE_FEATURE_TAGS = frozenset(
     {
         "portrait",
@@ -72,6 +73,9 @@ class PreferenceExample:
     context_features: tuple[str, ...] = ()
     is_control: bool = False
     is_explicit_ban: bool = False
+    # ``(normalized tag, embedding text)`` pairs retain aliases/categories
+    # without changing the stable exact-tag feature space.
+    semantic_tags: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -86,6 +90,7 @@ class PreferenceTrainingSnapshot:
     # candidates; once curated feedback exists, snapshots switch to explicit
     # Review and manual-Dislike labels.
     label_source: str = "legacy"
+    favorite_metadata_files: int = 0
 
 
 @dataclass(frozen=True)
@@ -107,10 +112,6 @@ class PreferencePrediction:
     positive_evidence_count: int = 0
     feature_score: float = 0.0
     calibrated: bool = False
-    strongest_review_dislike_score: float = 0.0
-    strongest_review_dislike: dict[str, object] | None = None
-    strongest_review_keep_score: float = 0.0
-    strongest_review_keep: dict[str, object] | None = None
     semantic_score: float | None = None
     semantic_probability: float | None = None
     semantic_available: bool = False
@@ -126,14 +127,15 @@ class PreferencePrediction:
     neighbor_max_similarity: float = 0.0
     neighbor_nearest_dislike: dict[str, object] | None = None
     neighbor_nearest_keep: dict[str, object] | None = None
+    neighbor_exact_max_similarity: float = 0.0
+    neighbor_semantic_max_similarity: float = 0.0
+    neighbor_preference_gap: float = 0.0
 
     def to_dict(self) -> dict[str, object]:
         dislike_evidence = [
-            item for item in self.contributions if _contribution_direction(item) == "dislike"
+            item for item in self.contributions if item.get("direction") == "dislike"
         ]
-        keep_evidence = [
-            item for item in self.contributions if _contribution_direction(item) == "keep"
-        ]
+        keep_evidence = [item for item in self.contributions if item.get("direction") == "keep"]
         return {
             "probability": round(self.probability, 4),
             "score": round(self.score, 4),
@@ -143,13 +145,6 @@ class PreferencePrediction:
             "keep_evidence": keep_evidence,
             "positive_evidence_count": self.positive_evidence_count,
             "calibrated": self.calibrated,
-            "strongest_review_dislike_score": round(
-                self.strongest_review_dislike_score,
-                4,
-            ),
-            "strongest_review_dislike": self.strongest_review_dislike,
-            "strongest_review_keep_score": round(self.strongest_review_keep_score, 4),
-            "strongest_review_keep": self.strongest_review_keep,
             "semantic_score": (
                 round(self.semantic_score, 4) if self.semantic_score is not None else None
             ),
@@ -172,6 +167,15 @@ class PreferencePrediction:
             "neighbor_max_similarity": round(self.neighbor_max_similarity, 4),
             "neighbor_nearest_dislike": self.neighbor_nearest_dislike,
             "neighbor_nearest_keep": self.neighbor_nearest_keep,
+            "neighbor_exact_max_similarity": round(
+                self.neighbor_exact_max_similarity,
+                4,
+            ),
+            "neighbor_semantic_max_similarity": round(
+                self.neighbor_semantic_max_similarity,
+                4,
+            ),
+            "neighbor_preference_gap": round(self.neighbor_preference_gap, 4),
         }
 
 
@@ -183,129 +187,61 @@ class PreferenceNeighborPrototype:
     label: int
     timestamp: int
     features: tuple[tuple[str, float], ...]
+    tags: tuple[str, ...] = ()
+    context_features: tuple[str, ...] = ()
+    semantic_tags: tuple[tuple[str, str], ...] = ()
 
 
-def preference_review_score(prediction: PreferencePrediction) -> float:
-    """Return the sparse review margin after a guarded dislike boost.
+@dataclass(frozen=True)
+class _SemanticNeighborRuntime:
+    """Process-local dense data derived from persisted prototype tag text."""
 
-    Several individually mild keep signals may otherwise erase one learned
-    veto.  The strongest comparable keep signal reduces the boost first, so a
-    stronger keep pattern still protects the image.
-    """
-    dislike = prediction.strongest_review_dislike_score
-    keep = prediction.strongest_review_keep_score
-    boost = DEFAULT_REVIEW_DISLIKE_BOOST * max(0.0, dislike - keep)
-    return prediction.feature_score + boost
+    idf: dict[str, float]
+    items: tuple[tuple[tuple[str, str], ...], ...]
+    pooled_matrix: object
+    label_indices: tuple[object, object]
+    tiebreak_rank: object
 
 
-def preference_review_decision_score(
+def preference_decision_score(
     model: PreferenceModel,
     prediction: PreferencePrediction,
 ) -> float:
-    """Return the score used by the conservative automatic boundary.
-
-    New models use the calibrated content-neighbour probability whenever the
-    query has neighbour coverage.  Legacy/cold-start predictions retain the
-    explainable sparse margin so old callers and models continue to work.
-    """
-    if prediction.neighbor_available and prediction.neighbor_probability is not None:
-        return prediction.neighbor_probability
-    semantic = (
-        model.semantic_blend * prediction.semantic_score
-        if prediction.semantic_available and prediction.semantic_score is not None
-        else 0.0
+    """Blend the validated local MaxSim vote with the global preference score."""
+    if not prediction.neighbor_available or prediction.neighbor_probability is None:
+        return 0.0
+    return (
+        DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT * prediction.neighbor_probability
+        + (1.0 - DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT) * prediction.probability
     )
-    return preference_review_score(prediction) + semantic
 
 
-def preference_review_threshold(model: PreferenceModel) -> float:
-    """Return the automatic boundary (legacy name retained for API clients)."""
-    value = model.training_summary.get("auto_filter_threshold")
-    if not isinstance(value, int | float) or isinstance(value, bool) or not math.isfinite(value):
-        value = model.training_summary.get("review_threshold")
+def preference_decision_threshold(model: PreferenceModel) -> float:
+    """Return the one calibrated boundary shared by review and filtering."""
+    value = model.training_summary.get("decision_threshold")
     if isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value):
-        boundary = float(value)
-        return (
-            max(DEFAULT_RECOMMENDATION_THRESHOLD, boundary)
-            if model.neighbor_head_ready
-            else boundary
-        )
+        return min(1.0, max(0.0, float(value)))
+    return DEFAULT_DECISION_THRESHOLD
+
+
+def _has_dislike_neighbor_evidence(prediction: PreferencePrediction) -> bool:
+    """Require concrete two-stage evidence before applying the boundary."""
     return (
-        DEFAULT_AUTO_FILTER_NEIGHBOR_THRESHOLD
-        if model.neighbor_head_ready
-        else DEFAULT_REVIEW_THRESHOLD
+        prediction.neighbor_available
+        and prediction.neighbor_probability is not None
+        and prediction.neighbor_max_similarity >= DEFAULT_NEIGHBOR_MIN_SIMILARITY
+        and prediction.neighbor_dislike_count > 0
     )
 
 
-def preference_review_has_dislike_evidence(prediction: PreferencePrediction) -> bool:
-    """Require concrete evidence for the conservative automatic boundary."""
-    if prediction.neighbor_available:
-        return (
-            prediction.neighbor_max_similarity >= DEFAULT_NEIGHBOR_MIN_SIMILARITY
-            and prediction.neighbor_dislike_count > 0
-            and bool(prediction.neighbor_probability is not None)
-        )
-    return prediction.strongest_review_dislike_score > 0 or bool(
-        prediction.semantic_available
-        and prediction.semantic_score is not None
-        and prediction.semantic_score > 0
-    )
-
-
-def preference_recommendation_candidate(
+def preference_candidate(
     model: PreferenceModel,
     prediction: PreferencePrediction,
 ) -> bool:
-    """Return whether a prediction belongs in the human Recommended lane.
-
-    Recommended is an active-learning queue: a bounded rank is useful even
-    when it would not clear an unattended-action boundary.  A neighbour head
-    therefore uses a modest majority vote and requires at least one explicit
-    Dislike neighbour.  Queries with no neighbour coverage use the sparse
-    explainable head as a cold-start fallback, with the fixed recoverable
-    margin rather than the high-precision automatic threshold.
-    """
-    if prediction.neighbor_available and prediction.neighbor_probability is not None:
-        return (
-            prediction.neighbor_dislike_count > 0
-            and prediction.neighbor_max_similarity >= DEFAULT_NEIGHBOR_MIN_SIMILARITY
-            and prediction.neighbor_probability >= DEFAULT_RECOMMENDATION_THRESHOLD
-        )
-    return (
-        prediction.strongest_review_dislike_score > 0
-        or bool(
-            prediction.semantic_available
-            and prediction.semantic_score is not None
-            and prediction.semantic_score > 0
-        )
-    ) and preference_review_decision_score(model, prediction) >= DEFAULT_REVIEW_THRESHOLD
-
-
-def preference_review_candidate(
-    model: PreferenceModel,
-    prediction: PreferencePrediction,
-) -> bool:
-    """Classify one prediction with the conservative automatic boundary.
-
-    This compatibility entry point is used by download filtering.  Human
-    recommendations must call :func:`preference_recommendation_candidate`.
-    """
-    # Once a persisted neighbour head exists, an uncovered query must fail
-    # open.  Falling back to the sparse margin here would silently turn the
-    # recommendation cold-start path into an automatic action.
-    if model.neighbor_head_ready and not prediction.neighbor_available:
-        return False
-    return preference_review_has_dislike_evidence(prediction) and (
-        preference_review_decision_score(model, prediction) >= preference_review_threshold(model)
+    """Apply the sole semantic two-stage decision policy."""
+    return _has_dislike_neighbor_evidence(prediction) and (
+        preference_decision_score(model, prediction) >= preference_decision_threshold(model)
     )
-
-
-def _contribution_direction(value: object) -> str | None:
-    """Read an explanation direction while tolerating legacy string items."""
-    if isinstance(value, dict):
-        direction = value.get("direction")
-        return direction if direction in {"dislike", "keep"} else None
-    return "dislike" if isinstance(value, str) else None
 
 
 @dataclass
@@ -316,10 +252,8 @@ class PreferenceModel:
     prior_log_odds: float
     tag_weights: dict[str, float]
     combo_weights: dict[str, float]
-    threshold: float
     trained_at: str
     training_summary: dict[str, object]
-    validation: dict[str, object]
     combo_min_support: int
     max_combo_features: int
     context_weights: dict[str, float] = dataclass_field(default_factory=dict)
@@ -329,11 +263,22 @@ class PreferenceModel:
     semantic_bias: float = 0.0
     semantic_weights: tuple[float, ...] = ()
     semantic_blend: float = 0.0
-    semantic_rank_weight: float = 0.0
     neighbor_k: int = DEFAULT_NEIGHBOR_K
     neighbor_prototypes: tuple[PreferenceNeighborPrototype, ...] = ()
-    _neighbor_feature_index: dict[str, tuple[tuple[int, float], ...]] | None = dataclass_field(
+    _neighbor_feature_index: dict[str, tuple[object, object]] | None = dataclass_field(
         default=None, init=False, repr=False, compare=False
+    )
+    _semantic_neighbor_runtime: _SemanticNeighborRuntime | None = dataclass_field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _semantic_neighbor_failed: bool = dataclass_field(
+        default=False,
+        init=False,
+        repr=False,
+        compare=False,
     )
 
     @property
@@ -355,83 +300,365 @@ class PreferenceModel:
         labels = {prototype.label for prototype in self.neighbor_prototypes}
         return labels == {0, 1} and self.neighbor_k > 0
 
-    def _neighbor_index(self) -> dict[str, tuple[tuple[int, float], ...]]:
-        """Build a reusable sparse inverted index for cosine overlap."""
+    def _neighbor_index(self) -> dict[str, tuple[object, object]]:
+        """Build compact full-label postings for exact-overlap retrieval."""
         if self._neighbor_feature_index is not None:
             return self._neighbor_feature_index
+        import numpy as np
+
         postings: dict[str, list[tuple[int, float]]] = {}
         for index, prototype in enumerate(self.neighbor_prototypes):
             for feature, value in prototype.features:
                 postings.setdefault(feature, []).append((index, value))
         self._neighbor_feature_index = {
-            feature: tuple(values) for feature, values in postings.items()
+            feature: (
+                np.fromiter(
+                    (index for index, _ in entries),
+                    dtype=np.int32,
+                    count=len(entries),
+                ),
+                np.fromiter(
+                    (value for _, value in entries),
+                    dtype=np.float64,
+                    count=len(entries),
+                ),
+            )
+            for feature, entries in postings.items()
         }
         return self._neighbor_feature_index
 
-    def _predict_neighbors(
+    def _exact_neighbor_scores(
         self,
         tags: Iterable[object],
         context_features: Iterable[object] | None,
-    ) -> dict[str, object]:
-        """Return a similarity-weighted explicit-label vote for one query."""
+    ) -> object | None:
+        """Return full-label exact cosine scores in a compact NumPy vector."""
         if not self.neighbor_head_ready:
-            return {}
+            return None
         query = _neighbor_feature_values(tags, context_features)
         if not query:
-            return {}
-        scores: dict[int, float] = {}
+            return None
+        import numpy as np
+
+        scores = np.zeros(len(self.neighbor_prototypes), dtype=np.float64)
         postings = self._neighbor_index()
         for feature, query_value in query:
-            for prototype_index, prototype_value in postings.get(feature, ()):
-                scores[prototype_index] = (
-                    scores.get(prototype_index, 0.0) + query_value * prototype_value
-                )
-        neighbors = sorted(
-            (
-                (min(1.0, similarity), self.neighbor_prototypes[index])
-                for index, similarity in scores.items()
-                if similarity > 0
-            ),
-            key=lambda item: (
-                -item[0],
-                -item[1].timestamp,
-                item[1].filename,
-                item[1].label,
-            ),
-        )[: self.neighbor_k]
-        if not neighbors:
-            return {}
-        similarity_sum = sum(similarity for similarity, _ in neighbors)
-        if similarity_sum <= 0:
-            return {}
-        dislike_similarity = sum(
-            similarity for similarity, prototype in neighbors if prototype.label == 1
-        )
-        dislike_neighbors = [item for item in neighbors if item[1].label == 1]
-        keep_neighbors = [item for item in neighbors if item[1].label == 0]
+            posting = postings.get(feature)
+            if posting is None:
+                continue
+            prototype_indices, prototype_values = posting
+            scores[prototype_indices] += query_value * prototype_values
+        return scores
 
-        def evidence(
-            item: tuple[float, PreferenceNeighborPrototype] | None,
-        ) -> dict[str, object] | None:
+    def _semantic_runtime(self) -> _SemanticNeighborRuntime:
+        """Build and cache prototype tag vectors for two-stage retrieval."""
+        if self._semantic_neighbor_runtime is not None:
+            return self._semantic_neighbor_runtime
+        if self._semantic_neighbor_failed:
+            raise RuntimeError("semantic neighbour runtime is unavailable")
+        try:
+            from .semantic import embed_pooled_tag_sets, semantic_idf, semantic_tag_text
+
+            records = [
+                tuple(prototype.semantic_tags)
+                or tuple((tag, semantic_tag_text(tag)) for tag in prototype.tags)
+                for prototype in self.neighbor_prototypes
+            ]
+            idf = semantic_idf(records)
+            pooled_matrix = embed_pooled_tag_sets(
+                records,
+                model_name=self.semantic_model,
+                idf=idf,
+            )
+            if len(pooled_matrix.shape) != 2 or not pooled_matrix.shape[1]:
+                raise RuntimeError("semantic prototypes produced no vectors")
+            import numpy as np
+
+            labels = np.asarray(
+                [prototype.label for prototype in self.neighbor_prototypes],
+                dtype=np.int8,
+            )
+            tiebreak_order = sorted(
+                range(len(self.neighbor_prototypes)),
+                key=lambda index: (
+                    -self.neighbor_prototypes[index].timestamp,
+                    self.neighbor_prototypes[index].filename,
+                ),
+            )
+            tiebreak_rank = np.empty(len(tiebreak_order), dtype=np.int32)
+            tiebreak_rank[tiebreak_order] = np.arange(len(tiebreak_order), dtype=np.int32)
+            self._semantic_neighbor_runtime = _SemanticNeighborRuntime(
+                idf=idf,
+                items=tuple(records),
+                pooled_matrix=pooled_matrix,
+                label_indices=(np.flatnonzero(labels == 0), np.flatnonzero(labels == 1)),
+                tiebreak_rank=tiebreak_rank,
+            )
+            return self._semantic_neighbor_runtime
+        except Exception:
+            self._semantic_neighbor_failed = True
+            raise
+
+    def _predict_semantic_neighbors_many(
+        self,
+        records: Sequence[
+            tuple[
+                tuple[str, ...],
+                dict[str, object] | None,
+                tuple[str, ...],
+            ]
+        ],
+    ) -> list[tuple[dict[str, object] | None, object | None]]:
+        """Run both semantic stages and return each reusable pooled query vector."""
+        if not records or not self.semantic_enabled or not self.neighbor_head_ready:
+            return [(None, None)] * len(records)
+        try:
+            from .semantic import embed_tag_sets, semantic_items_with_context, semantic_tag_items
+
+            runtime = self._semantic_runtime()
+            query_items = [semantic_tag_items(tags, metadata) for tags, metadata, _ in records]
+            dense_items = [
+                semantic_items_with_context(semantic_tag_items(tags), context)
+                for tags, _, context in records
+            ]
+            embedded_sets = embed_tag_sets(
+                [*query_items, *dense_items],
+                model_name=self.semantic_model,
+                idf=runtime.idf,
+            )
+            query_sets = embedded_sets[: len(query_items)]
+            dense_sets = embedded_sets[len(query_items) :]
+            prototype_rows = runtime.pooled_matrix
+            import numpy as np
+
+            dimension = int(prototype_rows.shape[1])
+            query_matrix = np.asarray(
+                [
+                    query_set.pooled
+                    if len(query_set.pooled) == dimension
+                    else np.zeros(dimension, dtype=np.float32)
+                    for query_set in query_sets
+                ],
+                dtype=np.float32,
+            )
+            coarse_scores = query_matrix @ prototype_rows.T
+            return [
+                (
+                    self._fine_semantic_neighbor_vote(
+                        query_set,
+                        context,
+                        self._exact_neighbor_scores(tags, context),
+                        coarse_scores[index],
+                        runtime,
+                    ),
+                    dense_set.pooled,
+                )
+                for index, ((tags, _, context), query_set, dense_set) in enumerate(
+                    zip(records, query_sets, dense_sets, strict=True)
+                )
+            ]
+        except Exception:
+            self._semantic_neighbor_failed = True
+            return [(None, None)] * len(records)
+
+    def _fine_semantic_neighbor_vote(
+        self,
+        query_set: object,
+        query_context: tuple[str, ...],
+        exact_scores: object | None,
+        coarse_scores: object,
+        runtime: _SemanticNeighborRuntime,
+    ) -> dict[str, object] | None:
+        """Fuse exact overlap, tag MaxSim, and context for class-balanced voting."""
+        import numpy as np
+
+        from .semantic import (
+            SEMANTIC_COARSE_PER_CLASS,
+            SEMANTIC_CONTEXT_WEIGHT,
+            SEMANTIC_EXACT_PER_CLASS,
+            SEMANTIC_EXACT_WEIGHT,
+            SEMANTIC_FINE_PER_CLASS,
+            SEMANTIC_TAG_WEIGHT,
+            embed_tag_sets,
+            tag_maxsim,
+            weighted_tag_jaccard,
+        )
+
+        semantic_values = np.asarray(coarse_scores, dtype=np.float32)
+        exact_values = (
+            np.asarray(exact_scores, dtype=np.float64) if exact_scores is not None else None
+        )
+        candidate_indices: set[int] = set()
+        for label in (0, 1):
+            label_indices = runtime.label_indices[label]
+            positive_indices = label_indices[semantic_values[label_indices] > 0]
+            if len(positive_indices) > SEMANTIC_COARSE_PER_CLASS:
+                local_scores = semantic_values[positive_indices]
+                top_positions = np.argpartition(
+                    local_scores,
+                    -SEMANTIC_COARSE_PER_CLASS,
+                )[-SEMANTIC_COARSE_PER_CLASS:]
+                positive_indices = positive_indices[top_positions]
+            semantic_rank = sorted(
+                (int(index) for index in positive_indices),
+                key=lambda index: (
+                    -float(semantic_values[index]),
+                    -self.neighbor_prototypes[index].timestamp,
+                    self.neighbor_prototypes[index].filename,
+                ),
+            )[:SEMANTIC_COARSE_PER_CLASS]
+            exact_rank: list[int] = []
+            if exact_values is not None:
+                positive_exact = label_indices[exact_values[label_indices] > 0]
+                exact_rank = self._top_exact_neighbors(
+                    exact_values,
+                    positive_exact,
+                    runtime.tiebreak_rank,
+                    SEMANTIC_EXACT_PER_CLASS,
+                )
+            candidate_indices.update(semantic_rank)
+            candidate_indices.update(exact_rank)
+
+        ordered_indices = sorted(candidate_indices)
+        prototype_sets = embed_tag_sets(
+            [runtime.items[index] for index in ordered_indices],
+            model_name=self.semantic_model,
+            idf=runtime.idf,
+        )
+        tag_sets_by_index = dict(zip(ordered_indices, prototype_sets, strict=True))
+        fine: list[dict[str, object]] = []
+        for index in ordered_indices:
+            prototype = self.neighbor_prototypes[index]
+            prototype_set = tag_sets_by_index[index]
+            semantic_score, matches = tag_maxsim(query_set, prototype_set, runtime.idf)
+            exact_score = weighted_tag_jaccard(
+                query_set.items,
+                prototype_set.items,
+                runtime.idf,
+            )
+            context_score = _semantic_context_similarity(
+                query_context,
+                prototype.context_features,
+            )
+            similarity = (
+                SEMANTIC_EXACT_WEIGHT * exact_score
+                + SEMANTIC_TAG_WEIGHT * semantic_score
+                + SEMANTIC_CONTEXT_WEIGHT * context_score
+            )
+            if similarity <= 0.12:
+                continue
+            fine.append(
+                {
+                    "prototype": prototype,
+                    "similarity": min(1.0, similarity),
+                    "exact_similarity": exact_score,
+                    "semantic_similarity": semantic_score,
+                    "context_similarity": context_score,
+                    "matches": matches,
+                }
+            )
+
+        selected_by_label: dict[int, list[dict[str, object]]] = {}
+        for label in (0, 1):
+            selected_by_label[label] = sorted(
+                (item for item in fine if item["prototype"].label == label),
+                key=lambda item: (
+                    -float(item["similarity"]),
+                    -item["prototype"].timestamp,
+                    item["prototype"].filename,
+                ),
+            )[:SEMANTIC_FINE_PER_CLASS]
+        dislike_neighbors = selected_by_label[1]
+        keep_neighbors = selected_by_label[0]
+        if not dislike_neighbors and not keep_neighbors:
+            return None
+
+        def evidence_mass(items: list[dict[str, object]]) -> float:
+            if not items:
+                return 0.0
+            return sum(max(0.0, float(item["similarity"]) - 0.12) ** 2 for item in items) / len(
+                items
+            )
+
+        dislike_mass = evidence_mass(dislike_neighbors)
+        keep_mass = evidence_mass(keep_neighbors)
+        mass_total = dislike_mass + keep_mass
+        if mass_total <= 0:
+            return None
+
+        def evidence(item: dict[str, object] | None) -> dict[str, object] | None:
             if item is None:
                 return None
-            similarity, prototype = item
+            prototype = item["prototype"]
             return {
                 "filename": prototype.filename,
                 "label": "dislike" if prototype.label else "keep",
-                "similarity": round(similarity, 4),
+                "similarity": round(float(item["similarity"]), 4),
+                "exact_similarity": round(float(item["exact_similarity"]), 4),
+                "semantic_similarity": round(float(item["semantic_similarity"]), 4),
+                "context_similarity": round(float(item["context_similarity"]), 4),
+                "tag_matches": [
+                    {
+                        "query": left,
+                        "prototype": right,
+                        "similarity": round(score, 4),
+                    }
+                    for left, right, score in item["matches"]
+                ],
             }
 
+        combined = dislike_neighbors + keep_neighbors
+        max_similarity = max(float(item["similarity"]) for item in combined)
+        exact_max = max(float(item["exact_similarity"]) for item in combined)
+        semantic_max = max(float(item["semantic_similarity"]) for item in combined)
+        dislike_best = float(dislike_neighbors[0]["similarity"]) if dislike_neighbors else 0.0
+        keep_best = float(keep_neighbors[0]["similarity"]) if keep_neighbors else 0.0
         return {
-            "probability": dislike_similarity / similarity_sum,
-            "count": len(neighbors),
+            "probability": dislike_mass / mass_total,
+            "count": len(combined),
             "dislike_count": len(dislike_neighbors),
             "keep_count": len(keep_neighbors),
-            "similarity_sum": similarity_sum,
-            "max_similarity": neighbors[0][0],
+            "similarity_sum": sum(float(item["similarity"]) for item in combined),
+            "max_similarity": max_similarity,
             "nearest_dislike": evidence(dislike_neighbors[0] if dislike_neighbors else None),
             "nearest_keep": evidence(keep_neighbors[0] if keep_neighbors else None),
+            "exact_max_similarity": exact_max,
+            "semantic_max_similarity": semantic_max,
+            "preference_gap": dislike_best - keep_best,
         }
+
+    def _top_exact_neighbors(
+        self,
+        scores: object,
+        positive_indices: object,
+        tiebreak_rank: object,
+        limit: int,
+    ) -> list[int]:
+        """Select an exact Top-K in linear time while preserving stable ties."""
+        import numpy as np
+
+        indices = np.asarray(positive_indices, dtype=np.int32)
+        values = np.asarray(scores, dtype=np.float64)
+        ranks = np.asarray(tiebreak_rank, dtype=np.int32)
+        if len(indices) > limit:
+            local_values = values[indices]
+            boundary = np.partition(local_values, len(local_values) - limit)[
+                len(local_values) - limit
+            ]
+            higher = indices[local_values > boundary]
+            tied = indices[local_values == boundary]
+            needed = limit - len(higher)
+            if len(tied) > needed:
+                tied_positions = np.argpartition(ranks[tied], needed - 1)[:needed]
+                tied = tied[tied_positions]
+            indices = np.concatenate((higher, tied))
+        return sorted(
+            (int(index) for index in indices),
+            key=lambda index: (
+                -float(values[index]),
+                int(ranks[index]),
+            ),
+        )[:limit]
 
     def predict(
         self,
@@ -441,7 +668,7 @@ class PreferenceModel:
         context_features: Iterable[object] | None = None,
         top_n: int = 8,
         _semantic_embedding: Iterable[float] | None = None,
-        _semantic_embedding_failed: bool = False,
+        _neighbor_prediction: dict[str, object] | None = None,
     ) -> PreferencePrediction:
         """Return a local dislike margin and feature-level explanation."""
         normalized = _model_tags(tags)
@@ -450,7 +677,15 @@ class PreferenceModel:
             if context_features is not None
             else _model_context_features(metadata)
         )
-        neighbor = self._predict_neighbors(normalized, normalized_context)
+        neighbor = _neighbor_prediction
+        semantic_embedding = _semantic_embedding
+        if neighbor is None and self.semantic_enabled:
+            neighbor, pooled = self._predict_semantic_neighbors_many(
+                [(normalized, metadata, normalized_context)]
+            )[0]
+            if semantic_embedding is None:
+                semantic_embedding = pooled
+        neighbor = neighbor or {}
         score = self.bias + self.prior_log_odds
         feature_score = 0.0
         contributions: list[tuple[str, str, float, float]] = []
@@ -480,20 +715,14 @@ class PreferenceModel:
         semantic_score: float | None = None
         semantic_probability: float | None = None
         semantic_available = False
-        if self.semantic_enabled and not _semantic_embedding_failed:
+        if self.semantic_enabled and semantic_embedding is not None:
             try:
-                from .semantic import embed_metadata, score_embedding
+                from .semantic import score_embedding
                 from .semantic import semantic_probability as _probability
 
-                embedding = _semantic_embedding
-                if embedding is None:
-                    embedding = embed_metadata(
-                        [(normalized, normalized_context)],
-                        model_name=self.semantic_model,
-                    )[0]
                 semantic_score = score_embedding(
                     _semantic_head(self),
-                    embedding,
+                    semantic_embedding,
                 )
                 semantic_probability = _probability(semantic_score)
                 semantic_available = True
@@ -509,8 +738,8 @@ class PreferenceModel:
                         )
                     )
             except Exception:
-                # The optional runtime may be absent or its model cache may be
-                # unavailable.  Exact metadata scoring must remain usable.
+                # A semantic runtime failure must fail open; the old exact-only
+                # classifier is deliberately no longer an action fallback.
                 semantic_score = None
                 semantic_probability = None
                 semantic_available = False
@@ -527,35 +756,16 @@ class PreferenceModel:
 
         ordered = sorted(contributions, key=lambda item: (-abs(item[2]), item[0], item[1]))[:top_n]
         explanation = tuple(explain(item) for item in ordered)
-        review_dislike = max(
-            (
-                item
-                for item in contributions
-                if item[2] > 0 and item[0] not in _BROAD_REVIEW_FEATURE_TYPES
-            ),
-            key=lambda item: (item[2], item[0], item[1]),
-            default=None,
-        )
-        review_keep = min(
-            (
-                item
-                for item in contributions
-                if item[2] < 0 and item[0] not in _BROAD_REVIEW_FEATURE_TYPES
-            ),
-            key=lambda item: (item[2], item[0], item[1]),
-            default=None,
-        )
         return PreferencePrediction(
             probability=_sigmoid(score),
             score=score,
             feature_score=feature_score,
             contributions=explanation,
             positive_evidence_count=sparse_positive_evidence_count,
-            calibrated=self.validation.get("calibrated") is True,
-            strongest_review_dislike_score=review_dislike[2] if review_dislike else 0.0,
-            strongest_review_dislike=explain(review_dislike) if review_dislike else None,
-            strongest_review_keep_score=-review_keep[2] if review_keep else 0.0,
-            strongest_review_keep=explain(review_keep) if review_keep else None,
+            calibrated=(
+                isinstance(self.training_summary.get("decision_calibration"), dict)
+                and self.training_summary["decision_calibration"].get("available") is True
+            ),
             semantic_score=semantic_score,
             semantic_probability=semantic_probability,
             semantic_available=semantic_available,
@@ -578,6 +788,9 @@ class PreferenceModel:
                 if isinstance(neighbor.get("nearest_keep"), dict)
                 else None
             ),
+            neighbor_exact_max_similarity=float(neighbor.get("exact_max_similarity", 0.0)),
+            neighbor_semantic_max_similarity=float(neighbor.get("semantic_max_similarity", 0.0)),
+            neighbor_preference_gap=float(neighbor.get("preference_gap", 0.0)),
         )
 
     def predict_many(
@@ -607,30 +820,19 @@ class PreferenceModel:
             )
             for tags, metadata, context in records
         )
-        embeddings: list[tuple[float, ...] | None]
-        semantic_embedding_failed = False
-        if self.semantic_enabled and materialized:
-            try:
-                from .semantic import embed_metadata
-
-                embeddings = [
-                    tuple(vector)
-                    for vector in embed_metadata(
-                        [
-                            (
-                                tags,
-                                context if context is not None else _model_context_features(meta),
-                            )
-                            for tags, meta, context in materialized
-                        ],
-                        model_name=self.semantic_model,
-                    )
-                ]
-            except Exception:
-                embeddings = [None] * len(materialized)
-                semantic_embedding_failed = True
-        else:
-            embeddings = [None] * len(materialized)
+        neighbor_records = [
+            (
+                tags,
+                metadata,
+                (
+                    _normalize_context_features(context)
+                    if context is not None
+                    else _model_context_features(metadata)
+                ),
+            )
+            for tags, metadata, context in materialized
+        ]
+        semantic_results = self._predict_semantic_neighbors_many(neighbor_records)
         return tuple(
             self.predict(
                 tags,
@@ -638,11 +840,11 @@ class PreferenceModel:
                 context_features=context,
                 top_n=top_n,
                 _semantic_embedding=embedding,
-                _semantic_embedding_failed=semantic_embedding_failed,
+                _neighbor_prediction=neighbor,
             )
-            for (tags, metadata, context), embedding in zip(
+            for (tags, metadata, context), (neighbor, embedding) in zip(
                 materialized,
-                embeddings,
+                semantic_results,
                 strict=True,
             )
         )
@@ -651,7 +853,6 @@ class PreferenceModel:
         return {
             "schema_version": self.schema_version,
             "trained_at": self.trained_at,
-            "threshold": self.threshold,
             "bias": self.bias,
             "prior_log_odds": self.prior_log_odds,
             "tag_weights": self.tag_weights,
@@ -661,14 +862,12 @@ class PreferenceModel:
             "max_combo_features": self.max_combo_features,
             "feature_normalization": self.feature_normalization,
             "training_summary": self.training_summary,
-            "validation": self.validation,
             "semantic_head": (
                 {
                     "model_name": self.semantic_model,
                     "bias": self.semantic_bias,
                     "weights": list(self.semantic_weights),
                     "blend": self.semantic_blend,
-                    "rank_weight": self.semantic_rank_weight,
                 }
                 if self.semantic_enabled
                 else {}
@@ -682,6 +881,9 @@ class PreferenceModel:
                         "label": prototype.label,
                         "timestamp": prototype.timestamp,
                         "features": [list(feature) for feature in prototype.features],
+                        "tags": list(prototype.tags),
+                        "context_features": list(prototype.context_features),
+                        "semantic_tags": [list(item) for item in prototype.semantic_tags],
                     }
                     for prototype in self.neighbor_prototypes
                 ],
@@ -698,6 +900,8 @@ class PreferenceModel:
             LEGACY_MODEL_SCHEMA_VERSION,
             SPARSE_MODEL_SCHEMA_VERSION,
             CALIBRATED_MODEL_SCHEMA_VERSION,
+            CONTENT_NEIGHBOR_MODEL_SCHEMA_VERSION,
+            TAG_SEMANTIC_MODEL_SCHEMA_VERSION,
             MODEL_SCHEMA_VERSION,
         }:
             raise ValueError("Unsupported preference model file")
@@ -710,8 +914,7 @@ class PreferenceModel:
             return {str(name): float(weight) for name, weight in values.items()}
 
         summary = raw.get("training_summary", {})
-        validation = raw.get("validation", {})
-        if not isinstance(summary, dict) or not isinstance(validation, dict):
+        if not isinstance(summary, dict):
             raise ValueError("Invalid preference model summary")
         semantic_raw = raw.get("semantic_head", {})
         if semantic_raw is None:
@@ -730,21 +933,20 @@ class PreferenceModel:
         if (
             isinstance(neighbor_version, bool)
             or not isinstance(neighbor_version, int)
-            or neighbor_version != NEIGHBOR_HEAD_SCHEMA_VERSION
+            or neighbor_version
+            not in {LEGACY_NEIGHBOR_HEAD_SCHEMA_VERSION, NEIGHBOR_HEAD_SCHEMA_VERSION}
         ):
             raise ValueError("Invalid preference model neighbor head version")
         neighbor_k = neighbor_raw.get("k", DEFAULT_NEIGHBOR_K)
         if (
             isinstance(neighbor_k, bool)
             or not isinstance(neighbor_k, int)
-            or not 1 <= neighbor_k <= DEFAULT_NEIGHBOR_MAX_PROTOTYPES
+            or not 1 <= neighbor_k <= 512
         ):
             raise ValueError("Invalid preference model neighbor k")
         raw_prototypes = neighbor_raw.get("prototypes", [])
         if not isinstance(raw_prototypes, list | tuple):
             raise ValueError("Invalid preference model neighbor prototypes")
-        if len(raw_prototypes) > DEFAULT_NEIGHBOR_MAX_PROTOTYPES:
-            raise ValueError("Preference model neighbor head is too large")
         neighbor_prototypes: list[PreferenceNeighborPrototype] = []
         for raw_prototype in raw_prototypes:
             if not isinstance(raw_prototype, dict):
@@ -777,12 +979,47 @@ class PreferenceModel:
                     raise ValueError("Invalid preference model neighbor feature")
                 features.append((feature, value))
             if features:
+                raw_tags = raw_prototype.get("tags", ())
+                raw_context = raw_prototype.get("context_features", ())
+                raw_semantic_tags = raw_prototype.get("semantic_tags", ())
+                if not isinstance(raw_tags, list | tuple) or not isinstance(
+                    raw_context, list | tuple
+                ):
+                    raise ValueError("Invalid preference model neighbor metadata")
+                if not isinstance(raw_semantic_tags, list | tuple):
+                    raise ValueError("Invalid preference model semantic tags")
+                tags = _model_tags(raw_tags)
+                context_features = _normalize_context_features(raw_context)
+                if neighbor_version == LEGACY_NEIGHBOR_HEAD_SCHEMA_VERSION:
+                    tags = tuple(
+                        feature.removeprefix("tag:")
+                        for feature, _ in features
+                        if feature.startswith("tag:")
+                    )
+                    context_features = tuple(
+                        feature.removeprefix("context:")
+                        for feature, _ in features
+                        if feature.startswith("context:")
+                    )
+                semantic_tags: list[tuple[str, str]] = []
+                for raw_item in raw_semantic_tags:
+                    if not isinstance(raw_item, list | tuple) or len(raw_item) != 2:
+                        raise ValueError("Invalid preference model semantic tag")
+                    key = normalize_tag(raw_item[0])
+                    text = str(raw_item[1]).strip()
+                    if key and text:
+                        semantic_tags.append((key, text))
+                if not semantic_tags:
+                    semantic_tags = [(tag, tag) for tag in tags]
                 neighbor_prototypes.append(
                     PreferenceNeighborPrototype(
                         filename=filename,
                         label=int(label),
                         timestamp=timestamp,
                         features=tuple(features),
+                        tags=tags,
+                        context_features=context_features,
+                        semantic_tags=tuple(semantic_tags),
                     )
                 )
         return cls(
@@ -791,10 +1028,8 @@ class PreferenceModel:
             tag_weights=weights("tag_weights"),
             combo_weights=weights("combo_weights"),
             context_weights=weights("context_weights"),
-            threshold=float(raw.get("threshold", DEFAULT_THRESHOLD)),
             trained_at=str(raw.get("trained_at", "")),
             training_summary=summary,
-            validation=validation,
             combo_min_support=int(
                 raw.get(
                     "combo_min_support",
@@ -817,7 +1052,6 @@ class PreferenceModel:
             semantic_bias=float(semantic_raw.get("bias", 0.0)),
             semantic_weights=tuple(float(value) for value in semantic_weights),
             semantic_blend=float(semantic_raw.get("blend", 0.0)),
-            semantic_rank_weight=float(semantic_raw.get("rank_weight", 0.0)),
             neighbor_k=neighbor_k,
             neighbor_prototypes=tuple(neighbor_prototypes),
         )
@@ -832,7 +1066,6 @@ def _semantic_head(model: PreferenceModel):
         bias=model.semantic_bias,
         weights=model.semantic_weights,
         blend=model.semantic_blend,
-        rank_weight=model.semantic_rank_weight,
     )
 
 
@@ -850,6 +1083,66 @@ def _normalize_context_features(features: Iterable[object] | None) -> tuple[str,
         if clean_value:
             normalized.add(f"{prefix}:{clean_value}")
     return tuple(sorted(normalized))
+
+
+def _semantic_context_similarity(
+    left: Iterable[object] | None,
+    right: Iterable[object] | None,
+) -> float:
+    """Return a bounded weak similarity for category, palette, and purity."""
+    grouped: list[dict[str, list[str]]] = []
+    for values in (left, right):
+        fields: dict[str, list[str]] = {}
+        for token in _normalize_context_features(values):
+            field, _, value = token.partition(":")
+            fields.setdefault(field, []).append(value)
+        grouped.append(fields)
+    left_fields, right_fields = grouped
+    weighted = total = 0.0
+    for field, weight in (("category", 0.50), ("color", 0.35), ("purity", 0.15)):
+        left_values = left_fields.get(field, ())
+        right_values = right_fields.get(field, ())
+        if not left_values or not right_values:
+            continue
+        if field == "color":
+            score = _palette_similarity(left_values, right_values)
+        else:
+            score = 1.0 if set(left_values) & set(right_values) else 0.0
+        weighted += weight * score
+        total += weight
+    return weighted / total if total else 0.0
+
+
+def _palette_similarity(left: Sequence[str], right: Sequence[str]) -> float:
+    """Compare two small Wallhaven hex palettes with symmetric nearest colours."""
+
+    def rgb(value: str) -> tuple[int, int, int] | None:
+        clean = value.removeprefix("#")
+        if len(clean) != 6:
+            return None
+        try:
+            return tuple(int(clean[index : index + 2], 16) for index in (0, 2, 4))  # type: ignore[return-value]
+        except ValueError:
+            return None
+
+    left_rgb = tuple(color for value in left if (color := rgb(value)) is not None)
+    right_rgb = tuple(color for value in right if (color := rgb(value)) is not None)
+    if not left_rgb or not right_rgb:
+        return 0.0
+    maximum = math.sqrt(3 * 255**2)
+
+    def directional(first: Sequence[tuple[int, int, int]], second: Sequence[tuple[int, int, int]]):
+        return sum(
+            1.0
+            - min(
+                math.sqrt(sum((channel_a - channel_b) ** 2 for channel_a, channel_b in zip(a, b)))
+                / maximum
+                for b in second
+            )
+            for a in first
+        ) / len(first)
+
+    return (directional(left_rgb, right_rgb) + directional(right_rgb, left_rgb)) / 2
 
 
 def _model_context_features(metadata: dict[str, object] | None) -> tuple[str, ...]:
@@ -898,46 +1191,66 @@ def _neighbor_feature_values(
     return tuple((feature, value / norm) for feature, value in sorted(values))
 
 
-def build_neighbor_prototypes(
+def select_preference_examples(
     examples: Iterable[PreferenceExample],
     *,
-    max_prototypes: int = DEFAULT_NEIGHBOR_MAX_PROTOTYPES,
-) -> tuple[PreferenceNeighborPrototype, ...]:
-    """Build a recent, class-balanced prototype set from explicit feedback."""
-    if max_prototypes < 2:
+    limit: int = DEFAULT_TRAINING_MAX_EXAMPLES,
+    explicit_only: bool = False,
+) -> tuple[PreferenceExample, ...]:
+    """Select a recent class-balanced fitting set in O(n log limit) time."""
+    if limit < 2:
         return ()
-    explicit = [
+    candidates = [
         example
         for example in examples
-        if example.is_explicit_ban or example.is_explicit_keep or example.is_favorite
+        if not explicit_only
+        or example.is_explicit_ban
+        or example.is_explicit_keep
+        or example.is_favorite
     ]
+
+    def recency_key(example: PreferenceExample) -> tuple[int, str, int]:
+        return example.timestamp, example.filename, example.label
+
+    per_class = limit // 2
     grouped = {
-        label: sorted(
-            (example for example in explicit if example.label == label),
-            key=lambda example: (-example.timestamp, example.filename),
+        label: heapq.nlargest(
+            per_class,
+            (example for example in candidates if example.label == label),
+            key=recency_key,
         )
         for label in (0, 1)
     }
     if not grouped[0] or not grouped[1]:
         return ()
-
-    # Reserve half for each class so a long run of one action cannot erase the
-    # opposing preference.  Any unused slots are filled by the newest remaining
-    # explicit examples regardless of class.
-    per_class = max_prototypes // 2
-    selected = [*grouped[0][:per_class], *grouped[1][:per_class]]
+    selected = [*grouped[0], *grouped[1]]
     selected_ids = {id(example) for example in selected}
-    remainder = sorted(
-        (example for example in explicit if id(example) not in selected_ids),
-        key=lambda example: (-example.timestamp, example.filename, example.label),
+    remainder = heapq.nlargest(
+        max(0, limit - len(selected)),
+        (example for example in candidates if id(example) not in selected_ids),
+        key=recency_key,
     )
-    selected.extend(remainder[: max(0, max_prototypes - len(selected))])
+    selected.extend(remainder)
+    return tuple(sorted(selected, key=recency_key))
+
+
+def build_neighbor_prototypes(
+    examples: Iterable[PreferenceExample],
+) -> tuple[PreferenceNeighborPrototype, ...]:
+    """Build one semantic KNN prototype for every explicit Keep/Dislike label."""
+    selected = sorted(
+        (
+            example
+            for example in examples
+            if example.is_explicit_ban or example.is_explicit_keep or example.is_favorite
+        ),
+        key=lambda example: (example.timestamp, example.filename, example.label),
+    )
+    if not selected:
+        return ()
 
     prototypes: list[PreferenceNeighborPrototype] = []
-    for example in sorted(
-        selected,
-        key=lambda item: (item.timestamp, item.filename, item.label),
-    ):
+    for example in selected:
         features = _neighbor_feature_values(example.tags, example.context_features)
         if features:
             prototypes.append(
@@ -946,6 +1259,12 @@ def build_neighbor_prototypes(
                     label=example.label,
                     timestamp=example.timestamp,
                     features=features,
+                    tags=_model_tags(example.tags),
+                    context_features=_normalize_context_features(example.context_features),
+                    semantic_tags=(
+                        example.semantic_tags
+                        or tuple((tag, tag) for tag in _model_tags(example.tags))
+                    ),
                 )
             )
     if {prototype.label for prototype in prototypes} != {0, 1}:

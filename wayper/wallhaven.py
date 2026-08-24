@@ -50,10 +50,13 @@ class WallhavenClient:
         self.config = config
         self._local_exclude_tags: list[str] = []
         self._cloud_tags: set[str] = set()
+        request_headers = {"User-Agent": USER_AGENT}
+        if config.api_key:
+            request_headers["X-API-Key"] = config.api_key
         self.client = httpx.AsyncClient(
             proxy=config.proxy,
             timeout=httpx.Timeout(30, connect=10),
-            headers={"User-Agent": USER_AGENT},
+            headers=request_headers,
         )
 
     async def close(self) -> None:
@@ -155,7 +158,6 @@ class WallhavenClient:
             "ai_art_filter": self.config.wallhaven.ai_art_filter,
             "ratios": orientation,
             "page": 1,
-            "apikey": self.config.api_key,
         }
         exclude_q = self._exclude_query()
         if exclude_q:
@@ -242,18 +244,38 @@ class WallhavenClient:
                 high = mid - 1
         return low
 
-    async def wallpaper_info(self, wallpaper_id: str) -> dict:
-        """Fetch full details for a single wallpaper (includes tags)."""
-        try:
-            params = {"apikey": self.config.api_key} if self.config.api_key else {}
-            resp = await self.client.get(
-                f"https://wallhaven.cc/api/v1/w/{wallpaper_id}", params=params
-            )
-            resp.raise_for_status()
-            return resp.json().get("data", {})
-        except Exception:
-            log.warning("Failed to fetch wallpaper info for %s", wallpaper_id, exc_info=True)
+    async def wallpaper_info(self, wallpaper_id: str, *, retries: int = 2) -> dict:
+        """Fetch complete wallpaper details, retrying transient metadata failures."""
+        if not wallpaper_id:
             return {}
+        for attempt in range(max(0, retries) + 1):
+            try:
+                resp = await self.client.get(f"https://wallhaven.cc/api/v1/w/{wallpaper_id}")
+                resp.raise_for_status()
+                data = resp.json().get("data", {})
+                return data if isinstance(data, dict) else {}
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status != 429 and 400 <= status < 500:
+                    log.info(
+                        "Wallpaper metadata unavailable for %s (HTTP %d)",
+                        wallpaper_id,
+                        status,
+                    )
+                    return {}
+                error_name = f"HTTP {status}"
+            except Exception as exc:
+                error_name = type(exc).__name__
+            if attempt >= max(0, retries):
+                log.warning(
+                    "Failed to fetch wallpaper info for %s after %d attempts (%s)",
+                    wallpaper_id,
+                    attempt + 1,
+                    error_name,
+                )
+                return {}
+            await asyncio.sleep(0.5 * (2**attempt))
+        return {}
 
     async def download_image(self, url: str, dest: Path) -> bool:
         """Download a single image. Returns True on success."""
@@ -315,6 +337,7 @@ class WallhavenClient:
             "combo": 0,
             "local_tag": 0,
             "model": 0,
+            "metadata": 0,
             "min_favorites": 0,
             "fail": 0,
         }
@@ -364,8 +387,13 @@ class WallhavenClient:
                     u.lower() for u in self.config.wallhaven.exclude_uploaders
                 }
                 for (filename, url, item, dest), detail in zip(candidates, details):
-                    if detail:
-                        item = {**item, **detail}
+                    if not detail:
+                        # Search listings omit tags and uploader details. An
+                        # incomplete record cannot be filtered or learned from
+                        # safely, so leave it for a later download cycle.
+                        skipped["metadata"] += 1
+                        continue
+                    item = {**item, **detail}
 
                     tag_names = extract_tag_names(item.get("tags", []))
                     if self._rules_enabled:
@@ -390,8 +418,7 @@ class WallhavenClient:
                             from .model_review import queue_model_review_item
                             from .preference_model import (
                                 auto_filter_prediction,
-                                preference_review_decision_score,
-                                preference_review_score,
+                                preference_decision_score,
                             )
 
                             model_hit, prediction = auto_filter_prediction(model, item)
@@ -417,22 +444,18 @@ class WallhavenClient:
                                 review_dest.unlink(missing_ok=True)
                                 skipped["fail"] += 1
                                 continue
-                            save_metadata(config, filename, item)
+                            save_metadata(config, filename, item, complete=True)
                             try:
                                 prediction_payload = prediction.to_dict()
+                                decision_score = preference_decision_score(
+                                    model,
+                                    prediction,
+                                )
                                 prediction_payload.update(
                                     {
-                                        "review_score": preference_review_score(prediction),
-                                        "decision_score": preference_review_decision_score(
-                                            model,
-                                            prediction,
-                                        ),
+                                        "decision_score": decision_score,
                                         "threshold": model_filter_status.get("threshold"),
                                         "threshold_kind": model_filter_status.get("threshold_kind"),
-                                        "semantic_threshold": model_filter_status.get(
-                                            "semantic_threshold"
-                                        ),
-                                        "probability_threshold": model.threshold,
                                         "schema_version": model.schema_version,
                                         "trained_at": model.trained_at,
                                     }
@@ -461,7 +484,7 @@ class WallhavenClient:
                         skipped["fail"] += 1
                         continue
 
-                    save_metadata(config, filename, item)
+                    save_metadata(config, filename, item, complete=True)
                     downloaded += 1
 
                     if mon and not resize_crop(dest, mon.width, mon.height):
@@ -471,7 +494,8 @@ class WallhavenClient:
             "Download[%(mode)s/%(orient)s] results=%(results)d sampled=%(sampled)d "
             "skipped(dup=%(dup)d,fav=%(fav)d,blacklist=%(blacklist)d,"
             "uploader=%(uploader)d,combo=%(combo)d,local_tag=%(local_tag)d,"
-            "model=%(model)d,min_favorites=%(min_favorites)d,fail=%(fail)d) "
+            "model=%(model)d,metadata=%(metadata)d,min_favorites=%(min_favorites)d,"
+            "fail=%(fail)d) "
             "downloaded=%(downloaded)d",
             {
                 "mode": mode,
@@ -498,7 +522,6 @@ class WallhavenClient:
         try:
             resp = await self.client.get(
                 "https://wallhaven.cc/api/v1/collections",
-                params={"apikey": config.api_key},
             )
             resp.raise_for_status()
             collections = resp.json().get("data", [])
@@ -522,7 +545,7 @@ class WallhavenClient:
                 try:
                     resp = await self.client.get(
                         f"https://wallhaven.cc/api/v1/collections/{username}/{col_id}",
-                        params={"apikey": config.api_key, "page": page},
+                        params={"page": page},
                     )
                     resp.raise_for_status()
                     body = resp.json()
@@ -566,6 +589,12 @@ class WallhavenClient:
                         continue
 
                     # Download into favorites
+                    detail = await self.wallpaper_info(str(item.get("id", "")))
+                    if not detail:
+                        log.warning("Skipping favorite %s without complete metadata", filename)
+                        continue
+                    item = {**item, **detail}
+                    url = str(item.get("path", url))
                     fav_dest.parent.mkdir(parents=True, exist_ok=True)
                     if not await self.download_image(url, fav_dest):
                         continue
@@ -575,7 +604,7 @@ class WallhavenClient:
                         fav_dest.unlink(missing_ok=True)
                         continue
 
-                    save_metadata(config, filename, item)
+                    save_metadata(config, filename, item, complete=True)
                     page_new += 1
 
                 synced += page_new

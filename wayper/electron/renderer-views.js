@@ -642,12 +642,11 @@ function refreshPreferenceSuggestionDiagnostics() {
     const diagnostics = data.diagnostics && typeof data.diagnostics === 'object'
         ? data.diagnostics
         : {};
-    const bestReviewScore = items.reduce((best, item) => {
+    const bestDecisionScore = items.reduce((best, item) => {
         const score = Number(
-            item?.neighbor_probability
-            ?? item?.recommendation_score
-            ?? item?.review_score
-            ?? item?.feature_score,
+            item?.decision_score
+            ?? item?.neighbor_probability
+            ?? item?.probability,
         );
         return Number.isFinite(score) ? Math.max(best, score) : best;
     }, 0);
@@ -663,7 +662,7 @@ function refreshPreferenceSuggestionDiagnostics() {
                 ? Math.max(items.length, serverCandidateCount)
                 : items.length,
             loaded_candidate_count: items.length,
-            best_review_score: items.length ? bestReviewScore : null,
+            best_decision_score: items.length ? bestDecisionScore : null,
         },
     };
 }
@@ -680,13 +679,12 @@ function preferenceReviewEmptyText(data) {
         return 'No automatically filtered images are waiting for review.';
     }
     const diagnostics = data?.diagnostics || {};
-    const bestReviewScore = Number(
-        diagnostics.best_neighbor_probability
-        ?? diagnostics.best_review_score
-        ?? diagnostics.best_feature_score,
+    const bestDecisionScore = Number(
+        diagnostics.best_decision_score
+        ?? diagnostics.best_neighbor_probability,
     );
-    const bestLabel = Number.isFinite(bestReviewScore)
-        ? formatPreferenceScore(bestReviewScore)
+    const bestLabel = Number.isFinite(bestDecisionScore)
+        ? formatPreferenceScore(bestDecisionScore)
         : null;
     if (data?.status === 'untrained') {
         return 'Train a local preference model to start reviewing candidates.';
@@ -695,7 +693,7 @@ function preferenceReviewEmptyText(data) {
         return 'Updating the local ranking model; review will appear shortly.';
     }
     if (bestLabel) {
-        return `No learned dislike-evidence candidates; strongest review score ${bestLabel}.`;
+        return `No learned dislike-evidence candidates; strongest decision score ${bestLabel}.`;
     }
     return 'No learned dislike-evidence candidates for this monitor and purity.';
 }
@@ -1228,20 +1226,17 @@ function createPreferenceReviewRow(item) {
     const rank = document.createElement('span');
     rank.className = 'model-review-rank';
     rank.textContent = formatPreferenceRank(item);
-    const neighborRank = item.ranking_source === 'content_knn';
+    const decisionScore = item.decision_score ?? item.neighbor_probability ?? item.probability;
     rank.title = item.auto_filtered
-        ? `Auto-held score ${formatPreferenceScore(item.neighbor_probability ?? item.decision_score ?? item.review_score)}`
+        ? `Auto-held score ${formatPreferenceScore(decisionScore)}`
             + ` · boundary ${formatPreferenceScore(item.threshold)}`
-        : neighborRank
-            ? `Dislike-neighbour vote ${formatPreferenceScore(item.neighbor_probability)}`
-                + ` · similarity ${formatPreferenceScore(item.neighbor_max_similarity)}`
-                + ` · sparse explanation ${formatPreferenceScore(item.review_score ?? item.feature_score)}`
-            : `Hybrid rank ${formatPreferenceScore(item.hybrid_score ?? item.review_score ?? item.feature_score)}`
-                + ` · review score ${formatPreferenceScore(item.review_score ?? item.feature_score)}`
-                + (item.semantic_available
-                    ? ` · semantic ${formatPreferenceScore(item.semantic_score)}`
-                    : '')
-                + ` · net feature score ${formatPreferenceScore(item.feature_score)}`;
+        : `Decision score ${formatPreferenceScore(decisionScore)}`
+            + ` · neighbour vote ${formatPreferenceScore(item.neighbor_probability)}`
+            + ` · similarity ${formatPreferenceScore(item.neighbor_max_similarity)}`
+            + ` · exact ${formatPreferenceScore(item.neighbor_exact_max_similarity)}`
+            + ` · tag semantic ${formatPreferenceScore(item.neighbor_semantic_max_similarity)}`
+            + ` · preference gap ${formatPreferenceScore(item.neighbor_preference_gap)}`
+            + ` · global probability ${formatPreferenceScore(item.probability)}`;
     itemHeader.appendChild(rank);
     body.appendChild(itemHeader);
 
@@ -1282,6 +1277,17 @@ function createPreferenceReviewRow(item) {
         neighbor.textContent = `Similar to Dislike: ${item.neighbor_nearest_dislike.filename}`;
         neighbor.title = `Nearest explicit Dislike (${formatPreferenceScore(item.neighbor_nearest_dislike.similarity)} similarity)`;
         explanation.appendChild(neighbor);
+        const matches = Array.isArray(item.neighbor_nearest_dislike.tag_matches)
+            ? item.neighbor_nearest_dislike.tag_matches
+            : [];
+        for (const match of matches.slice(0, 2)) {
+            if (!match?.query || !match?.prototype || match.query === match.prototype) continue;
+            const semanticMatch = document.createElement('span');
+            semanticMatch.className = 'model-review-feature dislike';
+            semanticMatch.textContent = `${match.query} ↔ ${match.prototype}`;
+            semanticMatch.title = `Semantic tag match ${formatPreferenceScore(match.similarity)}`;
+            explanation.appendChild(semanticMatch);
+        }
     }
     if (
         !dislikeEvidence.length

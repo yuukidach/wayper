@@ -5,6 +5,7 @@ All state-modifying operations live here. CLI, API, and MCP are thin wrappers.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable
@@ -480,3 +481,240 @@ def do_unban(config: WayperConfig, monitor: str | None = None) -> CoreResult:
 
     _schedule_preference_model_retrain(config)
     return result
+
+
+def _metadata_backfill_filenames(
+    config: WayperConfig,
+    *,
+    include_history: bool,
+) -> set[str]:
+    """Return filenames whose metadata can affect the live application or model."""
+    from .pool import favorites_dir, list_images, load_metadata, pool_dir
+    from .state import ALL_PURITIES
+
+    filenames = {
+        image.name
+        for purity in ALL_PURITIES
+        for orientation in ("landscape", "portrait")
+        for directory in (
+            pool_dir(config, purity, orientation),
+            favorites_dir(config, purity, orientation),
+            config.model_review_dir / purity / orientation,
+        )
+        for image in list_images(directory)
+    }
+    try:
+        from .preference_model import load_preference_feedback
+
+        filenames.update(
+            str(event["filename"])
+            for event in load_preference_feedback(config)["events"]
+            if isinstance(event, dict) and isinstance(event.get("filename"), str)
+        )
+    except Exception:
+        log.warning("Could not include preference feedback in metadata backfill", exc_info=True)
+    if include_history:
+        filenames.update(load_metadata(config))
+    return filenames
+
+
+def _metadata_backfill_sort_key(
+    record: object,
+    filename: str,
+) -> tuple[int, int, int, int, str]:
+    """Prioritize absent records and missing recommendation inputs/details."""
+    tags = record.get("tags") if isinstance(record, dict) else None
+    details = record.get("tag_details") if isinstance(record, dict) else None
+    missing_detail_count = max(
+        0,
+        (len(tags) if isinstance(tags, list | tuple) else 0)
+        - (len(details) if isinstance(details, list | tuple) else 0),
+    )
+    return (
+        0 if not isinstance(record, dict) else 1,
+        0 if not isinstance(record, dict) or not record.get("tags") else 1,
+        0 if not isinstance(record, dict) or not record.get("tag_details") else 1,
+        -missing_detail_count,
+        filename,
+    )
+
+
+def metadata_backfill_status(
+    config: WayperConfig,
+    *,
+    include_history: bool = False,
+) -> dict[str, int]:
+    """Summarize metadata completeness for the same scope used by backfill."""
+    from .pool import load_metadata
+
+    metadata = load_metadata(config)
+    filenames = _metadata_backfill_filenames(config, include_history=include_history)
+    missing_records = sum(not isinstance(metadata.get(filename), dict) for filename in filenames)
+    missing_tags = sum(
+        isinstance(metadata.get(filename), dict) and not metadata[filename].get("tags")
+        for filename in filenames
+    )
+    incomplete = sum(
+        isinstance(metadata.get(filename), dict)
+        and metadata[filename].get("metadata_complete") is not True
+        for filename in filenames
+    )
+    unavailable = sum(
+        isinstance(metadata.get(filename), dict)
+        and metadata[filename].get("metadata_unavailable") is True
+        for filename in filenames
+    )
+    tag_details_complete = sum(
+        isinstance(metadata.get(filename), dict)
+        and bool(metadata[filename].get("tags"))
+        and metadata[filename].get("tag_details_complete") is True
+        for filename in filenames
+    )
+    partial_tag_details = sum(
+        isinstance(metadata.get(filename), dict)
+        and bool(metadata[filename].get("tags"))
+        and bool(metadata[filename].get("tag_details"))
+        and metadata[filename].get("tag_details_complete") is not True
+        for filename in filenames
+    )
+    missing_tag_details = sum(
+        isinstance(metadata.get(filename), dict)
+        and bool(metadata[filename].get("tags"))
+        and not metadata[filename].get("tag_details")
+        for filename in filenames
+    )
+    return {
+        "records": len(filenames),
+        "missing_records": missing_records,
+        "missing_tags": missing_tags,
+        "missing_tag_inputs": missing_records + missing_tags,
+        "incomplete_records": missing_records + incomplete,
+        "complete_records": len(filenames) - missing_records - incomplete,
+        "unavailable_records": unavailable,
+        "tag_details_complete_records": tag_details_complete,
+        "partial_tag_detail_records": partial_tag_details,
+        "missing_tag_detail_records": missing_tag_details,
+    }
+
+
+async def do_backfill_metadata(
+    config: WayperConfig,
+    *,
+    include_history: bool = False,
+    missing_tags_only: bool = False,
+    limit: int | None = None,
+    delay_seconds: float = 1.4,
+    batch_size: int = 20,
+    progress: Callable[[dict[str, int]], None] | None = None,
+) -> CoreResult:
+    """Fetch complete Wallhaven metadata for relevant local records.
+
+    The default delay stays below Wallhaven's documented 45-request/minute
+    limit. Successful batches are committed atomically so interruption is safe
+    and a later invocation resumes from ``metadata_complete`` markers.
+    """
+    from .pool import hydrate_tag_details, load_metadata, save_metadata_batch
+    from .wallhaven import WallhavenClient, wallhaven_id
+
+    metadata = load_metadata(config)
+    filenames = _metadata_backfill_filenames(config, include_history=include_history)
+
+    def needs_fetch(filename: str) -> bool:
+        record = metadata.get(filename)
+        if not isinstance(record, dict):
+            return True
+        if missing_tags_only:
+            return not bool(record.get("tags"))
+        return record.get("metadata_complete") is not True
+
+    eligible_targets = sorted(
+        (filename for filename in filenames if needs_fetch(filename)),
+        key=lambda filename: _metadata_backfill_sort_key(metadata.get(filename), filename),
+    )
+    targets = eligible_targets
+    if limit is not None:
+        targets = targets[: max(0, limit)]
+    total = len(targets)
+    if not targets:
+        hydration = await asyncio.to_thread(hydrate_tag_details, config)
+        remaining = len(eligible_targets)
+        return CoreResult(
+            action="metadata_backfill",
+            status="complete" if not remaining else "partial",
+            extra={
+                "targeted": 0,
+                "updated": 0,
+                "failed": 0,
+                "remaining": remaining,
+                "tag_hydration": hydration,
+            },
+        )
+
+    client = WallhavenClient(config)
+    pending: dict[str, dict[str, object]] = {}
+    unavailable: dict[str, dict[str, object]] = {}
+    attempted = updated = failed = 0
+
+    async def commit() -> None:
+        nonlocal updated
+        if not pending:
+            return
+        batch = dict(pending)
+        await asyncio.to_thread(save_metadata_batch, config, batch, complete=True)
+        updated += len(batch)
+        pending.clear()
+
+    async def commit_unavailable() -> None:
+        if not unavailable:
+            return
+        batch = dict(unavailable)
+        await asyncio.to_thread(save_metadata_batch, config, batch, complete=False)
+        unavailable.clear()
+
+    try:
+        for index, filename in enumerate(targets):
+            detail = await client.wallpaper_info(wallhaven_id(filename), retries=1)
+            attempted += 1
+            if detail:
+                pending[filename] = detail
+            else:
+                failed += 1
+                unavailable[filename] = {
+                    "id": wallhaven_id(filename),
+                    "metadata_unavailable": True,
+                    "metadata_error": "unavailable_or_request_failed",
+                    "metadata_checked_at": int(time.time()),
+                }
+            if len(pending) + len(unavailable) >= max(1, batch_size):
+                await commit()
+                await commit_unavailable()
+            if progress is not None and (attempted == total or attempted % 10 == 0):
+                progress(
+                    {
+                        "targeted": total,
+                        "attempted": attempted,
+                        "updated": updated + len(pending),
+                        "failed": failed,
+                    }
+                )
+            if index + 1 < total and delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+    finally:
+        await commit()
+        await commit_unavailable()
+        await client.close()
+
+    hydration = await asyncio.to_thread(hydrate_tag_details, config)
+    remaining = max(0, len(eligible_targets) - updated)
+    return CoreResult(
+        action="metadata_backfill",
+        status="complete" if not remaining else "partial",
+        extra={
+            "targeted": total,
+            "attempted": attempted,
+            "updated": updated,
+            "failed": failed,
+            "remaining": remaining,
+            "tag_hydration": hydration,
+        },
+    )

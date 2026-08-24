@@ -1,9 +1,4 @@
-"""Local preference ranking trained from Wallhaven metadata.
-
-The primary model remains an explainable sparse FTRL ranker.  When the optional
-semantic extra is installed, an additional local text head generalizes across
-related tags.  Neither path reads image pixels.
-"""
+"""Two-stage semantic preference ranking trained from Wallhaven metadata."""
 
 from __future__ import annotations
 
@@ -16,7 +11,6 @@ import subprocess
 import sys
 import time
 from collections.abc import Iterable
-from copy import copy
 from pathlib import Path
 
 from .config import WayperConfig
@@ -26,20 +20,17 @@ from .preference.model import (
     _NON_PREFERENCE_FEATURE_TAGS,
     _PAIR_SEPARATOR,
     CALIBRATED_MODEL_SCHEMA_VERSION,
-    DEFAULT_AUTO_FILTER_NEIGHBOR_THRESHOLD,
     DEFAULT_COMBO_MIN_SUPPORT,
+    DEFAULT_DECISION_THRESHOLD,
     DEFAULT_EPOCHS,
     DEFAULT_FAVORITE_WEIGHT,
     DEFAULT_FEATURE_NORMALIZATION,
     DEFAULT_MAX_COMBO_FEATURES,
     DEFAULT_NEIGHBOR_K,
-    DEFAULT_NEIGHBOR_MAX_PROTOTYPES,
     DEFAULT_NEIGHBOR_MIN_SIMILARITY,
     DEFAULT_RECENCY_HALF_LIFE_DAYS,
-    DEFAULT_RECOMMENDATION_THRESHOLD,
-    DEFAULT_REVIEW_DISLIKE_BOOST,
-    DEFAULT_REVIEW_THRESHOLD,
-    DEFAULT_THRESHOLD,
+    DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT,
+    DEFAULT_TRAINING_MAX_EXAMPLES,
     DEFAULT_UPLOADER_MIN_SUPPORT,
     LEGACY_MODEL_SCHEMA_VERSION,
     MIN_TRAINING_PER_CLASS,
@@ -55,7 +46,6 @@ from .preference.model import (
     _active_features,
     _combo_feature,
     _context_min_support,
-    _contribution_direction,
     _display_context_feature,
     _format_pair,
     _ftrl_weight,
@@ -68,30 +58,26 @@ from .preference.model import (
     _sigmoid,
     _storage_feature_key,
     build_neighbor_prototypes,
-    preference_recommendation_candidate,
-    preference_review_candidate,
-    preference_review_decision_score,
-    preference_review_score,
-    preference_review_threshold,
+    preference_candidate,
+    preference_decision_score,
+    preference_decision_threshold,
+    select_preference_examples,
 )
 from .preference.semantic import (
     DEFAULT_SEMANTIC_BLEND,
     DEFAULT_SEMANTIC_MODEL,
-    DEFAULT_SEMANTIC_RANK_WEIGHT,
+    semantic_tag_items,
 )
 from .preference.training import (
-    REVIEW_CALIBRATION_VERSION,
+    DECISION_CALIBRATION_VERSION,
     _attach_neighbor_head,
     _build_feature_space,
-    _evaluate,
     _fit,
     _fit_ftrl,
     _has_both_classes,
     _metadata_timestamp,
     _recency_weight,
-    _roc_auc,
     _sample_weights,
-    _temporal_split,
     _training_data_signature,
     _training_example_ids,
     _training_example_payload,
@@ -110,30 +96,21 @@ __all__ = [
     "LEGACY_MODEL_SCHEMA_VERSION",
     "CALIBRATED_MODEL_SCHEMA_VERSION",
     "DEFAULT_COMBO_MIN_SUPPORT",
-    "DEFAULT_AUTO_FILTER_NEIGHBOR_THRESHOLD",
+    "DEFAULT_DECISION_THRESHOLD",
     "DEFAULT_MAX_COMBO_FEATURES",
     "DEFAULT_UPLOADER_MIN_SUPPORT",
     "DEFAULT_EPOCHS",
-    "DEFAULT_THRESHOLD",
     "DEFAULT_FAVORITE_WEIGHT",
     "DEFAULT_RECENCY_HALF_LIFE_DAYS",
     "DEFAULT_FEATURE_NORMALIZATION",
     "DEFAULT_SEMANTIC_MODEL",
     "DEFAULT_SEMANTIC_BLEND",
-    "DEFAULT_SEMANTIC_RANK_WEIGHT",
     "DEFAULT_NEIGHBOR_K",
-    "DEFAULT_NEIGHBOR_MAX_PROTOTYPES",
+    "DEFAULT_TRAINING_MAX_EXAMPLES",
     "DEFAULT_NEIGHBOR_MIN_SIMILARITY",
-    "DEFAULT_RECOMMENDATION_THRESHOLD",
+    "DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT",
     "MIN_TRAINING_PER_CLASS",
     "MIN_VALIDATION_PER_CLASS",
-    "AUTO_SKIP_MIN_PRECISION",
-    "AUTO_SKIP_MIN_PREDICTIONS",
-    "AUTO_SKIP_MIN_PRECISION_LOWER_BOUND",
-    "DEFAULT_REVIEW_MIN_FEATURE_SCORE",
-    "DEFAULT_REVIEW_MIN_SEMANTIC_SCORE",
-    "DEFAULT_REVIEW_DISLIKE_BOOST",
-    "DEFAULT_REVIEW_THRESHOLD",
     "DEFAULT_REVIEW_LIMIT",
     "DEFAULT_REVIEW_REASON_LIMIT",
     "AUTO_RETRAIN_MIN_FEEDBACK",
@@ -155,11 +132,10 @@ __all__ = [
     "_build_feature_space",
     "_attach_neighbor_head",
     "build_neighbor_prototypes",
+    "select_preference_examples",
     "_combo_feature",
     "_context_min_support",
-    "_contribution_direction",
     "_display_context_feature",
-    "_evaluate",
     "_fit",
     "_fit_ftrl",
     "_format_pair",
@@ -169,11 +145,9 @@ __all__ = [
     "_normalize_context_features",
     "_pair_is_eligible",
     "_pair_keys",
-    "_roc_auc",
     "_sample_weights",
     "_sigmoid",
     "_storage_feature_key",
-    "_temporal_split",
     "_training_example_payload",
     "_validate_training_examples",
     "_wilson_lower_bound",
@@ -191,24 +165,17 @@ __all__ = [
     "train_local_preference_model",
     "train_and_save_local_preference_model",
     "model_report",
-    "auto_skip_ready",
     "auto_filter_status",
     "auto_filter_prediction",
-    "preference_recommendation_candidate",
+    "preference_candidate",
+    "preference_decision_score",
+    "preference_decision_threshold",
     "preference_learning_status",
     "preference_deletion_suggestions",
     "schedule_preference_model_retrain",
     "run_scheduled_preference_model_retrain",
 ]
 
-AUTO_SKIP_MIN_PRECISION = 0.95
-AUTO_SKIP_MIN_PREDICTIONS = 20
-AUTO_SKIP_MIN_PRECISION_LOWER_BOUND = 0.80
-# Legacy diagnostic exports retained for callers that inspected the former
-# two-part recall gate. Schema-4 automatic decisions use a calibrated neighbour
-# probability; ``DEFAULT_REVIEW_THRESHOLD`` remains the sparse cold-start margin.
-DEFAULT_REVIEW_MIN_FEATURE_SCORE = -0.2
-DEFAULT_REVIEW_MIN_SEMANTIC_SCORE = 0.006
 DEFAULT_REVIEW_LIMIT = 24
 DEFAULT_REVIEW_REASON_LIMIT = 2
 AUTO_RETRAIN_MIN_FEEDBACK = 10
@@ -359,20 +326,23 @@ def load_preference_feedback(config: WayperConfig) -> dict[str, object]:
 
     path = preference_feedback_path(config)
     try:
-        lines = path.read_text().splitlines()
+        with path.open(encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    event = json.loads(line)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if (
+                    _is_feedback_event(event)
+                    and event.get("schema_version") == _FEEDBACK_SCHEMA_VERSION
+                ):
+                    revision = int(event["revision"])
+                    clean_event = dict(event)
+                    clean_event["filename"] = Path(str(event["filename"])).name
+                    events_by_revision[revision] = clean_event
+                    declared_revision = max(declared_revision, revision)
     except OSError:
-        lines = []
-    for line in lines:
-        try:
-            event = json.loads(line)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-        if _is_feedback_event(event) and event.get("schema_version") == _FEEDBACK_SCHEMA_VERSION:
-            revision = int(event["revision"])
-            clean_event = dict(event)
-            clean_event["filename"] = Path(str(event["filename"])).name
-            events_by_revision[revision] = clean_event
-            declared_revision = max(declared_revision, revision)
+        pass
 
     clean_events = [events_by_revision[key] for key in sorted(events_by_revision)]
     return {
@@ -380,6 +350,55 @@ def load_preference_feedback(config: WayperConfig) -> dict[str, object]:
         "revision": max(declared_revision, max(events_by_revision, default=0)),
         "events": clean_events,
     }
+
+
+def _last_jsonl_feedback_revision(path: Path) -> int:
+    """Read the newest valid revision from the end of an append-only ledger."""
+    try:
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            position = stream.tell()
+            suffix = b""
+            while position > 0:
+                size = min(64 * 1024, position)
+                position -= size
+                stream.seek(position)
+                parts = (stream.read(size) + suffix).split(b"\n")
+                suffix = parts.pop(0) if position else b""
+                if position == 0 and parts:
+                    parts.insert(0, suffix)
+                for raw_line in reversed(parts):
+                    if not raw_line.strip():
+                        continue
+                    try:
+                        event = json.loads(raw_line)
+                    except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+                        continue
+                    if (
+                        _is_feedback_event(event)
+                        and event.get("schema_version") == _FEEDBACK_SCHEMA_VERSION
+                    ):
+                        return int(event["revision"])
+    except OSError:
+        pass
+    return 0
+
+
+def _current_feedback_revision(config: WayperConfig) -> int:
+    """Return the latest revision without loading the complete JSONL ledger."""
+    legacy_revision = 0
+    try:
+        raw = json.loads(config.preference_feedback_file.read_text())
+    except (OSError, ValueError, json.JSONDecodeError):
+        raw = None
+    if isinstance(raw, dict) and raw.get("schema_version") == _LEGACY_FEEDBACK_SCHEMA_VERSION:
+        revision = raw.get("revision")
+        if isinstance(revision, int) and revision >= 0:
+            legacy_revision = revision
+    return max(
+        legacy_revision,
+        _last_jsonl_feedback_revision(preference_feedback_path(config)),
+    )
 
 
 def _preference_image_id(filename: str) -> str:
@@ -397,16 +416,9 @@ def _clean_model_feedback(model: dict[str, object] | None) -> dict[str, object] 
         "feature_normalization",
         "trained_at",
         "threshold",
-        "review_threshold",
-        "semantic_threshold",
-        "filter_strategy",
         "score",
         "feature_score",
-        "review_score",
         "decision_score",
-        "strongest_review_dislike_score",
-        "strongest_review_keep_score",
-        "hybrid_score",
         "semantic_score",
         "semantic_probability",
         "semantic_available",
@@ -417,6 +429,9 @@ def _clean_model_feedback(model: dict[str, object] | None) -> dict[str, object] 
         "neighbor_keep_count",
         "neighbor_similarity_sum",
         "neighbor_max_similarity",
+        "neighbor_exact_max_similarity",
+        "neighbor_semantic_max_similarity",
+        "neighbor_preference_gap",
         "probability",
         "calibrated",
         "percentile",
@@ -455,8 +470,7 @@ def record_preference_feedback(
         raise ValueError("Preference feedback needs a filename")
 
     def append_event() -> int:
-        state = load_preference_feedback(config)
-        revision = int(state["revision"]) + 1
+        revision = _current_feedback_revision(config) + 1
         event: dict[str, object] = {
             "schema_version": _FEEDBACK_SCHEMA_VERSION,
             "revision": revision,
@@ -475,7 +489,9 @@ def record_preference_feedback(
         path.parent.mkdir(parents=True, exist_ok=True)
         needs_separator = False
         try:
-            needs_separator = path.stat().st_size > 0 and not path.read_bytes().endswith(b"\n")
+            with path.open("rb") as stream:
+                stream.seek(-1, os.SEEK_END)
+                needs_separator = stream.read(1) != b"\n"
         except OSError:
             pass
         with path.open("a", encoding="utf-8") as stream:
@@ -556,6 +572,7 @@ def build_training_examples(
         if not tags:
             continue
         context_features = _model_context_features(meta)
+        semantic_tags = semantic_tag_items(tags, meta)
         feedback = latest_feedback.get(filename)
         is_explicit_ban = bool(
             isinstance(feedback, dict) and feedback.get("action") in {"ban", "dislike"}
@@ -572,6 +589,7 @@ def build_training_examples(
                     context_features=context_features,
                     temporal_label_known=True,
                     is_explicit_ban=is_explicit_ban,
+                    semantic_tags=semantic_tags,
                 )
             )
         elif filename in retained:
@@ -592,6 +610,7 @@ def build_training_examples(
                     is_explicit_keep=is_explicit_keep,
                     is_control=not explicit_positive,
                     temporal_label_known=temporal_label_known,
+                    semantic_tags=semantic_tags,
                 )
             )
     return examples
@@ -656,6 +675,7 @@ def _build_curated_preference_examples(
         if not tags:
             continue
         context_features = _model_context_features(meta)
+        semantic_tags = semantic_tag_items(tags, meta)
         if action in {"ban", "dislike"}:
             examples.append(
                 PreferenceExample(
@@ -667,6 +687,7 @@ def _build_curated_preference_examples(
                     context_features=context_features,
                     temporal_label_known=True,
                     is_explicit_ban=True,
+                    semantic_tags=semantic_tags,
                 )
             )
         else:  # keep
@@ -680,6 +701,7 @@ def _build_curated_preference_examples(
                     context_features=context_features,
                     temporal_label_known=True,
                     is_explicit_keep=True,
+                    semantic_tags=semantic_tags,
                 )
             )
     return examples
@@ -762,6 +784,10 @@ def collect_preference_training_snapshot(
         data_signature=_training_data_signature(examples),
         favorite_files=len(favorites),
         label_source=label_source,
+        favorite_metadata_files=sum(
+            isinstance(metadata.get(filename), dict) and bool(metadata[filename].get("tags"))
+            for filename in favorites
+        ),
     )
 
 
@@ -770,9 +796,7 @@ def train_local_preference_model(
     *,
     combo_min_support: int = DEFAULT_COMBO_MIN_SUPPORT,
     max_combo_features: int = DEFAULT_MAX_COMBO_FEATURES,
-    threshold: float = DEFAULT_THRESHOLD,
     epochs: int = DEFAULT_EPOCHS,
-    validation_days: int = 14,
     retrain_mode: str = "manual",
     semantic_model: str | None = DEFAULT_SEMANTIC_MODEL,
 ) -> tuple[PreferenceModel, PreferenceTrainingSnapshot]:
@@ -787,42 +811,19 @@ def train_local_preference_model(
         list(snapshot.examples),
         combo_min_support=combo_min_support,
         max_combo_features=max_combo_features,
-        threshold=threshold,
         epochs=epochs,
-        validation_days=validation_days,
         feedback_revision=snapshot.feedback_revision,
         retrain_mode=retrain_mode,
         semantic_model=semantic_model,
         label_source=snapshot.label_source,
     )
-    _warm_semantic_cache(model, snapshot)
     model.training_summary["favorite_files"] = snapshot.favorite_files
-    model.training_summary["favorites_without_usable_metadata"] = snapshot.favorite_files - int(
-        model.training_summary["favorites"]
+    model.training_summary["favorite_metadata_files"] = snapshot.favorite_metadata_files
+    model.training_summary["favorites_without_usable_metadata"] = max(
+        0,
+        snapshot.favorite_files - snapshot.favorite_metadata_files,
     )
     return model, snapshot
-
-
-def _warm_semantic_cache(
-    model: PreferenceModel,
-    snapshot: PreferenceTrainingSnapshot,
-) -> None:
-    """Pre-embed live retained metadata so review requests stay responsive."""
-    if not model.semantic_enabled:
-        return
-    try:
-        from .preference.semantic import embed_metadata
-
-        retained = [
-            (example.tags, example.context_features)
-            for example in snapshot.examples
-            if example.label == 0
-        ]
-        embed_metadata(retained, model_name=model.semantic_model)
-        model.training_summary["semantic_cached_records"] = len(retained)
-        model.training_summary["semantic_cache_status"] = "ready"
-    except Exception as exc:  # pragma: no cover - optional runtime/environment dependent
-        model.training_summary["semantic_cache_status"] = f"unavailable: {type(exc).__name__}"
 
 
 def _save_manual_preference_model(
@@ -857,9 +858,7 @@ def train_and_save_local_preference_model(
     *,
     combo_min_support: int = DEFAULT_COMBO_MIN_SUPPORT,
     max_combo_features: int = DEFAULT_MAX_COMBO_FEATURES,
-    threshold: float = DEFAULT_THRESHOLD,
     epochs: int = DEFAULT_EPOCHS,
-    validation_days: int = 14,
     semantic_model: str | None = DEFAULT_SEMANTIC_MODEL,
 ) -> tuple[PreferenceModel, PreferenceTrainingSnapshot]:
     """Fit and commit a manual model, retrying once if labels changed mid-fit."""
@@ -868,9 +867,7 @@ def train_and_save_local_preference_model(
             config,
             combo_min_support=combo_min_support,
             max_combo_features=max_combo_features,
-            threshold=threshold,
             epochs=epochs,
-            validation_days=validation_days,
             retrain_mode="manual",
             semantic_model=semantic_model,
         )
@@ -886,12 +883,15 @@ def model_report(
     learning: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Return compact, JSON-safe status information for UI or CLI callers."""
-    training = {key: value for key, value in model.training_summary.items() if key != "example_ids"}
+    training = {
+        key: value
+        for key, value in model.training_summary.items()
+        if key not in {"example_ids", "working_example_ids"}
+    }
     report: dict[str, object] = {
         "schema_version": model.schema_version,
         "feature_normalization": model.feature_normalization,
         "trained_at": model.trained_at,
-        "threshold": model.threshold,
         "tag_features": len(model.tag_weights),
         "combo_features": len(model.combo_weights),
         "context_features": len(model.context_weights),
@@ -905,26 +905,18 @@ def model_report(
         "semantic_model": model.semantic_model or None,
         "semantic_dimension": len(model.semantic_weights) or None,
         "semantic_blend": model.semantic_blend if model.semantic_enabled else None,
-        "review_threshold": preference_review_threshold(model),
-        "auto_filter_threshold": preference_review_threshold(model),
-        "recommendation_threshold": DEFAULT_RECOMMENDATION_THRESHOLD,
-        "recommendation_min_similarity": DEFAULT_NEIGHBOR_MIN_SIMILARITY,
-        "recommendation_strategy": model.training_summary.get(
-            "recommendation_strategy",
-            "content_knn_top_k" if model.neighbor_head_ready else "sparse_cold_start",
+        "semantic_neighbor_vote_weight": (
+            DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT
+            if model.neighbor_head_ready and model.semantic_enabled
+            else None
         ),
-        "auto_filter_threshold_kind": (
-            "content_knn_probability" if model.neighbor_head_ready else "sparse_review_margin"
-        ),
-        "auto_filter_calibration": model.training_summary.get(
-            "auto_filter_calibration",
-            model.training_summary.get("review_calibration"),
-        ),
-        "review_calibration": model.training_summary.get("review_calibration"),
+        "decision_threshold": preference_decision_threshold(model),
+        # Stable API aliases; all three names intentionally expose one value.
+        "decision_calibration": model.training_summary.get("decision_calibration"),
+        "decision_strategy": "two_stage_tag_semantic_knn",
         "label_source": model.training_summary.get("label_source", "legacy"),
         "training": training,
-        "validation": model.validation,
-        "auto_skip_ready": auto_skip_ready(model),
+        "validation": model.training_summary.get("decision_calibration"),
     }
     if path and path.exists():
         report["path"] = str(path)
@@ -934,27 +926,6 @@ def model_report(
     return report
 
 
-def auto_skip_ready(model: PreferenceModel) -> bool:
-    """Return whether recent time-split precision clears the safety gate."""
-    if (
-        model.schema_version != MODEL_SCHEMA_VERSION
-        or model.validation.get("available") is not True
-        or model.validation.get("calibrated") is not True
-    ):
-        return False
-    precision = model.validation.get("precision_at_threshold")
-    predicted = model.validation.get("predicted_at_threshold")
-    lower_bound = model.validation.get("precision_lower_bound")
-    return (
-        isinstance(precision, int | float)
-        and precision >= AUTO_SKIP_MIN_PRECISION
-        and isinstance(predicted, int)
-        and predicted >= AUTO_SKIP_MIN_PREDICTIONS
-        and isinstance(lower_bound, int | float)
-        and lower_bound >= AUTO_SKIP_MIN_PRECISION_LOWER_BOUND
-    )
-
-
 def auto_filter_status(
     config: WayperConfig,
     model: PreferenceModel | None = None,
@@ -962,9 +933,7 @@ def auto_filter_status(
     """Describe whether the model can quarantine downloads for human review.
 
     A model hit is recoverable: it is downloaded into the Model review queue
-    and requires an explicit Keep or Ban decision.  Auto-held uses its own
-    held-out precision boundary; the stricter ``auto_skip`` validation gate
-    remains reserved for any future unattended action.
+    and requires an explicit Keep or Ban decision.
     """
     path = preference_model_path(config)
     model = model or load_preference_model(path)
@@ -976,27 +945,21 @@ def auto_filter_status(
             "threshold": None,
             "model": None,
         }
-    review_calibration = model.training_summary.get(
-        "auto_filter_calibration",
-        model.training_summary.get("review_calibration"),
-    )
-    # A hand-built/legacy model with no calibration record historically acted
-    # as a recoverable Review filter.  Persisted schema-4 models, however,
-    # carry an explicit calibration record and must clear its safety gate.
-    calibration_ready = not isinstance(review_calibration, dict) or (
-        review_calibration.get("available") is True
-        and review_calibration.get("version") == REVIEW_CALIBRATION_VERSION
+    decision_calibration = model.training_summary.get("decision_calibration")
+    calibration_ready = isinstance(decision_calibration, dict) and (
+        decision_calibration.get("available") is True
+        and decision_calibration.get("version") == DECISION_CALIBRATION_VERSION
     )
     schema_ready = model.schema_version == MODEL_SCHEMA_VERSION
-    ready = schema_ready and calibration_ready
-    unattended_skip_ready = auto_skip_ready(model)
+    semantic_ready = model.semantic_enabled and model.neighbor_head_ready
+    ready = schema_ready and semantic_ready and calibration_ready
     if ready:
         status = "ready"
         reason = "Model filtering is active. Likely blocks are held for your review."
     elif schema_ready:
         status = "calibration_pending"
-        if isinstance(review_calibration, dict) and review_calibration.get("version") != (
-            REVIEW_CALIBRATION_VERSION
+        if isinstance(decision_calibration, dict) and decision_calibration.get("version") != (
+            DECISION_CALIBRATION_VERSION
         ):
             reason = "Refreshing the model's automatic boundary after the ranking upgrade."
         else:
@@ -1010,15 +973,9 @@ def auto_filter_status(
         "status": status,
         "ready": ready,
         "reason": reason,
-        "threshold": preference_review_threshold(model),
-        "threshold_kind": (
-            "content_knn_probability" if model.neighbor_head_ready else "calibrated_review_score"
-        ),
-        "recommendation_threshold": DEFAULT_RECOMMENDATION_THRESHOLD,
-        "recommendation_ready": schema_ready,
-        "review_calibration": review_calibration,
-        "auto_filter_calibration": review_calibration,
-        "unattended_skip_ready": unattended_skip_ready,
+        "threshold": preference_decision_threshold(model),
+        "threshold_kind": "two_stage_tag_semantic_probability",
+        "decision_calibration": decision_calibration,
         "model": model_report(model, path),
     }
 
@@ -1041,7 +998,7 @@ def auto_filter_prediction(
     if isinstance(uploader, dict):
         model_metadata["uploader"] = uploader.get("username", "")
     prediction = model.predict(tags, metadata=model_metadata, top_n=12)
-    is_candidate = model.schema_version == MODEL_SCHEMA_VERSION and preference_review_candidate(
+    is_candidate = model.schema_version == MODEL_SCHEMA_VERSION and preference_candidate(
         model, prediction
     )
     return is_candidate, prediction
@@ -1083,31 +1040,22 @@ def preference_learning_status(
     summary = model.training_summary
     stored_label_source = summary.get("label_source", "legacy")
     label_source_changed = stored_label_source != snapshot.label_source
-    auto_filter_threshold = summary.get("auto_filter_threshold", summary.get("review_threshold"))
-    auto_filter_calibration = summary.get(
-        "auto_filter_calibration",
-        summary.get("review_calibration"),
+    decision_threshold = summary.get("decision_threshold")
+    decision_calibration = summary.get("decision_calibration")
+    decision_boundary_upgrade_due = (
+        not isinstance(decision_threshold, int | float)
+        or isinstance(decision_threshold, bool)
+        or not math.isfinite(decision_threshold)
+        or not isinstance(decision_calibration, dict)
+        or decision_calibration.get("version") != DECISION_CALIBRATION_VERSION
     )
-    compatibility_boundary_alias_missing = (
-        "review_threshold" not in summary or "review_calibration" not in summary
-    )
-    review_boundary_upgrade_due = (
-        not isinstance(auto_filter_threshold, int | float)
-        or isinstance(auto_filter_threshold, bool)
-        or not math.isfinite(auto_filter_threshold)
-        or not isinstance(auto_filter_calibration, dict)
-        or auto_filter_calibration.get("version") != REVIEW_CALIBRATION_VERSION
-        or compatibility_boundary_alias_missing
-    )
-    neighbor_head_upgrade_due = model.schema_version == MODEL_SCHEMA_VERSION and summary.get(
-        "neighbor_status"
-    ) not in {"ready", "insufficient_explicit_feedback"}
+    semantic_head_upgrade_due = not model.semantic_enabled or not model.neighbor_head_ready
     upgrade_due = (
         model.schema_version != MODEL_SCHEMA_VERSION
         or model.feature_normalization != DEFAULT_FEATURE_NORMALIZATION
         or label_source_changed
-        or review_boundary_upgrade_due
-        or neighbor_head_upgrade_due
+        or decision_boundary_upgrade_due
+        or semantic_head_upgrade_due
     )
     previous_revision = summary.get("feedback_revision", 0)
     if not isinstance(previous_revision, int):
@@ -1118,10 +1066,14 @@ def preference_learning_status(
         or not isinstance(stored_signature, str)
         or stored_signature != snapshot.data_signature
     )
-    stored_ids = summary.get("example_ids")
+    stored_ids = summary.get("working_example_ids")
     if isinstance(stored_ids, list):
+        current_working = select_preference_examples(
+            snapshot.examples,
+            limit=DEFAULT_TRAINING_MAX_EXAMPLES,
+        )
         changed_examples = len(
-            set(str(item) for item in stored_ids) ^ set(_training_example_ids(snapshot.examples))
+            set(str(item) for item in stored_ids) ^ set(_training_example_ids(current_working))
         )
     else:
         changed_examples = len(snapshot.examples) if stale else 0
@@ -1133,8 +1085,8 @@ def preference_learning_status(
         "upgrade_due": upgrade_due,
         "label_source": snapshot.label_source,
         "label_source_changed": label_source_changed,
-        "review_boundary_upgrade_due": review_boundary_upgrade_due,
-        "neighbor_head_upgrade_due": neighbor_head_upgrade_due,
+        "decision_boundary_upgrade_due": decision_boundary_upgrade_due,
+        "semantic_head_upgrade_due": semantic_head_upgrade_due,
         "pending_feedback": pending_feedback,
         "changed_examples": changed_examples,
         "weight_refresh_due": weight_refresh_due,
@@ -1156,22 +1108,6 @@ def preference_learning_status(
     }
 
 
-def _preference_review_score(prediction: PreferencePrediction) -> float:
-    """Compatibility wrapper for the shared Review score implementation."""
-    return preference_review_score(prediction)
-
-
-def _recommendation_rank_score(prediction: PreferencePrediction) -> float:
-    """Return the primary human-review ranking score.
-
-    Explicit-neighbour probability is the mature item-item signal.  Sparse
-    margins remain useful only for cold-start queries and deterministic ties.
-    """
-    if prediction.neighbor_available and prediction.neighbor_probability is not None:
-        return prediction.neighbor_probability
-    return _preference_review_score(prediction)
-
-
 def _diversify_preference_review_rank(
     ranked: list[dict[str, object]],
 ) -> list[dict[str, object]]:
@@ -1184,7 +1120,7 @@ def _diversify_preference_review_rank(
     for item in ranked:
         prediction = item.get("prediction")
         evidence = (
-            prediction.neighbor_nearest_dislike or prediction.strongest_review_dislike
+            prediction.neighbor_nearest_dislike
             if isinstance(prediction, PreferencePrediction)
             else None
         )
@@ -1214,24 +1150,6 @@ def _diversify_preference_review_rank(
     ]
 
 
-def _descending_percentiles(items: list[dict[str, object]], key: str) -> list[float]:
-    """Return deterministic 0..1 rank percentiles for one score field."""
-    if not items:
-        return []
-    ordered = sorted(
-        range(len(items)),
-        key=lambda index: (
-            -float(items[index].get(key, 0.0)),
-            str(items[index].get("name", "")),
-        ),
-    )
-    values = [0.0] * len(items)
-    denominator = max(1, len(items) - 1)
-    for rank, index in enumerate(ordered):
-        values[index] = 1.0 - rank / denominator
-    return values
-
-
 def preference_deletion_suggestions(
     config: WayperConfig,
     *,
@@ -1243,8 +1161,7 @@ def preference_deletion_suggestions(
 
     This function never alters the blacklist or filesystem. Favorites,
     blacklisted files, explicit positive corrections, and metadata-only records
-    are excluded. When available, a local text head is fused with the exact
-    sparse review score; no image pixels are inspected.
+    are excluded. No image pixels are inspected.
     """
     from .pool import favorites_dir, list_blacklist, list_images, load_metadata, pool_dir
     from .state import ALL_PURITIES
@@ -1261,23 +1178,26 @@ def preference_deletion_suggestions(
             "status": "untrained",
             "items": [],
             "learning": learning,
-            "review_strategy": "content_knn_rank",
+            "review_strategy": "two_stage_tag_semantic_rank",
         }
-
-    ranking_model = model
-    temporary_neighbor_head = False
-    if model.schema_version != MODEL_SCHEMA_VERSION:
-        # Keep an existing installation useful while the schema-4 model is
-        # being refreshed in the background.  This in-memory migration only
-        # powers human recommendations; automatic download filtering still
-        # requires a persisted, current model and calibration.
-        prototypes = build_neighbor_prototypes(snapshot.examples)
-        if prototypes:
-            ranking_model = copy(model)
-            ranking_model.neighbor_prototypes = prototypes
-            ranking_model.neighbor_k = DEFAULT_NEIGHBOR_K
-            ranking_model._neighbor_feature_index = None
-            temporary_neighbor_head = True
+    calibration = model.training_summary.get("decision_calibration")
+    if (
+        model.schema_version != MODEL_SCHEMA_VERSION
+        or not model.semantic_enabled
+        or not model.neighbor_head_ready
+        or not isinstance(calibration, dict)
+        or calibration.get("available") is not True
+        or calibration.get("version") != DECISION_CALIBRATION_VERSION
+    ):
+        return {
+            "status": (
+                "upgrade_pending" if model.schema_version != MODEL_SCHEMA_VERSION else "learning"
+            ),
+            "items": [],
+            "learning": learning,
+            "model": model_report(model, model_path, learning=learning),
+            "review_strategy": "two_stage_tag_semantic_rank",
+        }
 
     active_purities = tuple(
         purity for purity in (purities or ALL_PURITIES) if purity in ALL_PURITIES
@@ -1321,7 +1241,7 @@ def preference_deletion_suggestions(
                 metadata_images += 1
                 records.append((image, filename, meta))
 
-    predictions = ranking_model.predict_many(
+    predictions = model.predict_many(
         [(meta.get("tags", []), meta, None) for _, _, meta in records],
         top_n=20,
     )
@@ -1330,14 +1250,12 @@ def preference_deletion_suggestions(
     semantic_evidence_images = 0
     semantic_scored_images = 0
     best_score: float | None = None
-    best_review_score: float | None = None
     best_decision_score: float | None = None
     best_semantic_score: float | None = None
     best_neighbor_probability: float | None = None
     best_neighbor_similarity: float | None = None
     neighbor_scored_images = 0
     neighbor_candidate_images = 0
-    sparse_fallback_images = 0
     scored: list[dict[str, object]] = []
     for (image, filename, _meta), prediction in zip(records, predictions, strict=True):
         if prediction.positive_evidence_count > 0:
@@ -1350,10 +1268,7 @@ def preference_deletion_suggestions(
                 semantic_evidence_images += 1
             if best_semantic_score is None or prediction.semantic_score > best_semantic_score:
                 best_semantic_score = prediction.semantic_score
-        review_score = preference_review_score(prediction)
-        decision_score = preference_review_decision_score(ranking_model, prediction)
-        if best_review_score is None or review_score > best_review_score:
-            best_review_score = review_score
+        decision_score = preference_decision_score(model, prediction)
         if best_decision_score is None or decision_score > best_decision_score:
             best_decision_score = decision_score
         if prediction.neighbor_available:
@@ -1368,57 +1283,31 @@ def preference_deletion_suggestions(
                 or prediction.neighbor_max_similarity > best_neighbor_similarity
             ):
                 best_neighbor_similarity = prediction.neighbor_max_similarity
-        else:
-            sparse_fallback_images += 1
-        if not preference_recommendation_candidate(ranking_model, prediction):
+        if not preference_candidate(model, prediction):
             continue
-        neighbor_candidate_images += int(prediction.neighbor_available)
+        neighbor_candidate_images += 1
         scored.append(
             {
                 "path": str(image.relative_to(config.download_dir)),
                 "name": filename,
                 "prediction": prediction,
-                "review_score": review_score,
                 "decision_score": decision_score,
-                "semantic_score": prediction.semantic_score or 0.0,
-                "recommendation_score": _recommendation_rank_score(prediction),
                 "neighbor_probability": prediction.neighbor_probability,
                 "neighbor_max_similarity": prediction.neighbor_max_similarity,
                 "neighbor_similarity_sum": prediction.neighbor_similarity_sum,
-                "ranking_source": (
-                    "content_knn" if prediction.neighbor_available else "sparse_fallback"
-                ),
+                "neighbor_exact_max_similarity": prediction.neighbor_exact_max_similarity,
+                "neighbor_semantic_max_similarity": prediction.neighbor_semantic_max_similarity,
+                "neighbor_preference_gap": prediction.neighbor_preference_gap,
             }
         )
-
-    # Semantic similarity is a useful tie-breaker, but it must not displace the
-    # explicit-feedback kNN signal that was validated on temporal holdouts.
-    semantic_enabled = ranking_model.semantic_enabled and semantic_scored_images > 0
-    if not ranking_model.neighbor_head_ready and semantic_enabled:
-        base_percentiles = _descending_percentiles(
-            [{"name": item["name"], "review_score": item["review_score"]} for item in scored],
-            "review_score",
-        )
-        semantic_percentiles = _descending_percentiles(scored, "semantic_score")
-        semantic_rank_weight = min(1.0, max(0.0, ranking_model.semantic_rank_weight or 0.65))
-        for index, item in enumerate(scored):
-            item["hybrid_score"] = (1.0 - semantic_rank_weight) * base_percentiles[
-                index
-            ] + semantic_rank_weight * semantic_percentiles[index]
-    else:
-        for item in scored:
-            item["hybrid_score"] = float(item["recommendation_score"])
 
     ranked_all = _diversify_preference_review_rank(
         sorted(
             scored,
             key=lambda item: (
-                0 if item["ranking_source"] == "content_knn" else 1,
-                -float(item["hybrid_score"]),
+                -float(item["decision_score"]),
                 -float(item["neighbor_max_similarity"]),
                 -float(item["neighbor_similarity_sum"]),
-                -float(item["decision_score"]),
-                -item["prediction"].feature_score,
                 str(item["name"]),
             ),
         ),
@@ -1435,11 +1324,7 @@ def preference_deletion_suggestions(
                 "name": item["name"],
                 "score": round(prediction.score, 4),
                 "feature_score": round(prediction.feature_score, 4),
-                "review_score": round(float(item["review_score"]), 4),
                 "decision_score": round(float(item["decision_score"]), 4),
-                "recommendation_score": round(float(item["recommendation_score"]), 4),
-                "hybrid_score": round(float(item["hybrid_score"]), 4),
-                "ranking_source": item["ranking_source"],
                 "neighbor_probability": (
                     round(prediction.neighbor_probability, 4)
                     if prediction.neighbor_probability is not None
@@ -1453,6 +1338,15 @@ def preference_deletion_suggestions(
                 "neighbor_max_similarity": round(prediction.neighbor_max_similarity, 4),
                 "neighbor_nearest_dislike": prediction.neighbor_nearest_dislike,
                 "neighbor_nearest_keep": prediction.neighbor_nearest_keep,
+                "neighbor_exact_max_similarity": round(
+                    prediction.neighbor_exact_max_similarity,
+                    4,
+                ),
+                "neighbor_semantic_max_similarity": round(
+                    prediction.neighbor_semantic_max_similarity,
+                    4,
+                ),
+                "neighbor_preference_gap": round(prediction.neighbor_preference_gap, 4),
                 "semantic_score": (
                     round(prediction.semantic_score, 4)
                     if prediction.semantic_score is not None
@@ -1464,16 +1358,6 @@ def preference_deletion_suggestions(
                     else None
                 ),
                 "semantic_available": prediction.semantic_available,
-                "strongest_review_dislike_score": round(
-                    prediction.strongest_review_dislike_score,
-                    4,
-                ),
-                "strongest_review_dislike": prediction.strongest_review_dislike,
-                "strongest_review_keep_score": round(
-                    prediction.strongest_review_keep_score,
-                    4,
-                ),
-                "strongest_review_keep": prediction.strongest_review_keep,
                 "probability": round(prediction.probability, 4),
                 "calibrated": prediction.calibrated,
                 "rank": all_rank,
@@ -1496,33 +1380,13 @@ def preference_deletion_suggestions(
             }
         )
     candidates.sort(key=lambda item: (int(item["rank"]), str(item["name"])))
-    report_model = model_report(
-        ranking_model if not temporary_neighbor_head else model,
-        model_path,
-        learning=learning,
-    )
-    if temporary_neighbor_head:
-        report_model.update(
-            {
-                "recommendation_neighbor_head_ready": True,
-                "recommendation_strategy": "content_knn_top_k",
-                "temporary_neighbor_head": True,
-            }
-        )
     return {
         "status": "ready",
         "items": candidates,
         "learning": learning,
-        "model": report_model,
-        "review_threshold": preference_review_threshold(ranking_model),
-        "recommendation_threshold": DEFAULT_RECOMMENDATION_THRESHOLD,
-        "review_strategy": (
-            "content_knn_rank"
-            if ranking_model.neighbor_head_ready
-            else "hybrid_semantic_rank"
-            if semantic_enabled
-            else "boosted_dislike_rank"
-        ),
+        "model": model_report(model, model_path, learning=learning),
+        "decision_threshold": preference_decision_threshold(model),
+        "review_strategy": "two_stage_tag_semantic_rank",
         "diagnostics": {
             "pool_images": pool_images,
             "metadata_images": metadata_images,
@@ -1530,22 +1394,16 @@ def preference_deletion_suggestions(
             "positive_evidence_images": positive_evidence_images,
             "neighbor_scored_images": neighbor_scored_images,
             "neighbor_candidate_images": neighbor_candidate_images,
-            "sparse_fallback_images": sparse_fallback_images,
             "semantic_evidence_images": semantic_evidence_images,
             "semantic_scored_images": semantic_scored_images,
             "candidate_count": ranked_pool_count,
             "returned_count": len(candidates),
             "ranked_pool_count": ranked_pool_count,
             "best_feature_score": round(best_score, 4) if best_score is not None else None,
-            "best_review_score": round(best_review_score, 4)
-            if best_review_score is not None
-            else None,
             "best_decision_score": round(best_decision_score, 4)
             if best_decision_score is not None
             else None,
-            "review_threshold": preference_review_threshold(ranking_model),
-            "recommendation_threshold": DEFAULT_RECOMMENDATION_THRESHOLD,
-            "recommendation_min_similarity": DEFAULT_NEIGHBOR_MIN_SIMILARITY,
+            "decision_threshold": preference_decision_threshold(model),
             "best_neighbor_probability": (
                 round(best_neighbor_probability, 4)
                 if best_neighbor_probability is not None
@@ -1557,7 +1415,6 @@ def preference_deletion_suggestions(
             "best_semantic_score": round(best_semantic_score, 4)
             if best_semantic_score is not None
             else None,
-            "temporary_neighbor_head": temporary_neighbor_head,
         },
     }
 
@@ -1757,7 +1614,7 @@ def _has_pending_preference_feedback_refresh(config: WayperConfig) -> bool:
     previous_revision = model.training_summary.get("feedback_revision", 0)
     if not isinstance(previous_revision, int):
         previous_revision = 0
-    feedback_revision = int(load_preference_feedback(config)["revision"])
+    feedback_revision = _current_feedback_revision(config)
     return feedback_revision - previous_revision >= AUTO_RETRAIN_MIN_FEEDBACK
 
 
@@ -1775,7 +1632,7 @@ def schedule_preference_model_retrain(config: WayperConfig, *, force: bool = Fal
     """
     model = load_preference_model(preference_model_path(config))
     if model is None:
-        feedback_revision = int(load_preference_feedback(config)["revision"])
+        feedback_revision = _current_feedback_revision(config)
         if not force and feedback_revision < AUTO_RETRAIN_MIN_FEEDBACK:
             return
         snapshot = collect_preference_training_snapshot(
@@ -1870,31 +1727,41 @@ def _save_automatic_preference_model(
             ):
                 return False
             current_summary = current_model.training_summary if current_model is not None else {}
-            current_threshold = current_summary.get(
-                "auto_filter_threshold",
-                current_summary.get("review_threshold"),
-            )
-            current_calibration = current_summary.get(
-                "auto_filter_calibration",
-                current_summary.get("review_calibration"),
-            )
-            review_boundary_current = (
+            current_threshold = current_summary.get("decision_threshold")
+            current_calibration = current_summary.get("decision_calibration")
+            decision_boundary_current = (
                 isinstance(current_threshold, int | float)
                 and not isinstance(current_threshold, bool)
                 and math.isfinite(current_threshold)
                 and isinstance(current_calibration, dict)
-                and current_calibration.get("version") == REVIEW_CALIBRATION_VERSION
+                and current_calibration.get("version") == DECISION_CALIBRATION_VERSION
             )
-            neighbor_head_current = current_summary.get("neighbor_status") in {
-                "ready",
-                "insufficient_explicit_feedback",
-            }
+            new_calibration = model.training_summary.get("decision_calibration")
+            current_readiness = sum(
+                (
+                    decision_boundary_current,
+                    bool(current_model and current_model.semantic_enabled),
+                    bool(current_model and current_model.neighbor_head_ready),
+                    isinstance(current_calibration, dict)
+                    and current_calibration.get("available") is True,
+                )
+            )
+            new_readiness = sum(
+                (
+                    model.semantic_enabled,
+                    model.neighbor_head_ready,
+                    isinstance(new_calibration, dict)
+                    and new_calibration.get("version") == DECISION_CALIBRATION_VERSION,
+                    isinstance(new_calibration, dict) and new_calibration.get("available") is True,
+                )
+            )
             if (
                 current_model is not None
+                and current_model.schema_version == MODEL_SCHEMA_VERSION
                 and current_summary.get("training_data_signature") == current.data_signature
                 and current_summary.get("label_source", "legacy") == current.label_source
-                and review_boundary_current
-                and neighbor_head_current
+                and decision_boundary_current
+                and current_readiness >= new_readiness
             ):
                 # A manual fit (or another worker) already covered exactly the
                 # same snapshot and calibration. Preserve its hyperparameters.
@@ -1924,16 +1791,6 @@ def _run_auto_retrain(config: WayperConfig) -> str:
             if model is not None
             else DEFAULT_EPOCHS
         )
-        validation_days = (
-            int(
-                model.training_summary.get(
-                    "validation_days",
-                    model.validation.get("holdout_days", 14),
-                )
-            )
-            if model is not None
-            else 14
-        )
         upgrading = model is None or bool(learning.get("upgrade_due"))
         semantic_model = DEFAULT_SEMANTIC_MODEL
         if model is not None and model.semantic_model:
@@ -1944,18 +1801,17 @@ def _run_auto_retrain(config: WayperConfig) -> str:
             max_combo_features=(
                 DEFAULT_MAX_COMBO_FEATURES if upgrading else model.max_combo_features
             ),
-            threshold=DEFAULT_THRESHOLD if upgrading else model.threshold,
             epochs=max(1, epochs),
-            validation_days=max(0, validation_days),
             feedback_revision=snapshot.feedback_revision,
             retrain_mode="automatic",
             semantic_model=semantic_model,
             label_source=snapshot.label_source,
         )
-        _warm_semantic_cache(refreshed, snapshot)
         refreshed.training_summary["favorite_files"] = snapshot.favorite_files
-        refreshed.training_summary["favorites_without_usable_metadata"] = (
-            snapshot.favorite_files - int(refreshed.training_summary["favorites"])
+        refreshed.training_summary["favorite_metadata_files"] = snapshot.favorite_metadata_files
+        refreshed.training_summary["favorites_without_usable_metadata"] = max(
+            0,
+            snapshot.favorite_files - snapshot.favorite_metadata_files,
         )
 
         if _save_automatic_preference_model(config, refreshed, snapshot):
