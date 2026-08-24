@@ -276,10 +276,6 @@ async function init() {
     } finally {
         hideLoader();
     }
-    if (typeof scheduleModelReviewPrefetch === 'function') {
-        scheduleModelReviewPrefetch();
-    }
-
     // Initial metrics update after images loaded (or attempted)
     setTimeout(updateGridMetrics, 500);
 

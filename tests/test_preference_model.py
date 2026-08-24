@@ -22,6 +22,7 @@ from wayper.preference_model import (
     PreferencePrediction,
     PreferenceTrainingSnapshot,
     _auto_retrain_lease_path,
+    _batched_preference_predictions,
     _bootstrap_historical_preference_bans,
     _build_feature_space,
     _claim_or_touch_auto_retrain_worker,
@@ -309,6 +310,30 @@ class PreferenceModelTest(unittest.TestCase):
         self.assertEqual(sum(example.label == 1 for example in working), 1_024)
         self.assertEqual(model.training_summary["working_examples"], 2_048)
         self.assertEqual(len(model.neighbor_prototypes), 3_000)
+        self.assertNotIn("recommendation_strategy", model.training_summary)
+
+    def test_library_predictions_are_bounded_to_small_batches(self) -> None:
+        class FakeModel:
+            def __init__(self) -> None:
+                self.batch_sizes: list[int] = []
+
+            def predict_many(self, records, *, top_n: int):
+                materialized = tuple(records)
+                self.batch_sizes.append(len(materialized))
+                self.assert_top_n = top_n
+                return tuple(range(len(materialized)))
+
+        records = [
+            (Path(f"item-{index}.jpg"), f"item-{index}.jpg", {"tags": ["tag"]})
+            for index in range(130)
+        ]
+        model = FakeModel()
+
+        predictions = list(_batched_preference_predictions(model, records, top_n=20))
+
+        self.assertEqual(model.batch_sizes, [64, 64, 2])
+        self.assertEqual(model.assert_top_n, 20)
+        self.assertEqual(len(predictions), len(records))
 
     def test_save_load_round_trip_preserves_predictions(self) -> None:
         examples = [
@@ -481,7 +506,23 @@ class PreferenceModelTest(unittest.TestCase):
 
             return [vector(text) for text in texts]
 
-        with patch("wayper.preference.semantic.embed_texts", side_effect=fake_embed):
+        from wayper.preference import semantic as semantic_module
+
+        real_embed_tag_sets = semantic_module.embed_tag_sets
+        tag_set_batch_sizes: list[int] = []
+
+        def counting_embed_tag_sets(records, *, model_name, idf=None):
+            materialized = tuple(records)
+            tag_set_batch_sizes.append(len(materialized))
+            return real_embed_tag_sets(materialized, model_name=model_name, idf=idf)
+
+        with (
+            patch("wayper.preference.semantic.embed_texts", side_effect=fake_embed),
+            patch(
+                "wayper.preference.semantic.embed_tag_sets",
+                side_effect=counting_embed_tag_sets,
+            ),
+        ):
             disliked = model.predict(
                 ["woodland", "mist"],
                 _semantic_embedding=(0.0, 0.0, 0.0),
@@ -490,6 +531,14 @@ class PreferenceModelTest(unittest.TestCase):
                 ["seaside", "sunshine"],
                 _semantic_embedding=(0.0, 0.0, 0.0),
             )
+            cached_call_count = len(tag_set_batch_sizes)
+            model.predict(
+                ["woodland", "mist"],
+                _semantic_embedding=(0.0, 0.0, 0.0),
+            )
+
+        self.assertGreater(max(tag_set_batch_sizes[:cached_call_count]), 2)
+        self.assertEqual(tag_set_batch_sizes[cached_call_count:], [2])
 
         self.assertEqual(disliked.neighbor_exact_max_similarity, 0.0)
         self.assertGreater(disliked.neighbor_semantic_max_similarity, 0.9)

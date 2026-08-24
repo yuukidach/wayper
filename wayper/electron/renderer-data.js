@@ -484,21 +484,6 @@ function invalidateModelReviewCaches(path = null) {
     invalidateModelReviewContextCache();
 }
 
-function scheduleModelReviewPrefetch() {
-    if (!appState.selectedMonitor || appState.status?.model_filter_ready === false) return;
-    const monitor = appState.monitors.find(item => item.name === appState.selectedMonitor);
-    const orient = monitor?.orientation || appState.currentOrient || 'landscape';
-    const run = () => {
-        requestModelReviewRecommendations(orient)
-            .catch(error => console.debug('Model review prefetch unavailable:', error));
-    };
-    if (typeof window.requestIdleCallback === 'function') {
-        window.requestIdleCallback(run, { timeout: 1200 });
-    } else {
-        setTimeout(run, 400);
-    }
-}
-
 function preferenceSuggestionItems(data) {
     if (!Array.isArray(data?.items)) return [];
     const resolved = appState.preferenceReviewResolvedPaths instanceof Set

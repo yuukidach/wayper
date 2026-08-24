@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -173,6 +174,29 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual((unscoped.pool_count, unscoped.favorites_count), (2, 2))
         self.assertEqual(unscoped.model_review_count, 2)
 
+    def test_unscoped_status_skips_unused_learning_snapshot(self) -> None:
+        config = WayperConfig()
+        with (
+            patch("wayper.server.api.get_config", return_value=config),
+            patch(
+                "wayper.server.api.rotation_service.snapshot",
+                return_value={"auto_rotation": True, "rotation_paused": False},
+            ),
+            patch(
+                "wayper.model_review.model_review_status",
+                return_value={"pending_count": 0, "ready": True},
+            ) as review_status,
+        ):
+            response = get_status(include_recoverable=False)
+
+        self.assertTrue(response.model_filter_ready)
+        review_status.assert_called_once_with(
+            config,
+            purities=None,
+            orientation=None,
+            include_learning=False,
+        )
+
     def test_config_route_exposes_and_updates_wallhaven_batch_size(self) -> None:
         config = WayperConfig(wallhaven=WallhavenConfig(batch_size=7))
 
@@ -289,6 +313,80 @@ class RegressionTest(unittest.TestCase):
 
         self.assertEqual(held, [])
         self.assertTrue(downloaded)
+
+    def test_model_filter_scoring_runs_outside_the_api_event_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(
+                download_dir=Path(td),
+                wallhaven=WallhavenConfig(filter_strategy="model", batch_size=1),
+            )
+            item = {
+                "id": "candidate",
+                "path": "https://wallhaven.test/candidate.jpg",
+                "favorites": 10,
+            }
+            detail = {**item, "tags": [{"name": "forest"}], "purity": "sfw"}
+            client = WallhavenClient(config)
+            client.search = AsyncMock(return_value=[item])
+            client.wallpaper_info = AsyncMock(return_value=detail)
+            score_threads: list[int] = []
+            event_loop_thread = threading.get_ident()
+
+            def score(_model, _metadata):
+                score_threads.append(threading.get_ident())
+                return False, None
+
+            async def download(_url: str, destination: Path) -> bool:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"candidate")
+                return True
+
+            client.download_image = AsyncMock(side_effect=download)
+            try:
+                with patch("wayper.preference_model.auto_filter_prediction", side_effect=score):
+                    asyncio.run(
+                        client.download_for(
+                            "landscape",
+                            "sfw",
+                            model_filter_context=(object(), True, {}),
+                        )
+                    )
+            finally:
+                asyncio.run(client.close())
+
+        self.assertEqual(len(score_threads), 1)
+        self.assertNotEqual(score_threads[0], event_loop_thread)
+
+    def test_background_download_lanes_share_one_model_context(self) -> None:
+        from wayper.rotation import _download_pending
+
+        shared_context = (object(), True, {"ready": True})
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.context_loads = 0
+                self.received: list[object] = []
+
+            def _model_filter_context(self):
+                self.context_loads += 1
+                return shared_context
+
+            async def download_for(self, _orientation, _purity, *, model_filter_context):
+                self.received.append(model_filter_context)
+
+        config = WayperConfig(
+            monitors=[
+                MonitorConfig("wide", 1920, 1080, "landscape"),
+                MonitorConfig("tall", 1080, 1920, "portrait"),
+            ]
+        )
+        client = FakeClient()
+        with patch("wayper.rotation.should_download", return_value={"sfw": True}):
+            asyncio.run(_download_pending(client, config, {"sfw"}))
+
+        self.assertEqual(client.context_loads, 1)
+        self.assertEqual(len(client.received), 2)
+        self.assertTrue(all(context is shared_context for context in client.received))
 
     def test_remote_favorite_fetches_complete_details_before_saving(self) -> None:
         with tempfile.TemporaryDirectory() as td:

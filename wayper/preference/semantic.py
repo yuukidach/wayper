@@ -31,6 +31,7 @@ SEMANTIC_MAX_TAGS = 32
 SEMANTIC_COARSE_PER_CLASS = 48
 SEMANTIC_EXACT_PER_CLASS = 32
 SEMANTIC_FINE_PER_CLASS = 16
+SEMANTIC_FINE_CACHE_SIZE = 4096
 SEMANTIC_SIMILARITY_FLOOR = 0.65
 SEMANTIC_EXACT_WEIGHT = 0.45
 SEMANTIC_TAG_WEIGHT = 0.45
@@ -38,7 +39,7 @@ SEMANTIC_CONTEXT_WEIGHT = 0.10
 
 
 class SemanticUnavailable(RuntimeError):
-    """Raised when the optional local embedding runtime cannot be loaded."""
+    """Raised when the local embedding runtime cannot be loaded."""
 
 
 @dataclass(frozen=True)

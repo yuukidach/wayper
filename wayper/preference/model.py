@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import heapq
 import math
+from collections import OrderedDict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -201,6 +202,7 @@ class _SemanticNeighborRuntime:
     pooled_matrix: object
     label_indices: tuple[object, object]
     tiebreak_rank: object
+    fine_sets: OrderedDict[int, object]
 
 
 def preference_decision_score(
@@ -393,6 +395,7 @@ class PreferenceModel:
                 pooled_matrix=pooled_matrix,
                 label_indices=(np.flatnonzero(labels == 0), np.flatnonzero(labels == 1)),
                 tiebreak_rank=tiebreak_rank,
+                fine_sets=OrderedDict(),
             )
             return self._semantic_neighbor_runtime
         except Exception:
@@ -477,6 +480,7 @@ class PreferenceModel:
             SEMANTIC_CONTEXT_WEIGHT,
             SEMANTIC_EXACT_PER_CLASS,
             SEMANTIC_EXACT_WEIGHT,
+            SEMANTIC_FINE_CACHE_SIZE,
             SEMANTIC_FINE_PER_CLASS,
             SEMANTIC_TAG_WEIGHT,
             embed_tag_sets,
@@ -520,12 +524,20 @@ class PreferenceModel:
             candidate_indices.update(exact_rank)
 
         ordered_indices = sorted(candidate_indices)
-        prototype_sets = embed_tag_sets(
-            [runtime.items[index] for index in ordered_indices],
-            model_name=self.semantic_model,
-            idf=runtime.idf,
-        )
-        tag_sets_by_index = dict(zip(ordered_indices, prototype_sets, strict=True))
+        missing_indices = [index for index in ordered_indices if index not in runtime.fine_sets]
+        if missing_indices:
+            missing_sets = embed_tag_sets(
+                [runtime.items[index] for index in missing_indices],
+                model_name=self.semantic_model,
+                idf=runtime.idf,
+            )
+            for index, tag_set in zip(missing_indices, missing_sets, strict=True):
+                runtime.fine_sets[index] = tag_set
+        for index in ordered_indices:
+            runtime.fine_sets.move_to_end(index)
+        while len(runtime.fine_sets) > SEMANTIC_FINE_CACHE_SIZE:
+            runtime.fine_sets.popitem(last=False)
+        tag_sets_by_index = {index: runtime.fine_sets[index] for index in ordered_indices}
         fine: list[dict[str, object]] = []
         for index in ordered_indices:
             prototype = self.neighbor_prototypes[index]

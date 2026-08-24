@@ -861,17 +861,14 @@ def get_status(
     try:
         from wayper.model_review import model_review_status
 
-        if selected_monitor:
-            review_status = model_review_status(
-                config,
-                purities=purities,
-                orientation=selected_orientation,
-                include_learning=False,
-            )
-        else:
-            # Preserve the historical unscoped response for CLI/older GUI
-            # callers that do not identify a monitor.
-            review_status = model_review_status(config)
+        review_status = model_review_status(
+            config,
+            purities=purities if selected_monitor else None,
+            orientation=selected_orientation if selected_monitor else None,
+            # StatusResponse exposes readiness and queue count only.  Building
+            # the full learning snapshot here is unused and can be expensive.
+            include_learning=False,
+        )
     except Exception:
         log.debug("Could not read model review status", exc_info=True)
         review_status = {"pending_count": 0, "ready": False}

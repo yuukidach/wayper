@@ -43,6 +43,7 @@ def _item_favorites(item: dict) -> int:
 
 
 _PURITY_CODES = {"sfw": "100", "sketchy": "010", "nsfw": "001"}
+_ModelFilterContext = tuple[object | None, bool, dict[str, object]]
 
 
 class WallhavenClient:
@@ -50,6 +51,7 @@ class WallhavenClient:
         self.config = config
         self._local_exclude_tags: list[str] = []
         self._cloud_tags: set[str] = set()
+        self._model_score_lock = asyncio.Lock()
         request_headers = {"User-Agent": USER_AGENT}
         if config.api_key:
             request_headers["X-API-Key"] = config.api_key
@@ -119,6 +121,20 @@ class WallhavenClient:
     @property
     def _model_enabled(self) -> bool:
         return self._filter_strategy in {"model", "rules+model"}
+
+    def _model_filter_context(self) -> _ModelFilterContext:
+        """Load one model context that concurrent download lanes can share."""
+        if not self._model_enabled:
+            return None, False, {}
+        try:
+            from .preference_model import auto_filter_status, load_preference_model
+
+            model = load_preference_model(self.config.preference_model_file)
+            status = auto_filter_status(self.config, model)
+            return model, bool(status.get("ready")), status
+        except Exception:
+            log.warning("Could not load the model filter; failing open", exc_info=True)
+            return None, False, {}
 
     def _download_sorting(self) -> str:
         """Return sorting used for automatic downloads.
@@ -298,7 +314,13 @@ class WallhavenClient:
             tmp.unlink(missing_ok=True)
             return False
 
-    async def download_for(self, orientation: str, mode: str) -> None:
+    async def download_for(
+        self,
+        orientation: str,
+        mode: str,
+        *,
+        model_filter_context: _ModelFilterContext | None = None,
+    ) -> None:
         """Download a batch of wallpapers for given orientation and mode."""
         config = self.config
         target_dir = pool_dir(config, mode, orientation)
@@ -307,26 +329,18 @@ class WallhavenClient:
         # Loading the model once per batch keeps the normal rules-only path
         # cheap. Model hits go to a recoverable review queue, so a current model
         # can participate without passing the unattended-deletion safety gate.
-        model = None
-        model_filter_ready = False
-        model_filter_status: dict[str, object] = {}
-        if self._model_enabled:
-            try:
-                from .preference_model import auto_filter_status, load_preference_model
-
-                model = load_preference_model(config.preference_model_file)
-                model_filter_status = auto_filter_status(config, model)
-                model_filter_ready = bool(model_filter_status.get("ready"))
-                if not model_filter_ready:
-                    log.info(
-                        "Model filter selected for %s/%s but no compatible model is ready; "
-                        "downloads remain eligible until the model is trained",
-                        mode,
-                        orientation,
-                    )
-            except Exception:
-                log.warning("Could not load the model filter; failing open", exc_info=True)
-                model = None
+        model, model_filter_ready, model_filter_status = (
+            model_filter_context
+            if model_filter_context is not None
+            else await asyncio.to_thread(self._model_filter_context)
+        )
+        if self._model_enabled and not model_filter_ready:
+            log.info(
+                "Model filter selected for %s/%s but no compatible model is ready; "
+                "downloads remain eligible until the model is trained",
+                mode,
+                orientation,
+            )
 
         items = await self.search(orientation, mode)
         skipped = {
@@ -421,7 +435,12 @@ class WallhavenClient:
                                 preference_decision_score,
                             )
 
-                            model_hit, prediction = auto_filter_prediction(model, item)
+                            async with self._model_score_lock:
+                                model_hit, prediction = await asyncio.to_thread(
+                                    auto_filter_prediction,
+                                    model,
+                                    item,
+                                )
                         except Exception:
                             log.warning(
                                 "Model filter scoring failed for %s; keeping download eligible",

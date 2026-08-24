@@ -178,6 +178,7 @@ __all__ = [
 
 DEFAULT_REVIEW_LIMIT = 24
 DEFAULT_REVIEW_REASON_LIMIT = 2
+PREFERENCE_PREDICTION_BATCH_SIZE = 64
 AUTO_RETRAIN_MIN_FEEDBACK = 10
 AUTO_RETRAIN_MIN_CHANGED_EXAMPLES = 12
 AUTO_RETRAIN_DELAY_SECONDS = 5
@@ -911,7 +912,6 @@ def model_report(
             else None
         ),
         "decision_threshold": preference_decision_threshold(model),
-        # Stable API aliases; all three names intentionally expose one value.
         "decision_calibration": model.training_summary.get("decision_calibration"),
         "decision_strategy": "two_stage_tag_semantic_knn",
         "label_source": model.training_summary.get("label_source", "legacy"),
@@ -1150,6 +1150,22 @@ def _diversify_preference_review_rank(
     ]
 
 
+def _batched_preference_predictions(
+    model: PreferenceModel,
+    records: list[tuple[Path, str, dict[str, object]]],
+    *,
+    top_n: int,
+):
+    """Score a library without materializing an unbounded query/prototype matrix."""
+    for start in range(0, len(records), PREFERENCE_PREDICTION_BATCH_SIZE):
+        batch = records[start : start + PREFERENCE_PREDICTION_BATCH_SIZE]
+        predictions = model.predict_many(
+            [(meta.get("tags", []), meta, None) for _, _, meta in batch],
+            top_n=top_n,
+        )
+        yield from zip(batch, predictions, strict=True)
+
+
 def preference_deletion_suggestions(
     config: WayperConfig,
     *,
@@ -1241,10 +1257,6 @@ def preference_deletion_suggestions(
                 metadata_images += 1
                 records.append((image, filename, meta))
 
-    predictions = model.predict_many(
-        [(meta.get("tags", []), meta, None) for _, _, meta in records],
-        top_n=20,
-    )
     scored_images = len(records)
     positive_evidence_images = 0
     semantic_evidence_images = 0
@@ -1257,7 +1269,11 @@ def preference_deletion_suggestions(
     neighbor_scored_images = 0
     neighbor_candidate_images = 0
     scored: list[dict[str, object]] = []
-    for (image, filename, _meta), prediction in zip(records, predictions, strict=True):
+    for (image, filename, _meta), prediction in _batched_preference_predictions(
+        model,
+        records,
+        top_n=20,
+    ):
         if prediction.positive_evidence_count > 0:
             positive_evidence_images += 1
             if best_score is None or prediction.feature_score > best_score:

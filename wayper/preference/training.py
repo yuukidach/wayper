@@ -46,8 +46,6 @@ DECISION_CALIBRATION_VERSION = 6
 DECISION_CALIBRATION_MAX_PER_CLASS = 320
 DECISION_MINIMUM_BOUNDARY = 0.50
 DECISION_CALIBRATION_OBJECTIVE = "two_stage_precision_at_least_0_80"
-# Public import compatibility; there is only one calibration path now.
-REVIEW_CALIBRATION_VERSION = DECISION_CALIBRATION_VERSION
 
 
 def _attach_neighbor_head(
@@ -389,7 +387,6 @@ def train_preference_model(
             "label_source": label_source,
             "decision_threshold": decision_calibration["threshold"],
             "decision_calibration": decision_calibration,
-            "recommendation_strategy": "two_stage_tag_semantic_knn",
         }
     )
     return model

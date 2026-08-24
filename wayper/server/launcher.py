@@ -104,7 +104,10 @@ def _wait_for_api(timeout: float = 10) -> int:
         print("Warning: API port file not found within timeout, launching Electron anyway")
         return 0
 
-    url = f"http://127.0.0.1:{port}/api/status"
+    # Readiness must stay cheap.  ``/api/status`` inspects the wallpaper
+    # library and model-review state, so retrying it while startup is still
+    # busy can stack several expensive requests in the server thread pool.
+    url = f"http://127.0.0.1:{port}/api/config"
     while time.monotonic() < deadline:
         try:
             urlopen(url, timeout=1)

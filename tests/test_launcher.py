@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+from unittest.mock import patch
 
-from wayper.server.launcher import _electron_command, _icon_path
+from wayper.server.launcher import _electron_command, _icon_path, _wait_for_api
 
 
 def _touch(path: Path) -> Path:
@@ -61,3 +62,17 @@ def test_wayper_gui_uses_windowed_entry_point() -> None:
 
 def test_source_launcher_finds_repository_icon() -> None:
     assert _icon_path() is not None
+
+
+def test_api_readiness_probe_uses_lightweight_config_route(tmp_path: Path) -> None:
+    port_path = tmp_path / "api.port"
+    port_path.write_text("43210")
+
+    with (
+        patch("wayper.server.launcher.port_file", return_value=port_path),
+        patch("wayper.server.launcher.urlopen") as urlopen,
+    ):
+        port = _wait_for_api(timeout=1)
+
+    assert port == 43210
+    urlopen.assert_called_once_with("http://127.0.0.1:43210/api/config", timeout=1)
