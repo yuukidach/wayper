@@ -26,6 +26,7 @@ def config_payload(config: WayperConfig, mode: set[str]) -> dict[str, object]:
         "proxy": config.proxy or "",
         "pause_on_lock": config.pause_on_lock,
         "safe_mode": config.safe_mode,
+        "autostart": config.autostart,
         # ``auto`` is intentionally retained here; the renderer resolves it
         # against the host locale and can therefore switch languages without
         # requiring a backend restart.

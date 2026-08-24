@@ -148,6 +148,8 @@ class WayperConfig:
     # Preferred GUI language: ``auto`` follows the system locale, while
     # ``en`` and ``zh`` explicitly select English or Simplified Chinese.
     language: str = "auto"
+    # Keep this field last so existing positional constructors remain compatible.
+    autostart: bool = True
 
     def __post_init__(self) -> None:
         self.language = normalize_language(self.language)
@@ -246,6 +248,7 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
     lines.append(f"blacklist_ttl_days = {config.blacklist_ttl_days}")
     lines.append(f"pause_on_lock = {str(config.pause_on_lock).lower()}")
     lines.append(f"safe_mode = {str(config.safe_mode).lower()}")
+    lines.append(f"autostart = {str(config.autostart).lower()}")
     lines.append(f'language = "{_esc(normalize_language(config.language))}"')
 
     wh = config.wallhaven
@@ -354,6 +357,7 @@ def load_config(path: Path | None = None) -> WayperConfig:
         blacklist_ttl_days=raw.get("blacklist_ttl_days", 30),
         pause_on_lock=raw.get("pause_on_lock", True),
         safe_mode=raw.get("safe_mode", False),
+        autostart=raw.get("autostart", True),
         monitors=monitors,
         wallhaven=wallhaven,
         transition=transition,

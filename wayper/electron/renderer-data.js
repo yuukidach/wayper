@@ -113,6 +113,7 @@ function populateSettingsForm() {
     }
     document.getElementById('input-quota').value = c.quota_mb;
     document.getElementById('input-download-dir').value = c.download_dir || '';
+    document.getElementById('input-autostart').checked = c.autostart === true;
 
     // Wallhaven
     document.getElementById('input-categories').value = w.categories;
@@ -968,6 +969,7 @@ async function saveSettings() {
         proxy: document.getElementById('input-proxy').value,
         pause_on_lock: document.getElementById('input-pause-on-lock').checked,
         safe_mode: document.getElementById('input-safe-mode').checked,
+        autostart: document.getElementById('input-autostart').checked,
     };
     const languageInput = document.getElementById('input-language');
     if (languageInput) {

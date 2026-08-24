@@ -335,6 +335,44 @@ function setupEventListeners() {
     els.btnSettings.onclick = () => switchView('settings');
 
     // Settings Form
+    const settingsLinks = [...document.querySelectorAll('.settings-index-link')];
+    const settingsPanels = [...document.querySelectorAll('.settings-panel')];
+    const activateSettingsTab = (link, { focus = false } = {}) => {
+        const panelId = link.getAttribute('aria-controls');
+        for (const item of settingsLinks) {
+            const active = item === link;
+            item.classList.toggle('active', active);
+            item.setAttribute('aria-selected', String(active));
+            item.tabIndex = active ? 0 : -1;
+        }
+        for (const panel of settingsPanels) {
+            const active = panel.id === panelId;
+            panel.classList.toggle('active', active);
+            panel.hidden = !active;
+        }
+        if (focus) link.focus();
+    };
+    for (const [index, link] of settingsLinks.entries()) {
+        link.addEventListener('click', event => {
+            event.preventDefault();
+            activateSettingsTab(link);
+        });
+        link.addEventListener('keydown', event => {
+            let next = null;
+            if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+                next = settingsLinks[(index + 1) % settingsLinks.length];
+            } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+                next = settingsLinks[(index - 1 + settingsLinks.length) % settingsLinks.length];
+            } else if (event.key === 'Home') {
+                next = settingsLinks[0];
+            } else if (event.key === 'End') {
+                next = settingsLinks.at(-1);
+            }
+            if (!next) return;
+            event.preventDefault();
+            activateSettingsTab(next, { focus: true });
+        });
+    }
     els.btnSaveSettings.onclick = saveSettings;
     els.btnCancelSettings.onclick = () => {
         // A language dropdown change is previewed immediately.  Cancel must

@@ -147,11 +147,33 @@
             <div id="settings-view" class="hidden settings-container">
                 <div class="settings-header">
                     <h2>Settings</h2>
-                    <p>Configure Wayper behavior and sources</p>
                 </div>
 
+                <div class="settings-workspace">
+                    <div class="settings-toolbar">
+                    <nav class="settings-index" aria-label="Settings navigation" role="tablist">
+                        <a href="#settings-general" id="settings-tab-general" class="settings-index-link active" role="tab" aria-controls="settings-general" aria-selected="true">
+                            <span class="settings-index-dot general"></span>
+                            <span><strong>General</strong><small>Wallpaper behavior</small></span>
+                        </a>
+                        <a href="#settings-wallhaven" id="settings-tab-wallhaven" class="settings-index-link" role="tab" aria-controls="settings-wallhaven" aria-selected="false" tabindex="-1">
+                            <span class="settings-index-dot source"></span>
+                            <span><strong>Wallhaven</strong><small>Download source</small></span>
+                        </a>
+                        <a href="#settings-exclusions" id="settings-tab-filters" class="settings-index-link" role="tab" aria-controls="settings-exclusions" aria-selected="false" tabindex="-1">
+                            <span class="settings-index-dot filters"></span>
+                            <span><strong>Filters</strong><small>Content filters</small></span>
+                        </a>
+                    </nav>
+                    <div class="settings-actions">
+                        <button id="btn-cancel-settings" class="btn-text">Cancel</button>
+                        <button id="btn-save-settings" class="primary">Save Changes</button>
+                    </div>
+                    </div>
+
+                    <div class="settings-sections">
                 <div class="settings-grid">
-                    <div class="settings-card">
+                    <div class="settings-card settings-panel active" id="settings-general" role="tabpanel" aria-labelledby="settings-tab-general">
                         <h3>General</h3>
                         <div class="field">
                             <label for="input-interval">Interval (minutes)</label>
@@ -193,6 +215,16 @@
                             <small class="hint">Leave empty for direct connection</small>
                         </div>
                         <div class="field">
+                            <label for="input-autostart">Start at Login</label>
+                            <label class="toggle-label" for="input-autostart">
+                                <span class="toggle-switch">
+                                    <input type="checkbox" id="input-autostart">
+                                    <span class="toggle-slider"></span>
+                                </span>
+                            </label>
+                            <small class="hint">Launch Wayper in the system tray with your desktop session</small>
+                        </div>
+                        <div class="field">
                             <label for="input-pause-on-lock">Pause on Lock</label>
                             <label class="toggle-label" for="input-pause-on-lock">
                                 <span class="toggle-switch">
@@ -224,7 +256,7 @@
                         </div>
                     </div>
 
-                    <div class="settings-card">
+                    <div class="settings-card settings-panel" id="settings-wallhaven" role="tabpanel" aria-labelledby="settings-tab-wallhaven" hidden>
                         <h3>Wallhaven Source</h3>
                         <div class="field">
                             <label for="input-api-key">API Key</label>
@@ -283,7 +315,7 @@
 
                 </div>
 
-                <div class="settings-card settings-card-wide">
+                <div class="settings-card settings-card-wide settings-panel" id="settings-exclusions" role="tabpanel" aria-labelledby="settings-tab-filters" hidden>
                     <h3>Exclusion Rules</h3>
                     <div class="exclusion-grid">
                         <div class="field">
@@ -312,9 +344,7 @@
                     </div>
                 </div>
 
-                <div class="settings-actions">
-                    <button id="btn-cancel-settings" class="btn-text">Cancel</button>
-                    <button id="btn-save-settings" class="primary">Save Changes</button>
+                    </div>
                 </div>
             </div>
         </main>

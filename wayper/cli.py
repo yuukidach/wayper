@@ -49,7 +49,39 @@ def cli(ctx, use_json, config_path):
     setup_logging()
     ctx.ensure_object(dict)
     ctx.obj["config"] = load_config(Path(config_path) if config_path else None)
+    ctx.obj["config_path"] = Path(config_path) if config_path else None
     ctx.obj["json"] = use_json
+
+
+@cli.command()
+@click.argument("state", required=False, type=click.Choice(["enable", "disable", "status"]))
+@click.pass_context
+def autostart(ctx, state):
+    """Enable, disable, or show GUI autostart."""
+    state = state or "status"
+    config = ctx.obj["config"]
+    if state == "status":
+        payload = {"autostart": config.autostart}
+    else:
+        from .autostart import AutostartError, set_autostart
+
+        try:
+            result = set_autostart(
+                config,
+                state == "enable",
+                config_path=ctx.obj["config_path"],
+            )
+        except AutostartError as error:
+            if ctx.obj["json"]:
+                click.echo(json_mod.dumps({"error": str(error)}))
+            else:
+                raise click.ClickException(str(error)) from error
+            raise SystemExit(1) from error
+        payload = {"autostart": result.enabled, "unit": str(result.unit)}
+    if ctx.obj["json"]:
+        click.echo(json_mod.dumps(payload))
+    else:
+        click.echo(f"Autostart is {'enabled' if payload['autostart'] else 'disabled'}")
 
 
 @cli.command("next")

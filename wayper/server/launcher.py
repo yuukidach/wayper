@@ -116,6 +116,16 @@ def _wait_for_api(timeout: float = 10) -> int:
 
 
 def run_app():
+    # Autostart defaults on. The first manual launch installs the platform login
+    # entry for subsequent sessions; an explicit false setting is left alone.
+    try:
+        from wayper.autostart import AutostartError, ensure_default_autostart
+        from wayper.config import load_config
+
+        ensure_default_autostart(load_config())
+    except AutostartError as error:
+        print(f"Warning: could not install Wayper autostart: {error}")
+
     # Start API in a separate thread
     api_thread = threading.Thread(target=run_api, daemon=True)
     api_thread.start()

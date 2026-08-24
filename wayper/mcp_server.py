@@ -58,6 +58,19 @@ def status() -> dict:
 
 
 @mcp.tool()
+def configure_autostart(enabled: bool) -> dict:
+    """Enable or disable launching the Wayper GUI at graphical session startup."""
+    from .autostart import AutostartError, set_autostart
+
+    config = _config()
+    try:
+        result = set_autostart(config, enabled)
+    except AutostartError as error:
+        return {"error": str(error)}
+    return {"autostart": result.enabled, "unit": str(result.unit)}
+
+
+@mcp.tool()
 def next_wallpaper(monitor: str | None = None) -> dict:
     """Change wallpaper. If monitor is not specified, uses the focused monitor."""
     config = _config()

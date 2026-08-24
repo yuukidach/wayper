@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json as json_mod
 import logging
 import os
@@ -622,6 +623,8 @@ def update_check_route(force: bool = False):
 @app.patch("/api/config")
 def update_config_route(updates: dict = Body(...)):
     config = get_config()
+    original_config = copy.deepcopy(config)
+    requested_autostart = updates.pop("autostart", None)
     changes = apply_config_updates(
         config,
         updates,
@@ -631,9 +634,21 @@ def update_config_route(updates: dict = Body(...)):
         try:
             ensure_directories(config)
         except OSError as e:
+            config.__dict__.clear()
+            config.__dict__.update(original_config.__dict__)
             raise HTTPException(400, f"Cannot create download directory: {e}") from e
 
-    save_config(config)
+    if requested_autostart is not None and bool(requested_autostart) != config.autostart:
+        from wayper.autostart import AutostartError, set_autostart
+
+        try:
+            set_autostart(config, bool(requested_autostart))
+        except AutostartError as error:
+            config.__dict__.clear()
+            config.__dict__.update(original_config.__dict__)
+            raise HTTPException(400, f"Cannot update autostart: {error}") from error
+    else:
+        save_config(config)
     rotation_service.request_reload()
     global _cached_config, _cached_mtime
     _cached_config = config
