@@ -145,10 +145,6 @@
 
             <!-- Settings View (Hidden by default) -->
             <div id="settings-view" class="hidden settings-container">
-                <div class="settings-header">
-                    <h2>Settings</h2>
-                </div>
-
                 <div class="settings-workspace">
                     <div class="settings-toolbar">
                     <nav class="settings-index" aria-label="Settings navigation" role="tablist">
@@ -328,9 +324,14 @@
                             <small class="hint">Tags to exclude from Wallhaven downloads</small>
                         </div>
                         <div class="field" id="exclude-combos-field">
-                            <label>Exclude Combos</label>
+                            <label for="input-exclude-combo">Exclude Combos</label>
+                            <div class="tag-input-row">
+                                <input type="text" id="input-exclude-combo" placeholder="Tag 1 + Tag 2..." class="tag-input" aria-describedby="exclude-combo-error exclude-combo-hint">
+                                <button type="button" id="btn-add-combo" class="btn-add-tag">Add</button>
+                            </div>
+                            <small id="exclude-combo-error" class="field-validation" role="status" aria-live="polite"></small>
                             <div id="exclude-combos-container" class="tag-chips"></div>
-                            <small class="hint">Tag combinations — image excluded when ALL tags match</small>
+                            <small id="exclude-combo-hint" class="hint">Tag combinations — image excluded when ALL tags match</small>
                         </div>
                         <div class="field">
                             <label for="input-exclude-uploader">Exclude Uploaders</label>

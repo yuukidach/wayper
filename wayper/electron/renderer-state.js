@@ -384,6 +384,13 @@ function setupEventListeners() {
     document.getElementById('input-exclude-tag').addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); addExcludeTag(); }
     });
+    document.getElementById('btn-add-combo').onclick = addExcludeCombo;
+    document.getElementById('input-exclude-combo').addEventListener('input', () => {
+        setExcludeComboError();
+    });
+    document.getElementById('input-exclude-combo').addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); addExcludeCombo(); }
+    });
     document.getElementById('btn-add-uploader').onclick = addExcludeUploader;
     document.getElementById('input-exclude-uploader').addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); addExcludeUploader(); }

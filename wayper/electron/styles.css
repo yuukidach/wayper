@@ -993,32 +993,28 @@ main {
 
 /* ---------- Settings ---------- */
 
+body[data-view='settings'] main {
+  display: flex;
+  flex-direction: column;
+}
+
 .settings-container {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
   width: 100%;
   max-width: 1320px;
   margin: 0 auto;
   padding: 34px clamp(24px, 3.4vw, 52px) 42px;
 }
 
-.settings-header {
-  max-width: 1040px;
-  margin-bottom: 18px;
-  margin-inline: auto;
-}
-
-.settings-header h2 {
-  margin: 0;
-  color: #e8ecff;
-  font-size: 26px;
-  font-weight: 650;
-  letter-spacing: -0.025em;
-  line-height: 1.15;
-}
-
 .settings-workspace {
   --settings-sheet: rgb(38 39 56);
   --settings-tab-bar: rgb(31 32 47);
-  display: block;
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
   max-width: 1040px;
   margin: 0 auto;
   background: var(--settings-sheet);
@@ -1162,6 +1158,9 @@ main {
 }
 
 .settings-sections {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   max-width: none;
 }
@@ -1170,16 +1169,13 @@ main {
   display: contents;
 }
 
-.settings-card-wide {
-  margin-bottom: 18px;
-}
-
 .exclusion-grid {
+  flex: 1;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 0 24px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(3, minmax(240px, 1fr));
+  gap: 0;
   padding: 13px 22px 24px;
-  --exclusion-list-height: 240px;
 }
 
 .exclusion-grid > .field {
@@ -1188,6 +1184,17 @@ main {
   min-width: 0;
   min-height: 0;
   margin-bottom: 0;
+  padding: 14px 0;
+  border-bottom: 1px solid rgb(205 214 244 / 7%);
+}
+
+.exclusion-grid > .field:first-child {
+  padding-top: 0;
+}
+
+.exclusion-grid > .field:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .exclusion-grid > .field .hint {
@@ -1207,8 +1214,14 @@ main {
 }
 
 .settings-card.active {
+  flex: 1 0 auto;
   display: block;
   animation: settings-panel-in 140ms var(--ease-out);
+}
+
+#settings-exclusions.active:not([hidden]) {
+  display: flex;
+  flex-direction: column;
 }
 
 .settings-card[hidden] {
@@ -1516,10 +1529,10 @@ main {
   align-content: flex-start;
   gap: 6px;
   margin-top: 8px;
-  min-height: 0;
-  flex: 0 0 var(--exclusion-list-height);
-  height: var(--exclusion-list-height);
-  max-height: var(--exclusion-list-height);
+  min-height: 120px;
+  flex: 1 1 120px;
+  height: auto;
+  max-height: none;
   overflow-y: auto;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
@@ -1548,7 +1561,6 @@ main {
 }
 
 #exclude-combos-container {
-  max-height: var(--exclusion-list-height);
   overflow-y: auto;
 }
 
@@ -1574,6 +1586,24 @@ main {
 .tag-chip-remove:hover {
   color: var(--red);
   background: rgba(243, 139, 168, 0.12);
+}
+
+.field-validation {
+  display: block;
+  min-height: 0;
+  margin-top: 6px;
+  color: var(--red);
+  font-size: var(--font-size-xs);
+  line-height: 1.35;
+}
+
+.field-validation:empty {
+  display: none;
+}
+
+.tag-input[aria-invalid="true"] {
+  border-color: rgb(243 139 168 / 64%);
+  box-shadow: 0 0 0 2px rgb(243 139 168 / 10%);
 }
 
 /* Tag suggestions bar (blocklist view) */
@@ -1989,10 +2019,6 @@ main {
 @media (max-width: 720px) {
   .settings-container {
     padding: 24px 16px 32px;
-  }
-
-  .settings-header h2 {
-    font-size: 22px;
   }
 
   .settings-toolbar {

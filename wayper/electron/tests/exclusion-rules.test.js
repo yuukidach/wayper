@@ -15,6 +15,12 @@ const config = {
 
 assert.equal(rules.suggestionType({ tags: ['a', 'b'] }), 'combo');
 assert.equal(rules.suggestionType({ type: 'UPLOADER', tags: ['x'] }), 'uploader');
+assert.deepEqual(rules.parseComboInput(' Blonde + nude, Studio ， BLONDE '), [
+    'Blonde',
+    'nude',
+    'Studio',
+]);
+assert.deepEqual(rules.parseComboInput('one'), ['one']);
 
 assert.equal(
     rules.suggestionMatchesConfig({ type: 'tag', tags: ['metart'] }, 'add', config),

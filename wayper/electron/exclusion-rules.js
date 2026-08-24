@@ -26,6 +26,19 @@
         return (combos || []).some(combo => sameRuleSet(combo, tags));
     }
 
+    function parseComboInput(value) {
+        const seen = new Set();
+        const tags = [];
+        for (const part of String(value || '').split(/[+,，]/)) {
+            const tag = part.trim();
+            const normalized = tag.toLowerCase();
+            if (!tag || seen.has(normalized)) continue;
+            seen.add(normalized);
+            tags.push(tag);
+        }
+        return tags;
+    }
+
     function suggestionType(suggestion) {
         const type = String(suggestion?.type || '').toLowerCase();
         if (['tag', 'combo', 'uploader'].includes(type)) return type;
@@ -75,6 +88,7 @@
         containsAllRules,
         containsAnyRule,
         hasExcludeCombo,
+        parseComboInput,
         suggestionType,
         suggestionMatchesConfig,
         syncAISuggestionAppliedState,

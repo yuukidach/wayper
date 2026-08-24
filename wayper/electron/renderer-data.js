@@ -196,13 +196,11 @@ function getExcludeTags() { return getChipList('exclude-tags-container'); }
 
 function renderExcludeCombos(combos) {
     const container = document.getElementById('exclude-combos-container');
-    const field = document.getElementById('exclude-combos-field');
     container.innerHTML = '';
-    if (!combos.length) { field.style.display = 'none'; return; }
-    field.style.display = '';
     combos.forEach(combo => {
         const chip = document.createElement('span');
         chip.className = 'tag-chip combo-chip';
+        chip.dataset.tags = JSON.stringify(combo);
         chip.textContent = combo.join(' + ');
         const btn = document.createElement('button');
         btn.className = 'tag-chip-remove';
@@ -216,9 +214,41 @@ function renderExcludeCombos(combos) {
 function getExcludeCombos() {
     const container = document.getElementById('exclude-combos-container');
     return [...container.querySelectorAll('.tag-chip')].map(c => {
+        if (c.dataset.tags) {
+            try {
+                return JSON.parse(c.dataset.tags);
+            } catch (_) {
+                // Fall back to the chip text for older renderer state.
+            }
+        }
         const text = c.textContent.slice(0, -1); // remove × button text
         return text.split(' + ').map(t => t.trim());
     });
+}
+
+function setExcludeComboError(message = '') {
+    const input = document.getElementById('input-exclude-combo');
+    const error = document.getElementById('exclude-combo-error');
+    input.setAttribute('aria-invalid', String(Boolean(message)));
+    error.textContent = message ? window.wayperT(message) : '';
+}
+
+function addExcludeCombo() {
+    const input = document.getElementById('input-exclude-combo');
+    const tags = WayperExclusionRules.parseComboInput(input.value);
+    if (tags.length < 2) {
+        setExcludeComboError('Enter at least two different tags');
+        return false;
+    }
+    const existing = getExcludeCombos();
+    if (WayperExclusionRules.hasExcludeCombo(existing, tags)) {
+        setExcludeComboError('This combination already exists');
+        return false;
+    }
+    renderExcludeCombos([...existing, tags]);
+    input.value = '';
+    setExcludeComboError();
+    return true;
 }
 
 function renderExcludeUploaders(uploaders) { renderChipList('exclude-uploaders-container', uploaders); }
