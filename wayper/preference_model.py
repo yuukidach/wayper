@@ -539,6 +539,7 @@ def build_training_examples(
         return _build_curated_preference_examples(
             metadata,
             feedback_events,
+            favorites=favorites,
             now=now,
             favorite_weight=favorite_weight,
             recency_half_life_days=recency_half_life_days,
@@ -595,7 +596,7 @@ def build_training_examples(
             )
         elif filename in retained:
             is_favorite = filename in favorites
-            is_explicit_keep = not is_favorite and _is_explicit_keep(feedback)
+            is_explicit_keep = is_favorite or _is_explicit_keep(feedback)
             explicit_positive = is_favorite or _has_explicit_positive_feedback(feedback)
             temporal_label_known = _has_explicit_positive_feedback(feedback)
             timestamp = _positive_label_timestamp(meta, feedback, now)
@@ -621,7 +622,7 @@ def _is_curated_preference_feedback(event: object) -> bool:
     """Whether an event is an intentional label for preference training."""
     if not isinstance(event, dict):
         return False
-    if event.get("action") == "dislike":
+    if event.get("action") in {"dislike", "favorite"}:
         return True
     if event.get("action") not in {"ban", "keep"}:
         return False
@@ -654,6 +655,11 @@ def _curated_preference_labels(
             "dislike",
         }:
             labels.pop(filename, None)
+        elif event.get("action") == "unfavorite" and labels.get(filename, (None, 0))[0] in {
+            "favorite",
+            "keep",
+        }:
+            labels.pop(filename, None)
     return labels
 
 
@@ -661,12 +667,23 @@ def _build_curated_preference_examples(
     metadata: dict[str, dict],
     feedback_events: Iterable[dict[str, object]],
     *,
+    favorites: set[str],
     now: int,
     favorite_weight: float,
     recency_half_life_days: int,
 ) -> list[PreferenceExample]:
-    """Build labels from deliberate Review decisions and manual dislikes."""
+    """Build labels from favorites, deliberate Review decisions, and manual dislikes."""
+    feedback_events = tuple(feedback_events)
     labels = _curated_preference_labels(feedback_events)
+    latest_feedback = _latest_feedback_by_filename(feedback_events)
+    for filename in favorites:
+        meta = metadata.get(filename)
+        if not isinstance(meta, dict):
+            continue
+        labels[filename] = (
+            "favorite",
+            _positive_label_timestamp(meta, latest_feedback.get(filename), now),
+        )
     examples: list[PreferenceExample] = []
     for filename, (action, timestamp) in sorted(labels.items()):
         meta = metadata.get(filename)
@@ -691,7 +708,8 @@ def _build_curated_preference_examples(
                     semantic_tags=semantic_tags,
                 )
             )
-        else:  # keep
+        else:  # keep or favorite
+            is_favorite = filename in favorites
             examples.append(
                 PreferenceExample(
                     filename=filename,
@@ -701,6 +719,7 @@ def _build_curated_preference_examples(
                     timestamp=timestamp,
                     context_features=context_features,
                     temporal_label_known=True,
+                    is_favorite=is_favorite,
                     is_explicit_keep=True,
                     semantic_tags=semantic_tags,
                 )
@@ -718,11 +737,14 @@ def collect_preference_training_snapshot(
     Only live pool/favorite files become positive examples.  Historical metadata
     that survived quota eviction stays out of the positive class.
 
-    Once explicit Review feedback exists, normal refreshes use only those
-    deliberate labels.  A fresh GUI installation has no Review candidates until
-    its first model exists, though, so callers creating that first model may use
-    the legacy pool/blacklist snapshot until the explicit labels contain the
-    minimum number of both classes.
+    Explicit Review feedback replaces the legacy pool/blacklist labels only after
+    it contains the minimum number of both classes.  Until then, keeping the
+    legacy snapshot avoids a one-class deadlock where suggestions cannot be
+    generated to collect the missing class.
+
+    ``allow_legacy_bootstrap`` is retained for API compatibility.  Incomplete
+    curated feedback now always falls back to the legacy snapshot, including
+    refreshes of an existing model.
     """
     from .pool import favorites_dir, list_blacklist, list_images, load_metadata, pool_dir
     from .state import ALL_PURITIES
@@ -761,18 +783,18 @@ def collect_preference_training_snapshot(
         build_training_examples(
             metadata,
             (),
-            set(),
+            favorites,
             set(),
             feedback_events=feedback["events"],
             now=snapshot_now,
             review_only=True,
         )
     )
-    has_curated_feedback = any(
+    has_curated_feedback = bool(favorites) or any(
         _is_curated_preference_feedback(event) for event in feedback["events"]
     )
     curated_ready = _has_both_classes(list(curated_examples), MIN_TRAINING_PER_CLASS)
-    use_legacy_bootstrap = allow_legacy_bootstrap and not curated_ready
+    use_legacy_bootstrap = not curated_ready
     examples = (
         curated_examples if has_curated_feedback and not use_legacy_bootstrap else legacy_examples
     )

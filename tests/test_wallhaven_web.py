@@ -1,14 +1,56 @@
 from __future__ import annotations
 
+import asyncio
+import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from wayper.config import WayperConfig
 from wayper.wallhaven_web import WallhavenWeb, _can_sync_favorites
 
 
 class WallhavenWebTest(unittest.TestCase):
+    def test_nodriver_login_fills_form_without_send_keys(self) -> None:
+        tab = SimpleNamespace(
+            select=AsyncMock(side_effect=[object(), object(), object()]),
+            evaluate=AsyncMock(return_value=True),
+            sleep=AsyncMock(),
+            target=SimpleNamespace(url="https://wallhaven.cc/user/test-user"),
+        )
+        cookie = SimpleNamespace(
+            name="session",
+            value="cookie-value",
+            domain="wallhaven.cc",
+            path="/",
+        )
+        browser = SimpleNamespace(
+            get=AsyncMock(return_value=tab),
+            cookies=SimpleNamespace(get_all=AsyncMock(return_value=[cookie])),
+            stop=MagicMock(),
+        )
+        nodriver = SimpleNamespace(start=AsyncMock(return_value=browser))
+        client = WallhavenWeb("test-user", "test-password")
+        try:
+            with (
+                patch.dict(sys.modules, {"nodriver": nodriver}),
+                patch("wayper.wallhaven_web._find_chrome", return_value="/path/to/chrome"),
+                patch.object(client, "_verify_session", return_value=True),
+                patch.object(client, "_save_cookies") as save_cookies,
+            ):
+                logged_in = asyncio.run(client._nodriver_login_async())
+        finally:
+            client.close()
+
+        self.assertTrue(logged_in)
+        expression = tab.evaluate.await_args.args[0]
+        self.assertIn("form.requestSubmit()", expression)
+        self.assertEqual(tab.select.await_count, 3)
+        self.assertEqual(tab.sleep.await_count, 1)
+        save_cookies.assert_called_once_with()
+        browser.stop.assert_called_once_with()
+
     def test_parse_fav_button_add_state_with_nested_add_link(self) -> None:
         html = """
         <meta name="csrf-token" content="token">

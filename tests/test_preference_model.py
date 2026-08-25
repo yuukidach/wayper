@@ -658,7 +658,7 @@ class PreferenceModelTest(unittest.TestCase):
         self.assertFalse(any(item["type"] == "concept" for item in people.contributions))
         self.assertFalse(any(item["type"] == "concept" for item in anime.contributions))
 
-    def test_review_only_uses_model_review_ban_and_keep_only(self) -> None:
+    def test_review_only_treats_favorite_as_explicit_keep(self) -> None:
         metadata = {
             "gallery-ban.jpg": {"tags": ["ordinary-ban"]},
             "manual-dislike.jpg": {"tags": ["missed-by-model"]},
@@ -703,15 +703,6 @@ class PreferenceModelTest(unittest.TestCase):
                 "source": "model_suggestion",
                 "context": "model_review",
             },
-            {
-                "schema_version": 2,
-                "revision": 5,
-                "timestamp": 103,
-                "filename": "favorite.jpg",
-                "action": "favorite",
-                "source": "core",
-                "context": "core",
-            },
         ]
 
         examples = build_training_examples(
@@ -726,7 +717,7 @@ class PreferenceModelTest(unittest.TestCase):
 
         self.assertEqual(
             {example.filename for example in examples},
-            {"manual-dislike.jpg", "review-ban.jpg", "review-keep.jpg"},
+            {"manual-dislike.jpg", "review-ban.jpg", "review-keep.jpg", "favorite.jpg"},
         )
         by_name = {example.filename: example for example in examples}
         self.assertEqual(by_name["manual-dislike.jpg"].label, 1)
@@ -735,6 +726,9 @@ class PreferenceModelTest(unittest.TestCase):
         self.assertTrue(by_name["review-ban.jpg"].is_explicit_ban)
         self.assertEqual(by_name["review-keep.jpg"].label, 0)
         self.assertTrue(by_name["review-keep.jpg"].is_explicit_keep)
+        self.assertEqual(by_name["favorite.jpg"].label, 0)
+        self.assertTrue(by_name["favorite.jpg"].is_favorite)
+        self.assertTrue(by_name["favorite.jpg"].is_explicit_keep)
         self.assertFalse(any(example.is_control for example in examples))
 
     def test_review_unban_clears_a_previous_review_ban(self) -> None:
@@ -770,7 +764,7 @@ class PreferenceModelTest(unittest.TestCase):
 
         self.assertEqual(examples, [])
 
-    def test_manual_dislike_switches_to_curated_labels_and_unban_clears_it(self) -> None:
+    def test_manual_dislike_stays_in_legacy_until_curated_ready_and_unban_clears_it(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             config = WayperConfig(download_dir=Path(td))
             config.metadata_file.write_text(
@@ -788,11 +782,11 @@ class PreferenceModelTest(unittest.TestCase):
             record_preference_feedback(config, "unban", "missed.jpg", timestamp=101)
             undone = collect_preference_training_snapshot(config)
 
-        self.assertEqual(disliked.label_source, "model_review")
+        self.assertEqual(disliked.label_source, "legacy")
         self.assertEqual([example.filename for example in disliked.examples], ["missed.jpg"])
         self.assertEqual(disliked.examples[0].label, 1)
         self.assertTrue(disliked.examples[0].is_explicit_ban)
-        self.assertEqual(undone.label_source, "model_review")
+        self.assertEqual(undone.label_source, "legacy")
         self.assertEqual(undone.examples, ())
 
     def test_legacy_feedback_and_unfavorite_do_not_create_keep_label(self) -> None:
@@ -1187,21 +1181,18 @@ class PreferenceModelTest(unittest.TestCase):
         self.assertTrue(status["upgrade_due"])
         self.assertTrue(status["due"])
 
-    def test_snapshot_switches_to_model_review_labels_after_first_review_event(self) -> None:
+    def test_snapshot_switches_only_after_model_review_has_both_classes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             config = WayperConfig(download_dir=Path(td))
             pool = config.download_dir / "sfw" / "landscape"
             pool.mkdir(parents=True)
             (pool / "ordinary-keep.jpg").touch()
-            config.metadata_file.write_text(
-                json.dumps(
-                    {
-                        "ordinary-ban.jpg": {"tags": ["ordinary-ban"]},
-                        "ordinary-keep.jpg": {"tags": ["ordinary-keep"]},
-                        "review-ban.jpg": {"tags": ["review-ban"]},
-                    }
-                )
-            )
+            metadata = {
+                "ordinary-ban.jpg": {"tags": ["ordinary-ban"]},
+                "ordinary-keep.jpg": {"tags": ["ordinary-keep"]},
+                "review-ban.jpg": {"tags": ["review-ban"]},
+            }
+            config.metadata_file.write_text(json.dumps(metadata))
             config.blacklist_file.write_text("100 ordinary-ban.jpg\n")
 
             legacy = collect_preference_training_snapshot(config)
@@ -1221,10 +1212,41 @@ class PreferenceModelTest(unittest.TestCase):
             )
             reviewed = collect_preference_training_snapshot(config)
 
-        self.assertEqual(reviewed.label_source, "model_review")
-        self.assertEqual([example.filename for example in reviewed.examples], ["review-ban.jpg"])
-        self.assertTrue(reviewed.examples[0].is_explicit_ban)
-        self.assertFalse(any(example.is_control for example in reviewed.examples))
+            for index in range(9):
+                filename = f"review-ban-{index}.jpg"
+                metadata[filename] = {"tags": [f"review-ban-{index}"]}
+                record_preference_feedback(
+                    config,
+                    "ban",
+                    filename,
+                    source="model_suggestion",
+                    context="model_review",
+                    timestamp=201 + index,
+                )
+            for index in range(10):
+                filename = f"review-keep-{index}.jpg"
+                metadata[filename] = {"tags": [f"review-keep-{index}"]}
+                record_preference_feedback(
+                    config,
+                    "keep",
+                    filename,
+                    source="model_suggestion",
+                    context="model_review",
+                    timestamp=220 + index,
+                )
+            config.metadata_file.write_text(json.dumps(metadata))
+            curated = collect_preference_training_snapshot(config)
+
+        self.assertEqual(reviewed.label_source, "legacy")
+        self.assertEqual(
+            {example.filename for example in reviewed.examples},
+            {"ordinary-ban.jpg", "ordinary-keep.jpg", "review-ban.jpg"},
+        )
+        self.assertEqual(curated.label_source, "model_review")
+        self.assertEqual(len(curated.examples), 20)
+        self.assertEqual(sum(example.label == 1 for example in curated.examples), 10)
+        self.assertEqual(sum(example.label == 0 for example in curated.examples), 10)
+        self.assertFalse(any(example.is_control for example in curated.examples))
 
     def test_recency_weight_change_marks_model_for_refresh_without_new_feedback(self) -> None:
         examples = [
@@ -1265,7 +1287,7 @@ class PreferenceModelTest(unittest.TestCase):
         self.assertTrue(status["weight_refresh_due"])
         self.assertTrue(status["due"])
 
-    def test_untrained_feedback_bootstraps_but_waits_for_explicit_keeps(self) -> None:
+    def test_untrained_feedback_bootstraps_with_legacy_keeps(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             config = WayperConfig(download_dir=Path(td))
             metadata = _write_cold_start_library(config)
@@ -1291,10 +1313,10 @@ class PreferenceModelTest(unittest.TestCase):
                 orientation="landscape",
             )
 
-        self.assertEqual(explicit_snapshot.label_source, "model_review")
+        self.assertEqual(explicit_snapshot.label_source, "legacy")
         self.assertEqual(
             {example.label for example in explicit_snapshot.examples},
-            {1},
+            {0, 1},
         )
         self.assertEqual(learning["label_source"], "legacy")
         self.assertTrue(learning["training_ready"])

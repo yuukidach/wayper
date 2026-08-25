@@ -69,9 +69,12 @@ class MacOSBackend(WallpaperBackend):
         monitors = []
         for screen in NSScreen.screens():
             frame = screen.frame()
-            width = int(frame.size.width)
-            height = int(frame.size.height)
-            # NSScreen coordinates are points, not pixels, but orientation is correct
+            # NSScreen frames are expressed in logical points. Wallpaper images are
+            # composited in the screen's backing coordinate space, so using the frame
+            # size directly makes Retina wallpapers half-resolution on each axis.
+            backing_frame = screen.convertRectToBacking_(frame)
+            width = round(backing_frame.size.width)
+            height = round(backing_frame.size.height)
             orientation = "portrait" if height > width else "landscape"
             name = _display_id(screen)
             monitors.append(

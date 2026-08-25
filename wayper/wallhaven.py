@@ -175,6 +175,15 @@ class WallhavenClient:
             "ratios": orientation,
             "page": 1,
         }
+        monitor = next(
+            (item for item in self.config.monitors if item.orientation == orientation),
+            None,
+        )
+        if monitor is not None:
+            # Avoid downloading a low-resolution source only to upscale it to the
+            # monitor target in resize_crop(). This is especially visible on Retina
+            # displays, whose backing dimensions exceed their logical point size.
+            params["atleast"] = f"{monitor.width}x{monitor.height}"
         exclude_q = self._exclude_query()
         if exclude_q:
             params["q"] = exclude_q

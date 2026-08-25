@@ -66,6 +66,38 @@ class _FakeAsyncClient:
 
 
 class RegressionTest(unittest.TestCase):
+    def test_wallhaven_search_requires_monitor_resolution(self) -> None:
+        config = WayperConfig(
+            monitors=[MonitorConfig("retina", 5120, 2880, "landscape")],
+        )
+        client = WallhavenClient(config)
+        client.client.get = AsyncMock(
+            return_value=_FakeResponse(200, {"data": [], "meta": {"last_page": 1}})
+        )
+        try:
+            asyncio.run(client.search("landscape", "sfw"))
+        finally:
+            asyncio.run(client.close())
+
+        params = client.client.get.call_args.kwargs["params"]
+        self.assertEqual(params["atleast"], "5120x2880")
+
+    def test_wallhaven_search_omits_resolution_without_matching_monitor(self) -> None:
+        config = WayperConfig(
+            monitors=[MonitorConfig("portrait", 2880, 5120, "portrait")],
+        )
+        client = WallhavenClient(config)
+        client.client.get = AsyncMock(
+            return_value=_FakeResponse(200, {"data": [], "meta": {"last_page": 1}})
+        )
+        try:
+            asyncio.run(client.search("landscape", "sfw"))
+        finally:
+            asyncio.run(client.close())
+
+        params = client.client.get.call_args.kwargs["params"]
+        self.assertNotIn("atleast", params)
+
     def test_wallhaven_auth_uses_header_instead_of_query_string(self) -> None:
         config = WayperConfig(api_key="secret-api-key")
         client = WallhavenClient(config)

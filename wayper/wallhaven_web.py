@@ -345,6 +345,7 @@ class WallhavenWeb:
             browser = await nodriver.start(
                 headless=False,
                 browser_executable_path=chrome_path,
+                browser_args=["--remote-debugging-address=127.0.0.1"],
             )
             tab = await browser.get(f"{self.BASE}/login")
 
@@ -354,27 +355,47 @@ class WallhavenWeb:
                 log.warning("wallhaven web: login form not found after Cloudflare challenge")
                 return False
 
-            await username_input.send_keys(self._username)
-
             password_input = await tab.select("input[name='password']")
             if not password_input:
                 log.warning("wallhaven web: password input not found")
                 return False
-            await password_input.send_keys(self._password)
 
             login_btn = await tab.select("button[type='submit']")
-            if login_btn:
-                await login_btn.click()
-            else:
-                login_link = await tab.find("Login", best_match=True)
-                if login_link:
-                    await login_link.click()
-                else:
-                    log.warning("wallhaven web: login button not found")
-                    return False
+            if not login_btn:
+                log.warning("wallhaven web: login button not found")
+                return False
+
+            # nodriver's key-event based send_keys can silently leave inputs
+            # empty on recent Chrome versions. Set native values and dispatch
+            # the same events a real input action produces before submitting.
+            credentials = json.dumps([self._username, self._password])
+            filled = await tab.evaluate(
+                f"""(() => {{
+                    const [username, password] = {credentials};
+                    const usernameInput = document.querySelector("input[name='username']");
+                    const passwordInput = document.querySelector("input[name='password']");
+                    const form = document.querySelector("form#login");
+                    if (!usernameInput || !passwordInput || !form) return false;
+                    usernameInput.value = username;
+                    passwordInput.value = password;
+                    for (const input of [usernameInput, passwordInput]) {{
+                        input.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                        input.dispatchEvent(new Event("change", {{ bubbles: true }}));
+                    }}
+                    form.requestSubmit();
+                    return true;
+                }})()""",
+                return_by_value=True,
+            )
+            if not filled:
+                log.warning("wallhaven web: failed to fill login form")
+                return False
 
             # Wait for redirect after successful login
-            await tab.sleep(3)
+            for _ in range(15):
+                await tab.sleep(1)
+                if "/login" not in (tab.target.url or ""):
+                    break
 
             if "/login" in (tab.target.url or ""):
                 log.warning(
@@ -393,6 +414,11 @@ class WallhavenWeb:
                         domain=domain,
                         path=cookie.path or "/",
                     )
+
+            if not self._verify_session():
+                log.warning("wallhaven web: browser login did not create a valid session")
+                self._client.cookies.clear()
+                return False
 
             self._save_cookies()
             self._logged_in = True
