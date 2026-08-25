@@ -148,7 +148,7 @@ async function run() {
 
     // A normal second launch during a hidden cold start should be remembered,
     // not create a premature second window with port 8080.
-    app.emit('second-instance', {}, ['Wayper'], '', {})
+    app.emit('second-instance', {}, ['Wayper', '--hidden'], '', { showWindow: true })
     await flushEvents()
     assert.equal(windows.length, 1)
     await flushEvents()
@@ -168,7 +168,7 @@ async function run() {
     assert.equal(await portRequest, 45123)
     assert.equal(process.env.WAYPER_API_PORT, '45123')
 
-    app.emit('second-instance', {}, ['Wayper'], '', {})
+    app.emit('second-instance', {}, ['Wayper', '--hidden'], '', { showWindow: true })
     assert.equal(windows.length, 1)
     assert.equal(windows[0].showCount, 2)
 

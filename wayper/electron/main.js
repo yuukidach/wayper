@@ -520,6 +520,9 @@ const startupWindowController = createStartupWindowController({
 // capture helper waiting even though the request reached the running app.
 const gotTheLock = app.requestSingleInstanceLock({
   capturePath: initialCapturePath,
+  // macOS can report the resident process command line (including --hidden)
+  // to the first instance. Carry the second launcher's intent explicitly.
+  showWindow: !initiallyHidden && !initialCapturePath,
 })
 
 if (!gotTheLock) {
@@ -534,8 +537,11 @@ if (!gotTheLock) {
       void captureCurrentWindow(capturePath)
       return
     }
-    // A normal second launch reopens the resident app. Hidden launches stay hidden.
-    if (!commandLine.includes(HIDDEN_SWITCH)) showMainWindow()
+    // A normal second launch reopens the resident app. Prefer the explicit
+    // payload because macOS may preserve the first instance's --hidden flag.
+    if (additionalData?.showWindow === true || !commandLine.includes(HIDDEN_SWITCH)) {
+      showMainWindow()
+    }
   })
 
   app.whenReady().then(() => {
