@@ -1,4 +1,4 @@
-"""macOS backend: osascript + AppKit."""
+"""macOS backend: AppKit wallpaper management plus osascript notifications."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ log = logging.getLogger("wayper")
 
 try:
     from AppKit import NSApplication, NSScreen, NSWorkspace
+    from Foundation import NSURL
 
     # Hide Python from Dock — background service, not a GUI app
     # 2 = NSApplicationActivationPolicyProhibited
@@ -35,24 +36,30 @@ def _display_id(screen) -> str:
 
 
 class MacOSBackend(WallpaperBackend):
-    """macOS backend using osascript for wallpaper setting, AppKit for queries."""
+    """macOS backend using AppKit for per-display wallpaper management."""
 
     def set_wallpaper(self, monitor: str, image: Path, transition: TransitionConfig) -> None:
-        safe_path = str(image).replace("\\", "\\\\").replace('"', '\\"')
-        script = (
-            'tell application "System Events" to '
-            f'tell every desktop to set picture to POSIX file "{safe_path}"'
+        del transition  # macOS does not expose wallpaper transition controls through AppKit.
+        if not _HAS_APPKIT:
+            log.warning("AppKit is unavailable; cannot set wallpaper on display %s", monitor)
+            return
+
+        screen = next((item for item in NSScreen.screens() if _display_id(item) == monitor), None)
+        if screen is None:
+            log.warning("macOS display not found: %s", monitor)
+            return
+
+        workspace = NSWorkspace.sharedWorkspace()
+        options = workspace.desktopImageOptionsForScreen_(screen)
+        url = NSURL.fileURLWithPath_(str(image.expanduser().resolve()))
+        ok, error = workspace.setDesktopImageURL_forScreen_options_error_(
+            url,
+            screen,
+            options,
+            None,
         )
-        try:
-            subprocess.run(
-                ["osascript", "-e", script],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            )
-        except subprocess.TimeoutExpired:
-            log.warning("osascript timed out setting wallpaper: %s on %s", image, monitor)
+        if not ok:
+            log.warning("AppKit failed to set wallpaper %s on %s: %s", image, monitor, error)
 
     def detect_monitors(self) -> list[MonitorConfig]:
         """Detect current monitor configuration using AppKit."""
