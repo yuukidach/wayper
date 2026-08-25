@@ -7,6 +7,7 @@ const mainPath = path.join(__dirname, '..', 'main.js')
 const ipcHandlers = new Map()
 const windows = []
 const spawnedProcesses = []
+const trayIcons = []
 let resolveReadiness
 const readiness = new Promise(resolve => {
   resolveReadiness = resolve
@@ -38,10 +39,29 @@ class FakeBrowserWindow extends EventEmitter {
 }
 
 class FakeTray extends EventEmitter {
+  constructor(icon) {
+    super()
+    trayIcons.push(icon)
+  }
+
   isDestroyed() { return false }
   setContextMenu() {}
   setToolTip() {}
   destroy() {}
+}
+
+const nativeImages = []
+const nativeImage = {
+  createFromPath: imagePath => {
+    const image = {
+      imagePath,
+      template: false,
+      isEmpty: () => false,
+      setTemplateImage: value => { image.template = value },
+    }
+    nativeImages.push(image)
+    return image
+  },
 }
 
 const app = new EventEmitter()
@@ -69,6 +89,7 @@ const electron = {
   },
   dialog: { showMessageBox: async () => ({ response: 1 }) },
   screen: { getPrimaryDisplay: () => ({ workAreaSize: { height: 900 } }) },
+  nativeImage,
 }
 
 function spawn() {
@@ -150,6 +171,13 @@ async function run() {
     app.emit('second-instance', {}, ['Wayper'], '', {})
     assert.equal(windows.length, 1)
     assert.equal(windows[0].showCount, 2)
+
+    if (process.platform === 'darwin') {
+      assert.equal(nativeImages.length, 1)
+      assert.match(nativeImages[0].imagePath, /trayTemplate\.png$/)
+      assert.equal(nativeImages[0].template, true)
+      assert.equal(trayIcons[0], nativeImages[0])
+    }
   } finally {
     app.emit('before-quit')
     app.emit('will-quit')

@@ -25,6 +25,14 @@
       {
         "from": "../../assets/icon-256.png",
         "to": "icon-256.png"
+      },
+      {
+        "from": "../../assets/trayTemplate.png",
+        "to": "trayTemplate.png"
+      },
+      {
+        "from": "../../assets/trayTemplate@2x.png",
+        "to": "trayTemplate@2x.png"
       }
     ],
     "mac": {

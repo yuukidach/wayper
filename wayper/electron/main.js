@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, shell, ipcMain, dialog, screen } = require('electron')
+const { app, BrowserWindow, Menu, Tray, shell, ipcMain, dialog, screen, nativeImage } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const fs = require('fs')
@@ -77,6 +77,22 @@ function getAppIconPath() {
     path.join(__dirname, '../../assets', iconName),
   ]
   return candidates.find(candidate => candidate && fs.existsSync(candidate)) || null
+}
+
+function getTrayIcon() {
+  if (process.platform !== 'darwin') return getAppIconPath()
+
+  const candidates = [
+    path.join(process.resourcesPath, 'trayTemplate.png'),
+    path.join(__dirname, '../../assets', 'trayTemplate.png'),
+  ]
+  const iconPath = candidates.find(candidate => fs.existsSync(candidate))
+  if (!iconPath) return null
+
+  const icon = nativeImage.createFromPath(iconPath)
+  if (icon.isEmpty()) return null
+  icon.setTemplateImage(true)
+  return icon
 }
 
 function startBackend() {
@@ -294,13 +310,13 @@ async function refreshTrayMenu() {
 
 function createTray() {
   if (tray && !tray.isDestroyed()) return
-  const iconPath = getAppIconPath()
-  if (!iconPath) {
+  const icon = getTrayIcon()
+  if (!icon) {
     console.error('Could not create system tray: Wayper icon is missing')
     return
   }
   try {
-    tray = new Tray(iconPath)
+    tray = new Tray(icon)
     tray.setToolTip('Wayper')
     tray.on('click', showMainWindow)
     void refreshTrayMenu()
