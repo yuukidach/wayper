@@ -28,3 +28,14 @@ def test_python_build_excludes_electron_artifacts() -> None:
 
     assert "/wayper/electron/node_modules" in excludes
     assert "/wayper/electron/dist" in excludes
+
+
+def test_desktop_build_includes_wallhaven_web_auth_dependencies() -> None:
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
+    dependencies = set(project["project"]["dependencies"])
+    spec = (PROJECT_ROOT / "wayper.spec").read_text()
+
+    assert "browser-cookie3>=0.20" in dependencies
+    assert "nodriver>=0.38" in dependencies
+    assert "collect_submodules('browser_cookie3')" in spec
+    assert "collect_submodules('nodriver')" in spec

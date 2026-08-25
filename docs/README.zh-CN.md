@@ -62,8 +62,9 @@ uv pip install -e .
 git clone https://github.com/yuukidach/wayper.git
 cd wayper
 uv venv && uv pip install -e .
-uv pip install -e ".[browser]"  # 可选：浏览器 cookie 提取，用于 Wallhaven 同步
 ```
+
+标准安装已经包含浏览器 Cookie 提取和支持 Cloudflare 的 Wallhaven 登录备用方案。
 
 ## GUI
 

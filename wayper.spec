@@ -8,6 +8,7 @@ is_windows = sys.platform == 'win32'
 
 # Collect hidden imports for uvicorn/fastapi
 hidden_imports = collect_submodules('uvicorn') + collect_submodules('fastapi') + ['_socket', 'socket', 'logging.config']
+hidden_imports += collect_submodules('browser_cookie3') + collect_submodules('nodriver')
 hidden_imports += ['ctypes', 'uuid', 'wayper.backend.windows']
 
 a = Analysis(

@@ -15,7 +15,7 @@ a FastAPI backend for the Electron GUI, and a stdio MCP server.
 ## Setup
 
 - Install for development with `uv venv && uv pip install -e .`.
-- Install optional browser cookie support with `uv pip install -e ".[browser]"`.
+- Browser cookie extraction and the Cloudflare-capable login fallback are included by default.
 - Electron dependencies live in `wayper/electron`; run `npm ci` there before Electron work.
 - The MCP server entry point is `wayper-mcp`; after source install it is usually
   available at `.venv/bin/wayper-mcp`.

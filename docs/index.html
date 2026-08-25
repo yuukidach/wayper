@@ -354,6 +354,8 @@ wayper-gui</code></pre>
 cd wayper
 uv venv && uv pip install -e .</code></pre>
   </div>
+  <p>The standard installation includes browser cookie extraction and a Cloudflare-capable login
+  fallback for Wallhaven favorite sync.</p>
 </section>
 
 <section id="usage">
@@ -387,10 +389,11 @@ wayper --json status        # machine-readable output</code></pre>
   calibrated on at most 640 held-out decisions for at least 80% precision. Embeddings are metadata-only and
   cached locally. New downloads retain complete
   Wallhaven tag objects; <code>wayper metadata backfill</code> repairs older relevant records resumably.</p>
-  <p>Before any <strong>Review</strong> feedback exists, older blacklist/favorite data may bootstrap the model.
-  After the first Review decision or manual <strong>Dislike</strong>, only explicit Keep/Dislike decisions become
-  labels; <strong>Ban</strong> remains an exact-image block. Images merely sitting in the pool are background
-  examples. Filtering stays off until both explicit classes and held-out calibration are available. The model
+  <p>Before explicit feedback is balanced, older blacklist/favorite data may bootstrap the model.
+  Favorites are explicit <strong>Keep</strong> labels, including favorites synchronized from Wallhaven. Once
+  both explicit Keep and Dislike classes reach the training minimum, only those deliberate labels are used;
+  <strong>Ban</strong> remains an exact-image block. Images merely sitting in the pool are background examples.
+  Filtering stays off until both explicit classes and held-out calibration are available. The model
   then filters likely blocks into a recoverable queue and ranks suggestions. It never changes the blacklist
   automatically and refreshes locally after enough feedback.</p>
   <p>Open the dedicated <strong>Review</strong> view to teach the model. Choose <code>Rules</code>,

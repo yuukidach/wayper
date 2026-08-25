@@ -62,8 +62,10 @@ Download the latest `.dmg` from [GitHub Releases](https://github.com/yuukidach/w
 git clone https://github.com/yuukidach/wayper.git
 cd wayper
 uv venv && uv pip install -e .
-uv pip install -e ".[browser]"  # optional: browser cookie extraction for Wallhaven sync
 ```
+
+Browser cookie extraction and the Cloudflare-capable login fallback for Wallhaven sync are
+included in the standard installation.
 
 ## GUI
 
