@@ -5,7 +5,8 @@ import copy
 import json as json_mod
 import logging
 import os
-from contextlib import asynccontextmanager
+import threading
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException
@@ -135,6 +136,8 @@ __all__ = [
     "serve_trash_thumbnail",
     "serve_thumbnail_query",
     "serve_thumbnail",
+    "serve_preview_query",
+    "serve_preview",
     "serve_image_query",
     "serve_image",
     "port_file",
@@ -144,12 +147,38 @@ __all__ = [
 rotation_service = AutoRotationService()
 
 
+async def _warm_review_suggestions() -> None:
+    """Populate the expensive recommendation cache after startup, off-loop."""
+    await asyncio.sleep(0.2)
+    try:
+        config = get_config()
+        purities = ",".join(sorted(read_mode(config)))
+        orientations = sorted(
+            {monitor.orientation for monitor in config.monitors} & {"landscape", "portrait"}
+        ) or ["landscape"]
+        for orientation in orientations:
+            await asyncio.to_thread(
+                preference_suggestions,
+                purity=purities,
+                orient=orientation,
+                limit=24,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.debug("Could not warm Review recommendations", exc_info=True)
+
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     await rotation_service.start()
+    review_warmup = asyncio.create_task(_warm_review_suggestions())
     try:
         yield
     finally:
+        review_warmup.cancel()
+        with suppress(asyncio.CancelledError):
+            await review_warmup
         await rotation_service.stop()
 
 
@@ -192,24 +221,82 @@ def get_config() -> WayperConfig:
 
 
 _cached_metadata: dict | None = None
-_cached_meta_mtime: float = 0
+_cached_meta_token: tuple[str, int, int, int] | None = None
+
+_PREFERENCE_SUGGESTION_CACHE_LIMIT = 12
+_preference_suggestion_cache_lock = threading.Lock()
+_preference_suggestion_cache: dict[tuple[object, ...], dict[str, object]] = {}
 
 
 def _get_metadata() -> dict:
     """Return cached metadata, reloading only when the file changes on disk."""
-    global _cached_metadata, _cached_meta_mtime
+    global _cached_metadata, _cached_meta_token
     config = get_config()
     mf = config.metadata_file
     try:
-        mtime = mf.stat().st_mtime
+        stat = mf.stat()
+        token = (
+            str(mf.resolve(strict=False)),
+            stat.st_mtime_ns,
+            stat.st_size,
+            getattr(stat, "st_ino", 0),
+        )
     except OSError:
-        mtime = 0
-    if _cached_metadata is None or mtime != _cached_meta_mtime:
+        token = (str(mf.resolve(strict=False)), 0, 0, 0)
+    if _cached_metadata is None or token != _cached_meta_token:
         from wayper.pool import load_metadata
 
         _cached_metadata = load_metadata(config)
-        _cached_meta_mtime = mtime
+        _cached_meta_token = token
     return _cached_metadata
+
+
+def _path_state_token(path: Path) -> tuple[int, int, int]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return 0, 0, 0
+    return stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0)
+
+
+def _preference_suggestion_state_key(
+    config: WayperConfig,
+    purities: list[str],
+    orientation: str,
+    limit: int,
+) -> tuple[object, ...]:
+    """Fingerprint every cheap state input that can change Review ranking."""
+    active_purities = tuple(sorted(set(purities) & set(ALL_PURITIES))) or ("sfw",)
+    orientations = (
+        (orientation,) if orientation in {"landscape", "portrait"} else ("landscape", "portrait")
+    )
+    files = (
+        config.preference_model_file,
+        config.metadata_file,
+        config.blacklist_file,
+        config.preference_feedback_file,
+        config.preference_events_file,
+    )
+    directories = (
+        *(
+            pool_dir(config, purity, orient)
+            for purity in active_purities
+            for orient in orientations
+        ),
+        *(
+            favorites_dir(config, purity, orient)
+            for purity in ALL_PURITIES
+            for orient in ("landscape", "portrait")
+        ),
+    )
+    return (
+        str(config.download_dir.resolve(strict=False)),
+        active_purities,
+        orientation,
+        limit,
+        tuple(_path_state_token(path) for path in files),
+        tuple(_path_state_token(path) for path in directories),
+    )
 
 
 def _active_suggestion_data(
@@ -657,9 +744,9 @@ def update_config_route(updates: dict = Body(...)):
     _cached_mtime = 0  # force reload on next get_config if file changes again
     if changes.download_dir_changed:
         _image_dir_cache.clear()
-        global _cached_metadata, _cached_meta_mtime, _blocklist_cache, _trash_image_cache
+        global _cached_metadata, _cached_meta_token, _blocklist_cache, _trash_image_cache
         _cached_metadata = None
-        _cached_meta_mtime = 0
+        _cached_meta_token = None
         _blocklist_cache = None
         _trash_image_cache = None
 
@@ -1133,28 +1220,62 @@ def dislike_image_route(req: ActionRequest):
     }
 
 
-@app.get("/api/preference-suggestions")
-def preference_suggestions(purity: str = "", orient: str = "", limit: int = 24):
-    """Return local model candidates for human review; never delete automatically."""
+def _cached_preference_suggestions(
+    config: WayperConfig,
+    purities: list[str],
+    orient: str,
+    limit: int,
+) -> dict[str, object]:
+    """Return a state-keyed recommendation snapshot without repeated rescoring."""
     from wayper.preference_model import (
         preference_deletion_suggestions,
         schedule_preference_model_retrain,
     )
 
+    bounded_limit = min(60, max(1, limit))
+    cache_key = _preference_suggestion_state_key(config, purities, orient, bounded_limit)
+    with _preference_suggestion_cache_lock:
+        cached = _preference_suggestion_cache.get(cache_key)
+        if cached is not None:
+            return copy.deepcopy(cached)
+        result = preference_deletion_suggestions(
+            config,
+            purities=purities,
+            orientation=orient,
+            limit=bounded_limit,
+            # Building a complete training snapshot walks and normalizes every
+            # labelled library item. The Review page only needs the durable ledger
+            # revision here; full diagnostics remain available through CLI/MCP.
+            include_learning=False,
+            # The API already maintains an mtime-validated metadata snapshot. Reuse
+            # it instead of reparsing a potentially large history file for every
+            # Review refresh.
+            metadata_snapshot=_get_metadata(),
+        )
+        # Established models only need the cheap ledger revision. Preserve the
+        # complete readiness/upgrade check for first training and model migrations,
+        # where it decides whether a refresh worker must be scheduled.
+        learning = _preference_learning_payload(
+            config,
+            fast=result.get("status") == "ready",
+        )
+        result["learning"] = learning
+        if isinstance(learning, dict) and learning.get("due"):
+            # A CLI/MCP action may have recorded feedback in another process. Queue
+            # the non-blocking refresh when the long-lived API process next observes it.
+            schedule_preference_model_retrain(config, force=True)
+        _preference_suggestion_cache[cache_key] = copy.deepcopy(result)
+        while len(_preference_suggestion_cache) > _PREFERENCE_SUGGESTION_CACHE_LIMIT:
+            _preference_suggestion_cache.pop(next(iter(_preference_suggestion_cache)))
+        return result
+
+
+@app.get("/api/preference-suggestions")
+def preference_suggestions(purity: str = "", orient: str = "", limit: int = 24):
+    """Return local model candidates for human review; never delete automatically."""
     config = get_config()
     purities = _parse_purities(purity) if purity else sorted(read_mode(config))
-    result = preference_deletion_suggestions(
-        config,
-        purities=purities,
-        orientation=orient,
-        limit=min(60, max(1, limit)),
-    )
-    learning = result.get("learning")
-    if isinstance(learning, dict) and learning.get("due"):
-        # A CLI/MCP action may have recorded feedback in another process. Queue
-        # the non-blocking refresh when the long-lived API process next observes it.
-        schedule_preference_model_retrain(config, force=True)
-    return result
+    return _cached_preference_suggestions(config, purities, orient, limit)
 
 
 @app.post("/api/preference-suggestions/feedback")
@@ -1248,7 +1369,6 @@ def model_review_route(purity: str = "", orient: str = "", limit: int = 100):
     from wayper.model_review import (
         list_model_review_items,
         model_review_status,
-        pending_model_review_count,
     )
 
     config = get_config()
@@ -1270,11 +1390,7 @@ def model_review_route(purity: str = "", orient: str = "", limit: int = 100):
         orientation=orient or None,
         limit=min(500, max(1, limit)),
     )
-    pending_count = pending_model_review_count(
-        config,
-        purities=purities,
-        orientation=orient or None,
-    )
+    pending_count = int(status.get("pending_count", len(items)))
     # Keep the response shape close to preference-suggestions so the existing
     # review renderer can consume it without trusting client-provided scores.
     return {
@@ -1568,10 +1684,11 @@ def serve_trash_thumbnail(filename: str):
 
 
 def _remove_thumbnail(config: WayperConfig, image_path: str) -> None:
-    """Remove cached thumbnail for an image, if it exists."""
+    """Remove cached thumbnail/preview derivatives for an image, if present."""
     rel = Path(image_path)
-    thumb = config.download_dir / ".thumbnails" / rel.parent / (rel.stem + ".jpg")
-    thumb.unlink(missing_ok=True)
+    for cache_name in (".thumbnails", ".previews"):
+        derivative = config.download_dir / cache_name / rel.parent / (rel.stem + ".jpg")
+        derivative.unlink(missing_ok=True)
 
 
 def _thumbnail_response(config: WayperConfig, image_path: str) -> FileResponse:
@@ -1601,6 +1718,26 @@ def serve_thumbnail(path: str):
     return _thumbnail_response(config, path)
 
 
+@app.get("/previews/{path:path}")
+@app.get("/previews")
+def serve_preview(path: str):
+    """Serve a cached screen-sized image for the Review carousel."""
+    from wayper.image import generate_thumbnail
+
+    config = get_config()
+    img_full = _resolve_image(config, path)
+    rel = img_full.relative_to(config.download_dir)
+    cache_dir = config.download_dir / ".previews" / rel.parent
+    preview = generate_thumbnail(
+        img_full,
+        cache_dir,
+        max_width=1920,
+        max_height=1920,
+    )
+    target = preview if preview else img_full
+    return FileResponse(target, headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/images/{path:path}")
 @app.get("/images")
 def serve_image(path: str):
@@ -1612,6 +1749,7 @@ def serve_image(path: str):
 
 # Keep the historical helper names importable without maintaining duplicate handlers.
 serve_thumbnail_query = serve_thumbnail
+serve_preview_query = serve_preview
 serve_image_query = serve_image
 
 

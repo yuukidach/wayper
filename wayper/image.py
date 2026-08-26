@@ -20,7 +20,12 @@ def validate_image(path: Path) -> bool:
         return False
 
 
-def generate_thumbnail(source: Path, cache_dir: Path, max_width: int = 400) -> Path | None:
+def generate_thumbnail(
+    source: Path,
+    cache_dir: Path,
+    max_width: int = 400,
+    max_height: int | None = None,
+) -> Path | None:
     """Generate a JPEG thumbnail preserving aspect ratio (only downscales).
 
     Returns the thumbnail path on success, None on failure.
@@ -36,11 +41,16 @@ def generate_thumbnail(source: Path, cache_dir: Path, max_width: int = 400) -> P
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
         with Image.open(source) as img:
-            if img.width <= max_width:
+            height_limit = max_height if max_height is not None else max_width * 4
+            if img.width <= max_width and img.height <= height_limit:
                 return None  # already small enough, serve original
+            # JPEG can select a smaller decoder resolution before allocating
+            # the full raster. This matters for unusually large wallpapers.
+            if img.format == "JPEG":
+                img.draft("RGB", (max_width, height_limit))
             if img.mode != "RGB":
                 img = img.convert("RGB")
-            img.thumbnail((max_width, max_width * 4), Image.LANCZOS)
+            img.thumbnail((max_width, height_limit), Image.LANCZOS)
             img.save(thumb, format="JPEG", quality=80)
         return thumb
     except Exception:

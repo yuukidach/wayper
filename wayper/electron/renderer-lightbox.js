@@ -473,6 +473,16 @@ function closeLightbox(event) {
 }
 
 function reviewLightboxItems() {
+    // The dedicated Review workspace owns a separate, source-filtered queue.
+    // Falling through to preferenceReviewItems() here reads the legacy
+    // Blocklist suggestion state, so a full preview opened from Review has no
+    // valid left/right neighbour (or can jump into an unrelated old queue).
+    if (
+        appState?.mode === 'model-review'
+        && typeof modelReviewVisibleItems === 'function'
+    ) {
+        return modelReviewVisibleItems();
+    }
     if (typeof preferenceReviewItems === 'function') {
         return preferenceReviewItems();
     }

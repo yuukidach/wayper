@@ -1589,6 +1589,8 @@ function markActiveModelReviewCard(carousel, path, { force = false } = {}) {
         }
         if (distance <= 1) {
             hydrateModelReviewCardImages(card, { priority: active });
+        } else {
+            releaseModelReviewCardImages(card);
         }
         const busy = card.classList.contains('is-busy');
         for (const button of card.querySelectorAll('.model-review-card-decision')) {
@@ -1632,7 +1634,13 @@ function selectModelReviewItem(
     const carousel = els.wallpaperGrid?.querySelector('.model-review-carousel');
     markActiveModelReviewCard(carousel, path);
     const card = carousel?.querySelector(modelReviewCardSelector(path));
-    scrollModelReviewCardIntoView(carousel, card, behavior);
+    // While a smooth keyboard scroll is starting, its first scroll event still
+    // reports the old card as geometrically nearest. Keep the explicit target
+    // authoritative until scrolling settles instead of immediately undoing the
+    // ArrowLeft/ArrowRight selection.
+    if (carousel?.dataset) carousel.dataset.selectionTarget = path;
+    const scrolling = scrollModelReviewCardIntoView(carousel, card, behavior);
+    if (!scrolling && carousel?.dataset) delete carousel.dataset.selectionTarget;
     if (focus && card) {
         card?.focus?.({ preventScroll: true });
     }
@@ -1674,6 +1682,17 @@ function nearestModelReviewCard(carousel) {
 }
 
 function syncModelReviewSelectionFromScroll(carousel) {
+    const selectionTarget = carousel?.dataset?.selectionTarget;
+    if (selectionTarget) {
+        const target = [...(carousel.querySelectorAll?.('.model-review-card') || [])]
+            .find(card => card.dataset?.path === selectionTarget);
+        if (target) {
+            appState.modelReviewSelectedPath = selectionTarget;
+            markActiveModelReviewCard(carousel, selectionTarget);
+            return true;
+        }
+        delete carousel.dataset.selectionTarget;
+    }
     const card = nearestModelReviewCard(carousel);
     if (!card?.dataset.path) return false;
     if (appState.modelReviewSelectedPath !== card.dataset.path) {
@@ -1689,6 +1708,7 @@ function requestModelReviewFrame(callback) {
 }
 
 function snapToNearestModelReviewCard(carousel) {
+    if (carousel?.dataset) delete carousel.dataset.selectionTarget;
     const card = nearestModelReviewCard(carousel);
     if (!card) return false;
     appState.modelReviewSelectedPath = card.dataset.path;
@@ -1754,6 +1774,7 @@ function setupModelReviewCarousel(carousel) {
             : event.deltaX;
         if (!delta) return;
         event.preventDefault();
+        delete carousel.dataset.selectionTarget;
         const unit = event.deltaMode === 1
             ? 28
             : event.deltaMode === 2 ? carousel.clientWidth : 1;
@@ -1771,6 +1792,7 @@ function setupModelReviewCarousel(carousel) {
         if (carousel.classList.contains('is-resolving-card')) return;
         if (event.pointerType === 'mouse' && event.button !== 0) return;
         if (event.target?.closest?.('.model-review-card-decision')) return;
+        delete carousel.dataset.selectionTarget;
         pointerId = event.pointerId;
         startX = event.clientX;
         startScrollLeft = carousel.scrollLeft;
@@ -1825,15 +1847,86 @@ function setModelReviewCardBusy(path, busy, action = null) {
     }
 }
 
+function modelReviewImageHasSource(image) {
+    if (typeof image?.getAttribute === 'function') {
+        return Boolean(image.getAttribute('src'));
+    }
+    return Boolean(image?.src);
+}
+
+function releaseModelReviewCardImages(card) {
+    for (const image of card?.querySelectorAll?.(
+        '.model-review-card-backdrop, .model-review-card-image',
+    ) || []) {
+        if (image._modelReviewFullLoader) {
+            image._modelReviewFullLoader.onload = null;
+            image._modelReviewFullLoader.onerror = null;
+            image._modelReviewFullLoader = null;
+        }
+        if (image._modelReviewFullQueueHandler) {
+            image.removeEventListener?.('load', image._modelReviewFullQueueHandler);
+            image._modelReviewFullQueueHandler = null;
+        }
+        if (image.dataset) delete image.dataset.fullState;
+        if (typeof image.removeAttribute === 'function') {
+            image.removeAttribute('src');
+        } else {
+            image.src = '';
+        }
+    }
+}
+
+function promoteModelReviewCardImage(image) {
+    const fullSource = image?.dataset?.fullSrc;
+    if (!fullSource || image.dataset.fullState) return;
+    if (typeof image.addEventListener === 'function' && image.complete !== true) {
+        image.dataset.fullState = 'waiting';
+        const startPromotion = () => {
+            image.removeEventListener?.('load', startPromotion);
+            image._modelReviewFullQueueHandler = null;
+            if (image.dataset?.fullState !== 'waiting') return;
+            delete image.dataset.fullState;
+            promoteModelReviewCardImage(image);
+        };
+        image._modelReviewFullQueueHandler = startPromotion;
+        image.addEventListener('load', startPromotion, { once: true });
+        return;
+    }
+    image.dataset.fullState = 'loading';
+
+    const applyFullSource = () => {
+        image._modelReviewFullLoader = null;
+        if (image.dataset?.fullState !== 'loading' || image.isConnected === false) return;
+        image.src = fullSource;
+        image.dataset.fullState = 'loaded';
+    };
+    if (typeof Image !== 'function') {
+        applyFullSource();
+        return;
+    }
+
+    const loader = new Image();
+    image._modelReviewFullLoader = loader;
+    loader.decoding = 'async';
+    loader.fetchPriority = 'high';
+    loader.onload = applyFullSource;
+    loader.onerror = () => {
+        if (image.dataset?.fullState === 'loading') image.dataset.fullState = 'failed';
+        image._modelReviewFullLoader = null;
+    };
+    loader.src = fullSource;
+}
+
 function hydrateModelReviewCardImages(card, { priority = false } = {}) {
     for (const image of card?.querySelectorAll?.(
         '.model-review-card-backdrop, .model-review-card-image',
     ) || []) {
         image.loading = priority ? 'eager' : 'lazy';
         image.fetchPriority = priority ? 'high' : 'low';
-        if (!image.src && image.dataset?.src) {
+        if (!modelReviewImageHasSource(image) && image.dataset?.src) {
             image.src = image.dataset.src;
         }
+        if (priority && image.dataset?.fullSrc) promoteModelReviewCardImage(image);
     }
 }
 
@@ -1880,10 +1973,13 @@ function createModelReviewCard(item, index, total) {
         }
         previewPreferenceSuggestion(item, event);
     };
-    const sourceUrl = imageUrl(item.path);
+    const sourceUrl = modelReviewPreviewUrl(item.path);
+    const previewUrl = thumbnailUrl(item.path);
     const backdrop = document.createElement('img');
     backdrop.className = 'model-review-card-backdrop';
-    backdrop.dataset.src = sourceUrl;
+    // A blurred 400 px thumbnail is visually equivalent as a backdrop and
+    // avoids decoding a second full-resolution copy of every nearby image.
+    backdrop.dataset.src = previewUrl;
     backdrop.loading = 'lazy';
     backdrop.decoding = 'async';
     backdrop.fetchPriority = 'low';
@@ -1892,7 +1988,11 @@ function createModelReviewCard(item, index, total) {
     backdrop.setAttribute('aria-hidden', 'true');
     const image = document.createElement('img');
     image.className = 'model-review-card-image';
-    image.dataset.src = sourceUrl;
+    // Paint the thumbnail immediately, then promote only the active card to
+    // a screen-sized cached preview once that resource is ready. Neighbours
+    // remain cheap thumbnails, so arrows never wait on large original decodes.
+    image.dataset.src = previewUrl;
+    image.dataset.fullSrc = sourceUrl;
     image.alt = item.name || 'Model review candidate';
     image.decoding = 'async';
     image.loading = 'lazy';
@@ -3178,6 +3278,10 @@ function thumbnailUrl(path) {
         return `${API_URL}/trash-thumbnails/${encodeURIComponent(path.slice(8))}`;
     }
     return `${API_URL}/thumbnails?path=${encodeURIComponent(path)}`;
+}
+
+function modelReviewPreviewUrl(path) {
+    return `${API_URL}/previews?path=${encodeURIComponent(path)}`;
 }
 
 function createCard(img) {

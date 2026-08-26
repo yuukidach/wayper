@@ -641,6 +641,29 @@ class RegressionTest(unittest.TestCase):
 
         self.assertIn("HEAD", methods_by_path["/trash/{filename}"])
         self.assertIn("HEAD", methods_by_path["/trash-thumbnails/{filename}"])
+        self.assertIn("GET", methods_by_path["/previews/{path:path}"])
+
+    def test_review_preview_bounds_portrait_height(self) -> None:
+        from PIL import Image
+
+        from wayper.image import generate_thumbnail
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "portrait.jpg"
+            Image.new("RGB", (1000, 3000), "navy").save(source, quality=80)
+            preview = generate_thumbnail(
+                source,
+                root / "previews",
+                max_width=1920,
+                max_height=1920,
+            )
+            self.assertIsNotNone(preview)
+            assert preview is not None
+            with Image.open(preview) as image:
+                size = image.size
+
+        self.assertEqual(size, (640, 1920))
 
     def test_do_next_records_last_wallpaper_change(self) -> None:
         from wayper.core import do_next
@@ -705,6 +728,42 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual(feedback["revision"], 1)
         self.assertEqual(feedback["events"][0]["action"], "keep")
         self.assertEqual(feedback["events"][0]["context"], "model_review")
+
+    def test_preference_suggestion_route_caches_unchanged_ranking_state(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            ranked = {
+                "status": "ready",
+                "items": [{"path": "sfw/landscape/candidate.jpg"}],
+            }
+
+            def build_ranked(*_args, **_kwargs):
+                return {
+                    "status": ranked["status"],
+                    "items": [dict(item) for item in ranked["items"]],
+                }
+
+            with (
+                patch("wayper.server.api.get_config", return_value=config),
+                patch("wayper.server.api._get_metadata", return_value={}),
+                patch(
+                    "wayper.server.api._preference_learning_payload",
+                    return_value={"status": "ready", "due": False},
+                ),
+                patch(
+                    "wayper.preference_model.preference_deletion_suggestions",
+                    side_effect=build_ranked,
+                ) as build,
+            ):
+                first = preference_suggestions(purity="sfw", orient="landscape")
+                first["items"].clear()
+                second = preference_suggestions(purity="sfw", orient="landscape")
+                config.metadata_file.write_text("{}")
+                third = preference_suggestions(purity="sfw", orient="landscape")
+
+        self.assertEqual(build.call_count, 2)
+        self.assertEqual(len(second["items"]), 1)
+        self.assertEqual(len(third["items"]), 1)
 
     def test_automatic_model_review_keep_moves_quarantine_to_pool_and_records_label(self) -> None:
         from wayper.model_review import queue_model_review_item

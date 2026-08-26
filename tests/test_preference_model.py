@@ -14,7 +14,13 @@ from click.testing import CliRunner
 
 from wayper.cli import cli
 from wayper.config import WayperConfig
-from wayper.preference.model import preference_decision_score
+from wayper.preference.model import (
+    _semantic_context_profile,
+    _semantic_context_profile_similarities,
+    _semantic_context_profile_similarity,
+    preference_decision_score,
+)
+from wayper.preference.semantic import SemanticTagSet, tag_maxsim, tag_maxsim_many
 from wayper.preference_model import (
     MODEL_SCHEMA_VERSION,
     PreferenceExample,
@@ -118,6 +124,113 @@ def _mark_semantic_model_ready(model: PreferenceModel) -> PreferenceModel:
 
 
 class PreferenceModelTest(unittest.TestCase):
+    def test_batched_context_similarity_matches_pairwise_results(self) -> None:
+        left = _semantic_context_profile(
+            ("category:anime", "color:#112233", "color:#ddeeff", "purity:sfw")
+        )
+        rights = [
+            _semantic_context_profile(
+                ("category:anime", "color:#102030", "color:#ffffff", "purity:sfw")
+            ),
+            _semantic_context_profile(("category:people", "color:#000000", "purity:nsfw")),
+            _semantic_context_profile(("uploader:someone",)),
+        ]
+
+        expected = [_semantic_context_profile_similarity(left, right) for right in rights]
+        actual = _semantic_context_profile_similarities(left, rights)
+
+        for pairwise, batched in zip(expected, actual, strict=True):
+            self.assertAlmostEqual(pairwise, batched, places=12)
+
+    def test_batched_tag_maxsim_matches_pairwise_results(self) -> None:
+        import numpy as np
+
+        left = SemanticTagSet(
+            items=(("forest", "forest"), ("mist", "mist")),
+            matrix=np.asarray(((1.0, 0.0), (0.0, 1.0)), dtype=np.float32),
+            pooled=np.asarray((0.5, 0.5), dtype=np.float32),
+        )
+        rights = [
+            SemanticTagSet(
+                items=(("woodland", "woodland"), ("fog", "fog")),
+                matrix=np.asarray(((0.98, 0.02), (0.05, 0.95)), dtype=np.float32),
+                pooled=np.asarray((0.515, 0.485), dtype=np.float32),
+            ),
+            SemanticTagSet(
+                items=(("ocean", "ocean"),),
+                matrix=np.asarray(((-1.0, 0.0),), dtype=np.float32),
+                pooled=np.asarray((-1.0, 0.0), dtype=np.float32),
+            ),
+            SemanticTagSet(
+                items=(),
+                matrix=np.empty((0, 2), dtype=np.float32),
+                pooled=np.empty(0, dtype=np.float32),
+            ),
+        ]
+        idf = {"forest": 2.0, "mist": 1.5, "woodland": 2.1, "fog": 1.4}
+
+        pairwise = [tag_maxsim(left, right, idf) for right in rights]
+        batched = tag_maxsim_many(left, rights, idf)
+
+        for expected, actual in zip(pairwise, batched, strict=True):
+            self.assertAlmostEqual(expected[0], actual[0], places=7)
+            self.assertEqual(
+                [(left_tag, right_tag) for left_tag, right_tag, _ in expected[1]],
+                [(left_tag, right_tag) for left_tag, right_tag, _ in actual[1]],
+            )
+            for expected_match, actual_match in zip(expected[1], actual[1], strict=True):
+                self.assertAlmostEqual(expected_match[2], actual_match[2], places=7)
+
+    def test_review_ranking_can_skip_full_learning_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            with (
+                patch("wayper.preference_model.load_preference_model", return_value=None),
+                patch(
+                    "wayper.preference_model.collect_preference_training_snapshot",
+                    side_effect=AssertionError("full training snapshot"),
+                ),
+            ):
+                result = preference_deletion_suggestions(
+                    config,
+                    purities=["sfw"],
+                    orientation="landscape",
+                    include_learning=False,
+                )
+
+        self.assertEqual(result["status"], "untrained")
+        self.assertIsNone(result["learning"])
+
+    def test_review_ranking_accepts_an_existing_metadata_snapshot(self) -> None:
+        model = _mark_semantic_model_ready(
+            train_preference_model(
+                [
+                    *_examples("ban", 10, ("bad",), 1),
+                    *_examples("keep", 10, ("good",), 0, start=1_700_001_000),
+                ],
+                semantic_model=None,
+            )
+        )
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            with (
+                patch("wayper.preference_model.load_preference_model", return_value=model),
+                patch(
+                    "wayper.pool.load_metadata",
+                    side_effect=AssertionError("metadata should be reused"),
+                ),
+            ):
+                result = preference_deletion_suggestions(
+                    config,
+                    purities=["sfw"],
+                    orientation="landscape",
+                    include_learning=False,
+                    metadata_snapshot={},
+                )
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["items"], [])
+
     def test_pid_probe_does_not_terminate_current_process(self) -> None:
         self.assertTrue(_pid_is_running(os.getpid()))
 
@@ -351,6 +464,31 @@ class PreferenceModelTest(unittest.TestCase):
         assert loaded is not None
         after = loaded.predict(["bad", "detail"])
         self.assertAlmostEqual(before.probability, after.probability)
+
+    def test_model_loader_reuses_unchanged_file_and_invalidates_after_save(self) -> None:
+        model = train_preference_model(
+            [
+                *_examples("ban", 10, ("bad",), 1),
+                *_examples("keep", 10, ("good",), 0, start=1_700_001_000),
+            ],
+            semantic_model=None,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "model.json"
+            save_preference_model(model, path)
+            first = load_preference_model(path)
+            second = load_preference_model(path)
+            self.assertIs(first, second)
+
+            model.bias += 1.0
+            save_preference_model(model, path)
+            changed = load_preference_model(path)
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(changed)
+        self.assertIsNot(first, changed)
+        assert changed is not None
+        self.assertAlmostEqual(changed.bias, model.bias)
 
     def test_v2_context_features_round_trip_without_pair_features(self) -> None:
         examples = [

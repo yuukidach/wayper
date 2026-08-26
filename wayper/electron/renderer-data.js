@@ -25,6 +25,9 @@ const FILTER_STRATEGY_LABELS = {
 };
 const MODEL_REVIEW_RECOMMENDATION_CACHE_MS = 60_000;
 const MODEL_REVIEW_RECOMMENDATION_LIMIT = 24;
+const MODEL_REVIEW_RECOMMENDATION_STORAGE_KEY = 'wayper.model-review.recommendations.v1';
+const MODEL_REVIEW_RECOMMENDATION_STORAGE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MODEL_REVIEW_RECOMMENDATION_STORAGE_LIMIT = 8;
 
 function currentFilterStrategy() {
     const strategy = appState.config?.wallhaven?.filter_strategy
@@ -445,10 +448,65 @@ function modelReviewRecommendationCaches() {
     if (!(appState.modelReviewRecommendationRequests instanceof Map)) {
         appState.modelReviewRecommendationRequests = new Map();
     }
+    if (appState.modelReviewRecommendationCacheRestored !== true) {
+        appState.modelReviewRecommendationCacheRestored = true;
+        restorePersistedModelReviewRecommendations(appState.modelReviewRecommendationCache);
+    }
     return {
         cache: appState.modelReviewRecommendationCache,
         requests: appState.modelReviewRecommendationRequests,
     };
+}
+
+function modelReviewRecommendationStorage() {
+    try {
+        return typeof localStorage === 'undefined' ? null : localStorage;
+    } catch (_error) {
+        return null;
+    }
+}
+
+function restorePersistedModelReviewRecommendations(cache) {
+    const storage = modelReviewRecommendationStorage();
+    if (!storage) return;
+    try {
+        const entries = JSON.parse(
+            storage.getItem(MODEL_REVIEW_RECOMMENDATION_STORAGE_KEY) || '[]',
+        );
+        if (!Array.isArray(entries)) return;
+        const cutoff = Date.now() - MODEL_REVIEW_RECOMMENDATION_STORAGE_MAX_AGE_MS;
+        for (const entry of entries) {
+            if (!Array.isArray(entry) || entry.length !== 2) continue;
+            const [key, value] = entry;
+            const loadedAt = Number(value?.loadedAt || 0);
+            if (
+                typeof key === 'string'
+                && value?.data
+                && Number.isFinite(loadedAt)
+                && loadedAt >= cutoff
+            ) {
+                cache.set(key, { data: value.data, loadedAt });
+            }
+        }
+    } catch (_error) {
+        // A corrupt or unavailable browser cache only forfeits the fast paint;
+        // the normal API refresh below remains authoritative.
+    }
+}
+
+function persistModelReviewRecommendations(cache) {
+    const storage = modelReviewRecommendationStorage();
+    if (!storage) return;
+    try {
+        const cutoff = Date.now() - MODEL_REVIEW_RECOMMENDATION_STORAGE_MAX_AGE_MS;
+        const entries = [...cache.entries()]
+            .filter(([, value]) => Number(value?.loadedAt || 0) >= cutoff && value?.data)
+            .sort((left, right) => Number(right[1].loadedAt) - Number(left[1].loadedAt))
+            .slice(0, MODEL_REVIEW_RECOMMENDATION_STORAGE_LIMIT);
+        storage.setItem(MODEL_REVIEW_RECOMMENDATION_STORAGE_KEY, JSON.stringify(entries));
+    } catch (_error) {
+        // Storage quotas/private mode must not affect Review itself.
+    }
 }
 
 function cachedModelReviewRecommendations(orient = appState.currentOrient) {
@@ -480,6 +538,7 @@ function requestModelReviewRecommendations(
     )
         .then(data => {
             cache.set(key, { data, loadedAt: Date.now() });
+            persistModelReviewRecommendations(cache);
             return data;
         })
         .finally(() => {
@@ -493,6 +552,7 @@ function invalidateModelReviewRecommendationCache(path = null) {
     const { cache } = modelReviewRecommendationCaches();
     if (!path) {
         cache.clear();
+        persistModelReviewRecommendations(cache);
         return;
     }
     for (const [key, entry] of cache) {
@@ -505,6 +565,7 @@ function invalidateModelReviewRecommendationCache(path = null) {
             loadedAt: 0,
         });
     }
+    persistModelReviewRecommendations(cache);
 }
 
 function invalidateModelReviewCaches(path = null) {

@@ -19,6 +19,16 @@ from pathlib import Path
 
 from .model import PreferenceExample, _model_tags, _sigmoid
 
+# Review ranking multiplies many small matrices. BLAS thread fan-out costs more
+# than the arithmetic at this scale and can briefly saturate the desktop during
+# cache warm-up. Respect explicit user tuning while keeping the default quiet.
+for _thread_limit_variable in (
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+):
+    os.environ.setdefault(_thread_limit_variable, "1")
+
 DEFAULT_SEMANTIC_MODEL = "BAAI/bge-small-en-v1.5"
 DEFAULT_SEMANTIC_BLEND = 0.65
 SEMANTIC_MIN_EXAMPLES = 20
@@ -495,10 +505,104 @@ def tag_maxsim(
     return adjusted, strongest
 
 
+def tag_maxsim_many(
+    left: SemanticTagSet,
+    rights: Sequence[SemanticTagSet],
+    idf: dict[str, float],
+    *,
+    floor: float = SEMANTIC_SIMILARITY_FLOOR,
+    include_matches: bool = True,
+) -> list[tuple[float, tuple[tuple[str, str, float], ...]]]:
+    """Return exact ``tag_maxsim`` results with one matrix product per query.
+
+    Review ranking compares one wallpaper with roughly a hundred prototype tag
+    sets. Calling NumPy separately for every tiny pair spends substantially more
+    time crossing the Python/NumPy boundary than doing arithmetic. Packing the
+    right-hand matrices into one padded batch preserves the same per-pair
+    calculation while making the expensive dot product once.
+    """
+    if not rights:
+        return []
+    if not left.items:
+        return [(0.0, ()) for _ in rights]
+
+    import numpy as np
+
+    widths = np.asarray([len(right.items) for right in rights], dtype=np.int32)
+    if not np.any(widths):
+        return [(0.0, ()) for _ in rights]
+    maximum_width = int(widths.max())
+    dimension = int(left.matrix.shape[1])
+    right_matrix = np.zeros(
+        (len(rights), maximum_width, dimension),
+        dtype=np.float32,
+    )
+    right_mask = np.zeros((len(rights), maximum_width), dtype=bool)
+    default_idf = max(idf.values(), default=1.0)
+    left_weights = np.asarray(
+        [max(0.05, idf.get(key, default_idf)) for key, _ in left.items],
+        dtype=np.float32,
+    )
+    left_weight_total = max(float(left_weights.sum()), 1e-12)
+    right_weights = np.zeros((len(rights), maximum_width), dtype=np.float32)
+    for index, (right, width) in enumerate(zip(rights, widths, strict=True)):
+        if not width:
+            continue
+        right_matrix[index, :width] = right.matrix
+        right_mask[index, :width] = True
+        right_weights[index, :width] = [
+            max(0.05, idf.get(key, default_idf)) for key, _ in right.items
+        ]
+
+    pair_scores = (left.matrix @ right_matrix.reshape(-1, dimension).T).reshape(
+        len(left.items), len(rights), maximum_width
+    )
+    pair_scores = np.where(right_mask[None, :, :], pair_scores, -np.inf)
+    best_right_indices = np.argmax(pair_scores, axis=2)
+    forward_scores = np.take_along_axis(
+        pair_scores,
+        best_right_indices[:, :, None],
+        axis=2,
+    )[:, :, 0]
+    forward = (left_weights @ forward_scores) / left_weight_total
+    reverse_scores = np.max(pair_scores, axis=0)
+    reverse_scores = np.where(right_mask, reverse_scores, 0.0)
+    reverse = np.sum(right_weights * reverse_scores, axis=1) / np.maximum(
+        np.sum(right_weights, axis=1),
+        1e-12,
+    )
+    adjusted = np.clip(
+        ((forward + reverse) / 2 - floor) / max(1e-9, 1.0 - floor),
+        0.0,
+        1.0,
+    )
+
+    results: list[tuple[float, tuple[tuple[str, str, float], ...]]] = []
+    for right_index, (right, width) in enumerate(zip(rights, widths, strict=True)):
+        if not width:
+            results.append((0.0, ()))
+            continue
+        strongest: tuple[tuple[str, str, float], ...] = ()
+        if include_matches:
+            matches = tuple(
+                (
+                    left.items[index][0],
+                    right.items[int(best_right_indices[index, right_index])][0],
+                    float(forward_scores[index, right_index]),
+                )
+                for index in range(len(left.items))
+            )
+            strongest = tuple(sorted(matches, key=lambda item: (-item[2], item[0], item[1]))[:4])
+        results.append((float(adjusted[right_index]), strongest))
+    return results
+
+
 def weighted_tag_jaccard(
     left: Sequence[tuple[str, str]],
     right: Sequence[tuple[str, str]],
     idf: dict[str, float],
+    *,
+    default_idf: float | None = None,
 ) -> float:
     """Return an IDF-weighted exact-tag overlap in the 0..1 range."""
     left_keys = {key for key, _ in left}
@@ -506,7 +610,8 @@ def weighted_tag_jaccard(
     union = left_keys | right_keys
     if not union:
         return 0.0
-    default_idf = max(idf.values(), default=1.0)
+    if default_idf is None:
+        default_idf = max(idf.values(), default=1.0)
     denominator = sum(idf.get(key, default_idf) for key in union)
     numerator = sum(idf.get(key, default_idf) for key in left_keys & right_keys)
     return numerator / max(denominator, 1e-12)

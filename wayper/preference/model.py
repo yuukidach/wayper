@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import heapq
 import math
+import threading
 from collections import OrderedDict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -203,6 +204,7 @@ class _SemanticNeighborRuntime:
     label_indices: tuple[object, object]
     tiebreak_rank: object
     fine_sets: OrderedDict[int, object]
+    context_profiles: tuple[object, ...]
 
 
 def preference_decision_score(
@@ -278,6 +280,12 @@ class PreferenceModel:
     )
     _semantic_neighbor_failed: bool = dataclass_field(
         default=False,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _semantic_neighbor_lock: object = dataclass_field(
+        default_factory=threading.RLock,
         init=False,
         repr=False,
         compare=False,
@@ -396,6 +404,10 @@ class PreferenceModel:
                 label_indices=(np.flatnonzero(labels == 0), np.flatnonzero(labels == 1)),
                 tiebreak_rank=tiebreak_rank,
                 fine_sets=OrderedDict(),
+                context_profiles=tuple(
+                    _semantic_context_profile(prototype.context_features)
+                    for prototype in self.neighbor_prototypes
+                ),
             )
             return self._semantic_neighbor_runtime
         except Exception:
@@ -415,6 +427,22 @@ class PreferenceModel:
         """Run both semantic stages and return each reusable pooled query vector."""
         if not records or not self.semantic_enabled or not self.neighbor_head_ready:
             return [(None, None)] * len(records)
+        # Cached model instances are shared by FastAPI worker threads. Keep the
+        # lazily-built runtime and its bounded fine-set LRU coherent while one
+        # batch is using them.
+        with self._semantic_neighbor_lock:  # type: ignore[attr-defined]
+            return self._predict_semantic_neighbors_many_locked(records)
+
+    def _predict_semantic_neighbors_many_locked(
+        self,
+        records: Sequence[
+            tuple[
+                tuple[str, ...],
+                dict[str, object] | None,
+                tuple[str, ...],
+            ]
+        ],
+    ) -> list[tuple[dict[str, object] | None, object | None]]:
         try:
             from .semantic import embed_tag_sets, semantic_items_with_context, semantic_tag_items
 
@@ -485,6 +513,7 @@ class PreferenceModel:
             SEMANTIC_TAG_WEIGHT,
             embed_tag_sets,
             tag_maxsim,
+            tag_maxsim_many,
             weighted_tag_jaccard,
         )
 
@@ -538,19 +567,32 @@ class PreferenceModel:
         while len(runtime.fine_sets) > SEMANTIC_FINE_CACHE_SIZE:
             runtime.fine_sets.popitem(last=False)
         tag_sets_by_index = {index: runtime.fine_sets[index] for index in ordered_indices}
+        semantic_results = tag_maxsim_many(
+            query_set,
+            [tag_sets_by_index[index] for index in ordered_indices],
+            runtime.idf,
+            include_matches=False,
+        )
+        query_context_profile = _semantic_context_profile(query_context)
+        context_results = _semantic_context_profile_similarities(
+            query_context_profile,
+            [runtime.context_profiles[index] for index in ordered_indices],
+        )
+        default_idf = max(runtime.idf.values(), default=1.0)
         fine: list[dict[str, object]] = []
-        for index in ordered_indices:
+        for index, (semantic_score, matches), context_score in zip(
+            ordered_indices,
+            semantic_results,
+            context_results,
+            strict=True,
+        ):
             prototype = self.neighbor_prototypes[index]
             prototype_set = tag_sets_by_index[index]
-            semantic_score, matches = tag_maxsim(query_set, prototype_set, runtime.idf)
             exact_score = weighted_tag_jaccard(
                 query_set.items,
                 prototype_set.items,
                 runtime.idf,
-            )
-            context_score = _semantic_context_similarity(
-                query_context,
-                prototype.context_features,
+                default_idf=default_idf,
             )
             similarity = (
                 SEMANTIC_EXACT_WEIGHT * exact_score
@@ -567,6 +609,7 @@ class PreferenceModel:
                     "semantic_similarity": semantic_score,
                     "context_similarity": context_score,
                     "matches": matches,
+                    "prototype_index": index,
                 }
             )
 
@@ -584,6 +627,22 @@ class PreferenceModel:
         keep_neighbors = selected_by_label[0]
         if not dislike_neighbors and not keep_neighbors:
             return None
+
+        # Only the nearest item in each class is exposed as evidence. Compute
+        # its human-readable tag matches now instead of allocating match tuples
+        # for every coarse candidate during ranking.
+        for nearest in (
+            dislike_neighbors[0] if dislike_neighbors else None,
+            keep_neighbors[0] if keep_neighbors else None,
+        ):
+            if nearest is None:
+                continue
+            prototype_index = int(nearest["prototype_index"])
+            _, nearest["matches"] = tag_maxsim(
+                query_set,
+                tag_sets_by_index[prototype_index],
+                runtime.idf,
+            )
 
         def evidence_mass(items: list[dict[str, object]]) -> float:
             if not items:
@@ -1097,64 +1156,152 @@ def _normalize_context_features(features: Iterable[object] | None) -> tuple[str,
     return tuple(sorted(normalized))
 
 
-def _semantic_context_similarity(
-    left: Iterable[object] | None,
-    right: Iterable[object] | None,
+def _context_rgb(value: str) -> tuple[int, int, int] | None:
+    clean = value.removeprefix("#")
+    if len(clean) != 6:
+        return None
+    try:
+        return tuple(int(clean[index : index + 2], 16) for index in (0, 2, 4))  # type: ignore[return-value]
+    except ValueError:
+        return None
+
+
+def _semantic_context_profile(
+    features: Iterable[object] | None,
+) -> tuple[frozenset[str], tuple[tuple[int, int, int], ...], frozenset[str]]:
+    """Parse reusable context values once per query or persisted prototype."""
+    categories: set[str] = set()
+    colors: list[tuple[int, int, int]] = []
+    purities: set[str] = set()
+    for token in _normalize_context_features(features):
+        field, _, value = token.partition(":")
+        if field == "category":
+            categories.add(value)
+        elif field == "color":
+            if (parsed := _context_rgb(value)) is not None:
+                colors.append(parsed)
+        elif field == "purity":
+            purities.add(value)
+    return frozenset(categories), tuple(colors), frozenset(purities)
+
+
+def _palette_rgb_similarity(
+    left: Sequence[tuple[int, int, int]],
+    right: Sequence[tuple[int, int, int]],
 ) -> float:
-    """Return a bounded weak similarity for category, palette, and purity."""
-    grouped: list[dict[str, list[str]]] = []
-    for values in (left, right):
-        fields: dict[str, list[str]] = {}
-        for token in _normalize_context_features(values):
-            field, _, value = token.partition(":")
-            fields.setdefault(field, []).append(value)
-        grouped.append(fields)
-    left_fields, right_fields = grouped
+    if not left or not right:
+        return 0.0
+    maximum = math.sqrt(3 * 255**2)
+
+    def directional(
+        first: Sequence[tuple[int, int, int]],
+        second: Sequence[tuple[int, int, int]],
+    ) -> float:
+        return sum(
+            1.0 - min(math.dist(color, candidate) / maximum for candidate in second)
+            for color in first
+        ) / len(first)
+
+    return (directional(left, right) + directional(right, left)) / 2
+
+
+def _semantic_context_profile_similarity(
+    left: tuple[frozenset[str], tuple[tuple[int, int, int], ...], frozenset[str]],
+    right: tuple[frozenset[str], tuple[tuple[int, int, int], ...], frozenset[str]],
+) -> float:
     weighted = total = 0.0
-    for field, weight in (("category", 0.50), ("color", 0.35), ("purity", 0.15)):
-        left_values = left_fields.get(field, ())
-        right_values = right_fields.get(field, ())
+    for left_values, right_values, weight, is_palette in (
+        (left[0], right[0], 0.50, False),
+        (left[1], right[1], 0.35, True),
+        (left[2], right[2], 0.15, False),
+    ):
         if not left_values or not right_values:
             continue
-        if field == "color":
-            score = _palette_similarity(left_values, right_values)
-        else:
-            score = 1.0 if set(left_values) & set(right_values) else 0.0
+        score = (
+            _palette_rgb_similarity(left_values, right_values)
+            if is_palette
+            else 1.0
+            if set(left_values) & set(right_values)
+            else 0.0
+        )
         weighted += weight * score
         total += weight
     return weighted / total if total else 0.0
 
 
+def _semantic_context_profile_similarities(
+    left: tuple[frozenset[str], tuple[tuple[int, int, int], ...], frozenset[str]],
+    rights: Sequence[tuple[frozenset[str], tuple[tuple[int, int, int], ...], frozenset[str]]],
+) -> list[float]:
+    """Vectorize palette comparisons for one query and many prototypes."""
+    if not rights:
+        return []
+    import numpy as np
+
+    weighted = np.zeros(len(rights), dtype=np.float64)
+    totals = np.zeros(len(rights), dtype=np.float64)
+    for field_index, weight in ((0, 0.50), (2, 0.15)):
+        left_values = left[field_index]
+        if not left_values:
+            continue
+        present = np.asarray([bool(right[field_index]) for right in rights], dtype=bool)
+        matched = np.asarray(
+            [bool(left_values & right[field_index]) for right in rights],
+            dtype=np.float64,
+        )
+        totals[present] += weight
+        weighted += weight * matched
+
+    left_colors = left[1]
+    widths = np.asarray([len(right[1]) for right in rights], dtype=np.int32)
+    if left_colors and np.any(widths):
+        maximum_width = int(widths.max())
+        right_colors = np.zeros((len(rights), maximum_width, 3), dtype=np.float64)
+        color_mask = np.zeros((len(rights), maximum_width), dtype=bool)
+        for index, (right, width) in enumerate(zip(rights, widths, strict=True)):
+            if width:
+                right_colors[index, :width] = right[1]
+                color_mask[index, :width] = True
+        query_colors = np.asarray(left_colors, dtype=np.float64)
+        distances = np.linalg.norm(
+            query_colors[:, None, None, :] - right_colors[None, :, :, :],
+            axis=3,
+        )
+        distances = np.where(color_mask[None, :, :], distances, np.inf)
+        maximum = math.sqrt(3 * 255**2)
+        forward = np.mean(1.0 - np.min(distances, axis=2) / maximum, axis=0)
+        reverse_values = 1.0 - np.min(distances, axis=0) / maximum
+        reverse = np.sum(np.where(color_mask, reverse_values, 0.0), axis=1) / np.maximum(
+            widths,
+            1,
+        )
+        palette = (forward + reverse) / 2
+        present = widths > 0
+        totals[present] += 0.35
+        weighted[present] += 0.35 * palette[present]
+
+    return [
+        float(score / total) if total else 0.0
+        for score, total in zip(weighted, totals, strict=True)
+    ]
+
+
+def _semantic_context_similarity(
+    left: Iterable[object] | None,
+    right: Iterable[object] | None,
+) -> float:
+    """Return a bounded weak similarity for category, palette, and purity."""
+    return _semantic_context_profile_similarity(
+        _semantic_context_profile(left),
+        _semantic_context_profile(right),
+    )
+
+
 def _palette_similarity(left: Sequence[str], right: Sequence[str]) -> float:
     """Compare two small Wallhaven hex palettes with symmetric nearest colours."""
-
-    def rgb(value: str) -> tuple[int, int, int] | None:
-        clean = value.removeprefix("#")
-        if len(clean) != 6:
-            return None
-        try:
-            return tuple(int(clean[index : index + 2], 16) for index in (0, 2, 4))  # type: ignore[return-value]
-        except ValueError:
-            return None
-
-    left_rgb = tuple(color for value in left if (color := rgb(value)) is not None)
-    right_rgb = tuple(color for value in right if (color := rgb(value)) is not None)
-    if not left_rgb or not right_rgb:
-        return 0.0
-    maximum = math.sqrt(3 * 255**2)
-
-    def directional(first: Sequence[tuple[int, int, int]], second: Sequence[tuple[int, int, int]]):
-        return sum(
-            1.0
-            - min(
-                math.sqrt(sum((channel_a - channel_b) ** 2 for channel_a, channel_b in zip(a, b)))
-                / maximum
-                for b in second
-            )
-            for a in first
-        ) / len(first)
-
-    return (directional(left_rgb, right_rgb) + directional(right_rgb, left_rgb)) / 2
+    left_rgb = tuple(color for value in left if (color := _context_rgb(value)) is not None)
+    right_rgb = tuple(color for value in right if (color := _context_rgb(value)) is not None)
+    return _palette_rgb_similarity(left_rgb, right_rgb)
 
 
 def _model_context_features(metadata: dict[str, object] | None) -> tuple[str, ...]:

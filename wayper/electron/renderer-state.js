@@ -78,6 +78,7 @@ let appState = {
     // paint synchronously and refresh in the background.
     modelReviewContextCache: new Map(),
     modelReviewRecommendationCache: new Map(), // Makes repeat entry immediate
+    modelReviewRecommendationCacheRestored: false, // Hydrates last recommendations once
     modelReviewRecommendationRequests: new Map(), // Coalesces background ranking work
     modelReviewSelectedPath: null,  // Item currently inspected in the review workspace
     modelReviewSource: null,        // Visible review lane: held or recommended

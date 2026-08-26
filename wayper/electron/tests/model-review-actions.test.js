@@ -829,9 +829,14 @@ function testCarouselSelectionDoesNotRerenderWorkspace() {
     };
     const cards = [makeCard(first), makeCard(second)];
     const carousel = {
+        dataset: {},
+        scrollLeft: 0,
+        clientWidth: 100,
         querySelectorAll: selector => selector === '.model-review-card' ? cards : [],
         querySelector: selector => cards.find(card => selector.includes(card.dataset.path)) || null,
     };
+    Object.assign(cards[0], { offsetLeft: 0, offsetWidth: 100 });
+    Object.assign(cards[1], { offsetLeft: 100, offsetWidth: 100 });
     let renders = 0;
     const context = {
         appState: {
@@ -857,7 +862,11 @@ function testCarouselSelectionDoesNotRerenderWorkspace() {
     const renderer = loadRendererScript(
         'renderer-views.js',
         context,
-        ['selectModelReviewItem', 'moveModelReviewSelection'],
+        [
+            'selectModelReviewItem',
+            'moveModelReviewSelection',
+            'syncModelReviewSelectionFromScroll',
+        ],
     );
     context.renderModelReviewView = () => { renders++; };
 
@@ -867,6 +876,12 @@ function testCarouselSelectionDoesNotRerenderWorkspace() {
     assert.equal(scrolls.at(-1)[1], 'smooth');
     assert.equal(focused.at(-1), second.path);
     assert.equal(renders, 0);
+
+    // The first frame of a smooth scroll is still geometrically closest to
+    // the old card. It must not roll back an explicit arrow-key target.
+    renderer.syncModelReviewSelectionFromScroll(carousel);
+    assert.equal(context.appState.modelReviewSelectedPath, second.path);
+    assert.equal(carousel.dataset.selectionTarget, second.path);
 
     assert.equal(renderer.moveModelReviewSelection(1), false);
     assert.equal(context.appState.modelReviewSelectedPath, second.path);
@@ -991,17 +1006,23 @@ function testLeavingModelReviewClearsDeckWithoutMatchingCache() {
 }
 
 function testModelReviewHydratesOnlyActiveCardAndNeighbors() {
-    const makeImage = path => ({
-        src: '',
-        dataset: { src: path },
-        loading: 'lazy',
-        fetchPriority: 'low',
-    });
+    const makeImage = (path, fullPath = null) => {
+        const image = {
+            src: '',
+            dataset: { src: path },
+            loading: 'lazy',
+            fetchPriority: 'low',
+            getAttribute: name => name === 'src' ? image.src : null,
+            removeAttribute: name => { if (name === 'src') image.src = ''; },
+        };
+        if (fullPath) image.dataset.fullSrc = fullPath;
+        return image;
+    };
     const makeCard = index => {
         const classes = new Set(['model-review-card']);
         const images = [
-            makeImage(`image-${index}-backdrop`),
-            makeImage(`image-${index}-foreground`),
+            makeImage(`thumb-${index}-backdrop`),
+            makeImage(`thumb-${index}-foreground`, `full-${index}`),
         ];
         return {
             dataset: { path: `image-${index}` },
@@ -1027,7 +1048,14 @@ function testModelReviewHydratesOnlyActiveCardAndNeighbors() {
         querySelectorAll: selector => selector === '.model-review-card' ? cards : [],
         closest: () => null,
     };
-    const context = { console };
+    class ImmediateImage {
+        set src(value) {
+            this._src = value;
+            this.onload?.();
+        }
+        get src() { return this._src; }
+    }
+    const context = { console, Image: ImmediateImage };
     context.window = context;
     const renderer = loadRendererScript(
         'renderer-views.js',
@@ -1043,9 +1071,17 @@ function testModelReviewHydratesOnlyActiveCardAndNeighbors() {
     for (const index of [1, 2, 3]) {
         assert.ok(cards[index].images.every(image => image.src !== ''));
     }
+    assert.equal(cards[2].images[0].src, 'thumb-2-backdrop');
+    assert.equal(cards[2].images[1].src, 'full-2');
+    assert.equal(cards[1].images[1].src, 'thumb-1-foreground');
+    assert.equal(cards[3].images[1].src, 'thumb-3-foreground');
     assert.ok(cards[2].images.every(image => image.fetchPriority === 'high'));
     assert.ok(cards[1].images.every(image => image.fetchPriority === 'low'));
     assert.ok(cards[3].images.every(image => image.fetchPriority === 'low'));
+
+    renderer.markActiveModelReviewCard(carousel, 'image-4');
+    assert.ok(cards[2].images.every(image => image.src === ''));
+    assert.equal(cards[4].images[1].src, 'full-4');
 }
 
 function testReviewZeroStateDistinguishesCompletionLearningAndFailure() {
@@ -1212,6 +1248,26 @@ function testReviewLightboxArrowNeighbors() {
     );
     assert.equal(renderer.reviewLightboxNeighbor(items, items[0].path, -1), null);
     assert.equal(renderer.reviewLightboxNeighbor(items, items[2].path, 1), null);
+}
+
+function testReviewLightboxUsesDedicatedReviewLane() {
+    const dedicated = [{ path: 'sfw/dedicated.jpg' }];
+    const legacy = [{ path: 'sfw/legacy.jpg' }];
+    const context = {
+        appState: { mode: 'model-review' },
+        modelReviewVisibleItems: () => dedicated,
+        preferenceReviewItems: () => legacy,
+    };
+    context.window = context;
+    const renderer = loadRendererScript(
+        'renderer-lightbox.js',
+        context,
+        ['reviewLightboxItems'],
+    );
+
+    assert.deepEqual(renderer.reviewLightboxItems(), dedicated);
+    context.appState.mode = 'trash';
+    assert.deepEqual(renderer.reviewLightboxItems(), legacy);
 }
 
 function testInboxDecisionUpdatesDedicatedQueueState() {
@@ -1714,6 +1770,61 @@ async function testHeldCardsRenderBeforeRecommendationRankingFinishes() {
     assert.deepEqual(context.appState.modelReviewData.recommendations, [recommendation]);
 }
 
+async function testPersistedRecommendationsPaintBeforeNetworkRefresh() {
+    const storageKey = 'wayper.model-review.recommendations.v1';
+    const contextKey = JSON.stringify({ purities: ['sfw'], orient: 'landscape' });
+    const persisted = { path: 'sfw/landscape/persisted.jpg', rank: 1 };
+    const fresh = { path: 'sfw/landscape/fresh.jpg', rank: 1 };
+    const values = new Map([
+        [storageKey, JSON.stringify([
+            [contextKey, {
+                data: { status: 'ready', items: [persisted] },
+                loadedAt: Date.now() - 120_000,
+            }],
+        ])],
+    ]);
+    const renderedRecommendations = [];
+    const context = {
+        appState: {
+            mode: 'model-review',
+            purity: ['sfw'],
+            currentOrient: 'landscape',
+            imageRequestId: 5,
+            preferenceSuggestionRequestId: 0,
+            config: { wallhaven: { filter_strategy: 'model' } },
+            modelReviewRecommendationCache: new Map(),
+            modelReviewRecommendationRequests: new Map(),
+        },
+        localStorage: {
+            getItem: key => values.get(key) || null,
+            setItem: (key, value) => values.set(key, value),
+        },
+        console,
+        isModelReviewMode: () => true,
+        renderModelReviewView: () => {
+            renderedRecommendations.push(
+                (context.appState.modelReviewData?.recommendations || []).map(item => item.path),
+            );
+        },
+        WayperApi: {
+            modelReview: async () => ({ status: 'ready', items: [], pending_count: 0 }),
+            preferenceSuggestions: async () => ({ status: 'ready', items: [fresh] }),
+        },
+    };
+    context.window = context;
+    const renderer = loadRendererScript('renderer-data.js', context, ['fetchModelReview']);
+
+    const pending = renderer.fetchModelReview({ requestId: 5 });
+    assert.equal(
+        renderedRecommendations[0]?.join(','),
+        persisted.path,
+        'the previous recommendation should paint synchronously',
+    );
+    assert.equal(await pending, true);
+    assert.equal(context.appState.modelReviewData.recommendations[0]?.path, fresh.path);
+    assert.match(values.get(storageKey), /fresh\.jpg/);
+}
+
 async function testLateModelReviewResponseCannotRemountDeckAfterLeaving() {
     let resolveHeld;
     let resolveRecommendations;
@@ -1856,6 +1967,7 @@ async function testBlocklistMonitorSwitchKeepsSharedViewMounted() {
     testClearHeldControlIsContextualToHeldLane();
     await testAutomaticHoldsStayVisibleWhenAutomaticFilteringIsOff();
     await testHeldCardsRenderBeforeRecommendationRankingFinishes();
+    await testPersistedRecommendationsPaintBeforeNetworkRefresh();
     await testLateModelReviewResponseCannotRemountDeckAfterLeaving();
     await testModelReviewContextIsRestoredFromCache();
     await testBlocklistMonitorSwitchKeepsSharedViewMounted();
@@ -1869,6 +1981,7 @@ async function testBlocklistMonitorSwitchKeepsSharedViewMounted() {
     testReviewZeroStateDistinguishesCompletionLearningAndFailure();
     testResolvedCardCollapsesBeforeRemovalWithoutSecondScroll();
     testReviewLightboxArrowNeighbors();
+    testReviewLightboxUsesDedicatedReviewLane();
     testInboxDecisionUpdatesDedicatedQueueState();
     testRecommendationDecisionDoesNotChangeHeldOrLibraryCounts();
     testResolvingLastHoldMovesToRecommendationLane();

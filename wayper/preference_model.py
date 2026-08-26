@@ -9,6 +9,7 @@ import os
 import secrets
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -190,6 +191,13 @@ _FEEDBACK_ACTIONS = frozenset({"ban", "dislike", "unban", "favorite", "unfavorit
 
 log = logging.getLogger("wayper.preference_model")
 
+_PREFERENCE_MODEL_CACHE_LIMIT = 8
+_preference_model_cache_lock = threading.RLock()
+_preference_model_cache: dict[
+    Path,
+    tuple[tuple[int, int, int], PreferenceModel | None],
+] = {}
+
 
 def preference_model_path(config: WayperConfig) -> Path:
     """Return the local, per-download-directory model path."""
@@ -294,14 +302,47 @@ def save_preference_model(model: PreferenceModel, path: Path) -> None:
         _write_preference_model_unlocked(model, path)
 
 
-def load_preference_model(path: Path) -> PreferenceModel | None:
-    """Load a model if present; malformed or obsolete files are ignored."""
-    if not path.exists():
-        return None
+def _preference_model_file_version(path: Path) -> tuple[int, int, int] | None:
     try:
-        return PreferenceModel.from_dict(json.loads(path.read_text()))
-    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        stat = path.stat()
+    except OSError:
         return None
+    return stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0)
+
+
+def load_preference_model(path: Path) -> PreferenceModel | None:
+    """Load and reuse an unchanged model; malformed or obsolete files are ignored.
+
+    Preference models can be several megabytes because they retain semantic
+    neighbour prototypes. The GUI asks for queue status and recommendations in
+    parallel, so parsing the same immutable file for every call creates visible
+    Review latency and unnecessary allocation churn. The stat token keeps the
+    cache coherent with atomic retraining writes, including writes from another
+    process.
+    """
+    cache_key = path.resolve(strict=False)
+    with _preference_model_cache_lock:
+        for _attempt in range(2):
+            version = _preference_model_file_version(path)
+            if version is None:
+                _preference_model_cache.pop(cache_key, None)
+                return None
+            cached = _preference_model_cache.get(cache_key)
+            if cached is not None and cached[0] == version:
+                return cached[1]
+            try:
+                model = PreferenceModel.from_dict(json.loads(path.read_text()))
+            except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+                model = None
+            # Atomic replacement can occur between stat() and read_text(). Retry
+            # once rather than caching content under the wrong file revision.
+            if _preference_model_file_version(path) != version:
+                continue
+            _preference_model_cache[cache_key] = (version, model)
+            while len(_preference_model_cache) > _PREFERENCE_MODEL_CACHE_LIMIT:
+                _preference_model_cache.pop(next(iter(_preference_model_cache)))
+            return model
+    return None
 
 
 def load_preference_feedback(config: WayperConfig) -> dict[str, object]:
@@ -1203,6 +1244,8 @@ def preference_deletion_suggestions(
     purities: Iterable[str] | None = None,
     orientation: str | None = None,
     limit: int = DEFAULT_REVIEW_LIMIT,
+    include_learning: bool = True,
+    metadata_snapshot: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Return ranked pool images for human review only.
 
@@ -1215,11 +1258,13 @@ def preference_deletion_suggestions(
 
     model_path = preference_model_path(config)
     model = load_preference_model(model_path)
-    snapshot = collect_preference_training_snapshot(
-        config,
-        allow_legacy_bootstrap=model is None,
-    )
-    learning = preference_learning_status(config, model, snapshot)
+    learning: dict[str, object] | None = None
+    if include_learning:
+        snapshot = collect_preference_training_snapshot(
+            config,
+            allow_legacy_bootstrap=model is None,
+        )
+        learning = preference_learning_status(config, model, snapshot)
     if model is None:
         return {
             "status": "untrained",
@@ -1259,7 +1304,7 @@ def preference_deletion_suggestions(
             "portrait",
         )
     )
-    metadata = load_metadata(config)
+    metadata = metadata_snapshot if metadata_snapshot is not None else load_metadata(config)
     blacklisted = {filename for _, filename in list_blacklist(config)}
     favorites = {
         image.name
