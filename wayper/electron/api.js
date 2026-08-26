@@ -85,6 +85,18 @@
         });
     }
 
+    function clearModelReview(purities = [], orientation = '') {
+        const activePurities = Array.isArray(purities) ? purities : [purities];
+        return request('/api/model-review/clear', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                purities: activePurities.map(String).filter(Boolean),
+                orientation: orientation || null,
+            }),
+        });
+    }
+
     function updateCheck(force = false) {
         const query = force ? '?force=true' : '';
         return request(`/api/update-check${query}`);
@@ -102,6 +114,7 @@
         preferenceFeedback,
         modelReview,
         modelReviewAction,
+        clearModelReview,
         updateCheck,
     };
 })();

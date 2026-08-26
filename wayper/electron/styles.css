@@ -374,6 +374,10 @@ body[data-view='settings'] .header-content {
   justify-content: flex-start;
 }
 
+body[data-mode='model-review'][data-view='grid'] .header-content {
+  justify-content: space-between;
+}
+
 body[data-mode='model-review'][data-view='grid'] .header-content::before,
 body[data-view='settings'] .header-content::before {
   display: block;
@@ -400,6 +404,53 @@ body[data-mode='model-review'][data-view='grid'] .header-content > .controls,
 body[data-view='settings'] .header-content > .search-wrapper,
 body[data-view='settings'] .header-content > .controls {
   display: none;
+}
+
+.model-review-header-action {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 4px 8px;
+  color: var(--subtext0);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+
+.model-review-header-action[hidden] {
+  display: none;
+}
+
+.model-review-header-action svg {
+  width: 15px;
+  height: 15px;
+  color: var(--overlay1);
+}
+
+.model-review-header-action:hover:not(:disabled) {
+  color: var(--text);
+  background: rgb(205 214 244 / 6%);
+  border-color: var(--border-subtle);
+}
+
+.model-review-header-action:hover:not(:disabled) svg {
+  color: var(--peach);
+}
+
+.model-review-header-action:disabled {
+  cursor: default;
+  opacity: 0.46;
+}
+
+@media (max-width: 560px) {
+  .model-review-header-action .model-review-clear-label {
+    display: none;
+  }
 }
 
 /* ---------- Layout ---------- */
@@ -3707,6 +3758,15 @@ footer {
   backdrop-filter: blur(20px) saturate(1.25);
   -webkit-backdrop-filter: blur(20px) saturate(1.25);
   transform: translateX(-50%);
+}
+
+.model-review-grid .model-review-deck.is-clearing .model-review-carousel,
+.model-review-grid .model-review-deck.is-clearing .model-review-deck-nav {
+  pointer-events: none;
+}
+
+.model-review-grid .model-review-deck.is-clearing .model-review-carousel {
+  opacity: 0.72;
 }
 
 .model-review-grid .model-review-source-btn {

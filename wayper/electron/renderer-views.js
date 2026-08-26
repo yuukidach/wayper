@@ -1955,6 +1955,7 @@ function createModelReviewCarousel(items, source) {
 
 function syncModelReviewSourceControl(deck, data = appState.modelReviewData) {
     const active = activeModelReviewSource(data);
+    const clearing = appState.modelReviewClearInFlight === true;
     for (const button of deck?.querySelectorAll?.('.model-review-source-btn') || []) {
         const source = button.dataset.source;
         const count = modelReviewSourceCount(source, data);
@@ -1962,9 +1963,23 @@ function syncModelReviewSourceControl(deck, data = appState.modelReviewData) {
         button.classList.toggle('active', selected);
         button.setAttribute('aria-selected', String(selected));
         button.tabIndex = selected ? 0 : -1;
-        button.disabled = modelReviewSourceItems(source, data).length === 0;
+        button.disabled = clearing || modelReviewSourceItems(source, data).length === 0;
         const countElement = button.querySelector('.model-review-source-count');
         if (countElement) countElement.textContent = String(count);
+    }
+    const clearButton = typeof els !== 'undefined' ? els.modelReviewClearAll : null;
+    if (clearButton) {
+        const heldCount = modelReviewSourceCount('held', data);
+        const visible = active === 'held' && heldCount > 0;
+        clearButton.hidden = !visible;
+        clearButton.disabled = clearing || !visible;
+        clearButton.classList.toggle('is-busy', clearing);
+        clearButton.setAttribute('aria-busy', String(clearing));
+        const label = clearButton.querySelector('.model-review-clear-label');
+        const labelText = clearing ? 'Clearing…' : 'Clear auto-held';
+        if (label) {
+            label.textContent = typeof wayperT === 'function' ? wayperT(labelText) : labelText;
+        }
     }
 }
 
@@ -2007,6 +2022,63 @@ function createModelReviewSourceControl(data) {
         control.appendChild(button);
     });
     return control;
+}
+
+async function clearHeldModelReviewItems() {
+    if (appState.modelReviewClearInFlight === true || modelReviewSourceCount('held') === 0) {
+        return false;
+    }
+    appState.modelReviewClearInFlight = true;
+    const deck = els.wallpaperGrid?.querySelector('.model-review-deck');
+    deck?.classList?.add('is-clearing');
+    deck?.setAttribute?.('aria-busy', 'true');
+    syncModelReviewSourceControl(deck);
+    try {
+        const result = await WayperApi.clearModelReview(
+            [...appState.purity],
+            appState.currentOrient,
+        );
+        const clearedPaths = new Set(
+            Array.isArray(result?.cleared_paths) ? result.cleared_paths : [],
+        );
+        if (!(appState.modelReviewResolvedPaths instanceof Set)) {
+            appState.modelReviewResolvedPaths = new Set();
+        }
+        clearedPaths.forEach(path => appState.modelReviewResolvedPaths.add(path));
+        if (appState.modelReviewData) {
+            appState.modelReviewData = {
+                ...appState.modelReviewData,
+                items: modelReviewHeldItems().filter(item => !clearedPaths.has(item.path)),
+                pending_count: Math.max(0, Number(result?.remaining_count || 0)),
+            };
+        }
+        const clearedCount = Math.max(0, Number(result?.cleared_count || 0));
+        if (!appState.status || typeof appState.status !== 'object') appState.status = {};
+        appState.status.model_review_count = Math.max(
+            0,
+            Number(appState.status.model_review_count || 0) - clearedCount,
+        );
+        appState.status.blocklist_count = Number(appState.status.blocklist_count || 0)
+            + clearedCount;
+        if (typeof updateStatusUI === 'function') updateStatusUI();
+        reconcileModelReviewSelection(appState.modelReviewData);
+        cacheCurrentModelReviewContext();
+        if (Number(result?.failed_count || 0) > 0) {
+            const message = 'Some held wallpapers could not be cleared. The remaining cards are unchanged.';
+            alert(typeof wayperT === 'function' ? wayperT(message) : message);
+        }
+        return clearedCount > 0;
+    } catch (error) {
+        console.error('Failed to clear held model review items:', error);
+        const message = typeof wayperT === 'function'
+            ? wayperT('Could not clear the held queue: {error}', { error: error.message })
+            : 'Could not clear the held queue: ' + error.message;
+        alert(message);
+        return false;
+    } finally {
+        appState.modelReviewClearInFlight = false;
+        renderModelReviewView();
+    }
 }
 
 function replaceModelReviewCarousel(deck, source, { focus = false } = {}) {
@@ -2331,6 +2403,7 @@ function removeResolvedModelReviewCard(path, action, { immediate = false } = {})
 
 async function resolveModelReviewDecision(item, action) {
     if (!item?.path || !['keep', 'ban'].includes(action)) return false;
+    if (appState.modelReviewClearInFlight === true) return false;
     if (!(appState.modelReviewActionInFlight instanceof Set)) {
         appState.modelReviewActionInFlight = new Set();
     }

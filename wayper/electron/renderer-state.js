@@ -82,6 +82,7 @@ let appState = {
     modelReviewSelectedPath: null,  // Item currently inspected in the review workspace
     modelReviewSource: null,        // Visible review lane: held or recommended
     modelReviewActionInFlight: new Set(), // Paths being resolved from the workspace
+    modelReviewClearInFlight: false, // Bulk neutral filtering of the held queue
     modelReviewStrategySaving: false, // Prevent concurrent strategy toggles
     modelReviewResolvedPaths: new Set(), // Decisions made during the current queue view
     preferenceSuggestionRequestId: 0, // Invalidates stale model-review responses
@@ -205,6 +206,7 @@ const els = {
     btnAutoRotation: document.getElementById('btn-auto-rotation'),
     btnSettings: document.getElementById('btn-settings'),
     updateIndicator: document.getElementById('update-indicator'),
+    modelReviewClearAll: document.getElementById('model-review-clear-all'),
 
     monitorsList: document.getElementById('monitors-list'),
 
@@ -305,6 +307,9 @@ function setupEventListeners() {
     els.btnFavorites.onclick = () => setViewMode('favorites');
     els.btnBlocklist.onclick = () => setViewMode('trash');
     if (els.btnModelReview) els.btnModelReview.onclick = () => setViewMode('model-review');
+    if (els.modelReviewClearAll) {
+        els.modelReviewClearAll.onclick = () => clearHeldModelReviewItems();
+    }
 
     // The filtering strategy is a first-class workflow control rather than a
     // buried setting.  It is persisted immediately so the sidebar always

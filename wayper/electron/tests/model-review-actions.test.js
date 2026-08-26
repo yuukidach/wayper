@@ -1503,6 +1503,164 @@ async function testAutomaticHoldsStayVisibleWhenAutomaticFilteringIsOff() {
     assert.equal(requests.length, 2);
 }
 
+async function testClearHeldFiltersQueueWithoutReviewDecisions() {
+    const classes = new Set();
+    const classList = {
+        add: (...names) => names.forEach(name => classes.add(name)),
+        remove: (...names) => names.forEach(name => classes.delete(name)),
+        contains: name => classes.has(name),
+        toggle: (name, force) => {
+            if (force === false) classes.delete(name);
+            else classes.add(name);
+        },
+    };
+    const heldA = {
+        path: '.model-review/sfw/landscape/a.jpg',
+        name: 'a.jpg',
+        auto_filtered: true,
+    };
+    const heldB = {
+        path: '.model-review/sfw/landscape/b.jpg',
+        name: 'b.jpg',
+        auto_filtered: true,
+    };
+    const recommendation = {
+        path: 'sfw/landscape/recommended.jpg',
+        name: 'recommended.jpg',
+    };
+    const requests = [];
+    let renders = 0;
+    let statusUpdates = 0;
+    const deck = {
+        classList,
+        setAttribute: () => {},
+        querySelectorAll: () => [],
+        querySelector: () => null,
+    };
+    const context = {
+        appState: {
+            mode: 'model-review',
+            purity: ['sfw'],
+            currentOrient: 'landscape',
+            modelReviewData: {
+                items: [heldA, heldB],
+                recommendations: [recommendation],
+                pending_count: 2,
+                recommendation_count: 1,
+            },
+            modelReviewSource: 'held',
+            modelReviewSelectedPath: heldA.path,
+            modelReviewResolvedPaths: new Set(),
+            modelReviewClearInFlight: false,
+            status: {
+                model_review_count: 2,
+                blocklist_count: 4,
+                pool_count: 10,
+            },
+        },
+        alert: message => { throw new Error(`unexpected alert: ${message}`); },
+        CSS: { escape: value => value },
+        console,
+        els: {
+            wallpaperGrid: {
+                querySelector: selector => selector === '.model-review-deck' ? deck : null,
+            },
+        },
+        WayperApi: {
+            clearModelReview: async (...args) => {
+                requests.push(args);
+                return {
+                    status: 'ok',
+                    cleared_count: 2,
+                    cleared_paths: [heldA.path, heldB.path],
+                    failed_count: 0,
+                    remaining_count: 0,
+                };
+            },
+        },
+        cacheCurrentModelReviewContext: () => {},
+        reconcileModelReviewSelection: data => {
+            context.appState.modelReviewSource = 'recommended';
+            context.appState.modelReviewSelectedPath = data.recommendations[0].path;
+        },
+    };
+    context.window = context;
+    const renderer = loadRendererScript(
+        'renderer-views.js',
+        context,
+        ['clearHeldModelReviewItems'],
+    );
+    context.updateStatusUI = () => { statusUpdates++; };
+    context.renderModelReviewView = () => { renders++; };
+
+    assert.equal(await renderer.clearHeldModelReviewItems(), true);
+    assert.equal(JSON.stringify(requests), JSON.stringify([[['sfw'], 'landscape']]));
+    assert.deepEqual(context.appState.modelReviewData.items, []);
+    assert.deepEqual(context.appState.modelReviewData.recommendations, [recommendation]);
+    assert.equal(context.appState.modelReviewData.pending_count, 0);
+    assert.equal(context.appState.status.model_review_count, 0);
+    assert.equal(context.appState.status.blocklist_count, 6);
+    assert.equal(context.appState.status.pool_count, 10);
+    assert.equal(context.appState.modelReviewSource, 'recommended');
+    assert.equal(context.appState.modelReviewSelectedPath, recommendation.path);
+    assert.equal(context.appState.modelReviewResolvedPaths.has(heldA.path), true);
+    assert.equal(context.appState.modelReviewResolvedPaths.has(heldB.path), true);
+    assert.equal(context.appState.modelReviewClearInFlight, false);
+    assert.equal(statusUpdates, 1);
+    assert.equal(renders, 1);
+}
+
+function testClearHeldControlIsContextualToHeldLane() {
+    const held = { path: '.model-review/sfw/landscape/held.jpg', auto_filtered: true };
+    const recommendation = { path: 'sfw/landscape/recommended.jpg' };
+    const classes = new Set();
+    const label = { textContent: '' };
+    const clear = {
+        hidden: false,
+        disabled: false,
+        classList: {
+            toggle: (name, force) => force ? classes.add(name) : classes.delete(name),
+        },
+        setAttribute: () => {},
+        querySelector: selector => selector === '.model-review-clear-label' ? label : null,
+    };
+    const deck = {
+        querySelectorAll: () => [],
+    };
+    const context = {
+        appState: {
+            modelReviewData: {
+                items: [held],
+                recommendations: [recommendation],
+                pending_count: 1,
+                recommendation_count: 1,
+            },
+            modelReviewSource: 'held',
+            modelReviewSelectedPath: held.path,
+            modelReviewResolvedPaths: new Set(),
+            modelReviewClearInFlight: false,
+        },
+        console,
+        els: { modelReviewClearAll: clear },
+    };
+    context.window = context;
+    const renderer = loadRendererScript(
+        'renderer-views.js',
+        context,
+        ['syncModelReviewSourceControl'],
+    );
+
+    renderer.syncModelReviewSourceControl(deck);
+    assert.equal(clear.hidden, false);
+    assert.equal(clear.disabled, false);
+    assert.equal(label.textContent, 'Clear auto-held');
+    context.appState.modelReviewSource = 'recommended';
+    context.appState.modelReviewSelectedPath = recommendation.path;
+    renderer.syncModelReviewSourceControl(deck);
+    assert.equal(clear.hidden, true);
+    assert.equal(clear.disabled, true);
+}
+
 async function testHeldCardsRenderBeforeRecommendationRankingFinishes() {
     const held = {
         path: '.model-review/sfw/landscape/held.jpg',
@@ -1694,6 +1852,8 @@ async function testBlocklistMonitorSwitchKeepsSharedViewMounted() {
     await testPreviewClosesBeforeBanCompletes();
     await testReviewRowsHandleKeyboardActions();
     await testInboxRoutesDecisionsByCandidateSource();
+    await testClearHeldFiltersQueueWithoutReviewDecisions();
+    testClearHeldControlIsContextualToHeldLane();
     await testAutomaticHoldsStayVisibleWhenAutomaticFilteringIsOff();
     await testHeldCardsRenderBeforeRecommendationRankingFinishes();
     await testLateModelReviewResponseCannotRemountDeckAfterLeaving();

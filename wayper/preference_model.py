@@ -241,16 +241,18 @@ def _bootstrap_historical_preference_bans(config: WayperConfig) -> int:
     those labels durable storage while later ban/unban/keep actions remain the
     source of truth and the feedback threshold stays meaningful.
     """
+    from .model_review import filtered_model_review_filenames
     from .pool import list_blacklist
 
     path = preference_historical_bans_path(config)
     with FileLock():
         historical = load_preference_historical_bans(config)
         latest_feedback = _latest_feedback_by_filename(load_preference_feedback(config)["events"])
+        neutral_filters = filtered_model_review_filenames(config)
         changed = False
         for timestamp, raw_filename in list_blacklist(config):
             filename = Path(raw_filename).name
-            if not filename or filename in latest_feedback:
+            if not filename or filename in latest_feedback or filename in neutral_filters:
                 continue
             if timestamp > historical.get(filename, 0):
                 historical[filename] = timestamp
@@ -746,6 +748,7 @@ def collect_preference_training_snapshot(
     curated feedback now always falls back to the legacy snapshot, including
     refreshes of an existing model.
     """
+    from .model_review import filtered_model_review_filenames
     from .pool import favorites_dir, list_blacklist, list_images, load_metadata, pool_dir
     from .state import ALL_PURITIES
 
@@ -765,15 +768,21 @@ def collect_preference_training_snapshot(
 
     feedback = load_preference_feedback(config)
     historical_bans = load_preference_historical_bans(config)
+    neutral_filters = filtered_model_review_filenames(config)
+    blacklist_entries = [
+        entry for entry in list_blacklist(config) if Path(entry[1]).name not in neutral_filters
+    ]
     snapshot_now = int(time.time() // 86400) * 86400
     legacy_examples = tuple(
         build_training_examples(
             metadata,
-            list_blacklist(config),
+            blacklist_entries,
             favorites,
             retained,
             historical_bans=(
-                (timestamp, filename) for filename, timestamp in historical_bans.items()
+                (timestamp, filename)
+                for filename, timestamp in historical_bans.items()
+                if filename not in neutral_filters
             ),
             feedback_events=feedback["events"],
             now=snapshot_now,

@@ -77,6 +77,13 @@ class ModelReviewActionRequest(BaseModel):
     action: str
 
 
+class ModelReviewClearRequest(BaseModel):
+    """Library slice whose automatically held queue should be filtered."""
+
+    purities: list[str] = Field(default_factory=list)
+    orientation: str | None = None
+
+
 class WallhavenConfigModel(BaseModel):
     categories: str
     top_range: str

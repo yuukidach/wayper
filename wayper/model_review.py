@@ -3,8 +3,8 @@
 The preference model is deliberately conservative at the download boundary:
 an image that clears the model's validated dislike threshold is downloaded to a
 small, per-library quarantine instead of being silently deleted or blacklisted.
-Only an explicit Keep or Ban action changes the normal library state and emits
-the feedback event used for retraining.
+Explicit Keep or Dislike actions emit preference feedback. A queue clear is a
+neutral filtering action: it blacklists the files without teaching the model.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from .util import atomic_write
 log = logging.getLogger("wayper.model_review")
 
 MODEL_REVIEW_SCHEMA_VERSION = 1
-_STATUSES = frozenset({"pending", "keep", "ban"})
+_STATUSES = frozenset({"pending", "keep", "ban", "filter"})
 
 
 def _empty_state() -> dict[str, object]:
@@ -184,6 +184,25 @@ def pending_model_review_count(
         except ValueError:
             continue
     return count
+
+
+def filtered_model_review_filenames(config: WayperConfig) -> set[str]:
+    """Return files filtered by queue clearing rather than preference feedback.
+
+    These names still belong in the download blacklist, but must not become
+    implicit dislike examples when the legacy preference snapshot is built.
+    """
+    state = load_model_review_state(config)
+    items = state.get("items", {})
+    if not isinstance(items, dict):
+        return set()
+    return {
+        str(record["name"])
+        for value in items.values()
+        if (record := _clean_record(value)) is not None
+        and record.get("status") == "filter"
+        and isinstance(record.get("name"), str)
+    }
 
 
 def list_model_review_items(
@@ -359,9 +378,9 @@ def resolve_model_review_item(
     raw_path: str,
     action: str,
 ) -> dict[str, object]:
-    """Apply an explicit Keep/Dislike decision and return the resolved record."""
-    if action not in {"keep", "ban"}:
-        raise ValueError("Model review action must be keep or ban")
+    """Resolve one held item as Keep, Dislike, or neutral filtering."""
+    if action not in {"keep", "ban", "filter"}:
+        raise ValueError("Model review action must be keep, ban, or filter")
 
     with FileLock():
         image = _review_path(config, raw_path)
@@ -404,7 +423,7 @@ def resolve_model_review_item(
 
         model = dict(record.get("model")) if isinstance(record.get("model"), dict) else {}
         model["filter_strategy"] = str(record.get("strategy", "model"))
-        if action == "ban":
+        if action in {"ban", "filter"}:
             # Use the same system trash and undo contract as a normal ban, but
             # keep the original pool location in the undo log so an unban is a
             # usable correction rather than restoring into hidden quarantine.
@@ -412,16 +431,18 @@ def resolve_model_review_item(
             _trash_file(config, destination)
             with config.undo_file.open("a", encoding="utf-8") as stream:
                 stream.write(f"{destination.name} {destination_dir}\n")
-        feedback_recorded = True
-        try:
-            _record_feedback_unlocked(config, action, destination.name, model)
-        except Exception:
-            feedback_recorded = False
-            log.warning(
-                "Could not record model-review feedback for %s",
-                destination.name,
-                exc_info=True,
-            )
+        feedback_recorded = False
+        if action != "filter":
+            feedback_recorded = True
+            try:
+                _record_feedback_unlocked(config, action, destination.name, model)
+            except Exception:
+                feedback_recorded = False
+                log.warning(
+                    "Could not record model-review feedback for %s",
+                    destination.name,
+                    exc_info=True,
+                )
 
         record["status"] = action
         record["resolved_at"] = int(time.time())
@@ -435,13 +456,80 @@ def resolve_model_review_item(
             str(destination.relative_to(config.download_dir)) if action == "keep" else None
         )
 
-    try:
-        from .preference_model import schedule_preference_model_retrain
+    if action != "filter":
+        try:
+            from .preference_model import schedule_preference_model_retrain
 
-        schedule_preference_model_retrain(config)
-    except Exception:
-        log.warning("Could not schedule model refresh after %s", action, exc_info=True)
+            schedule_preference_model_retrain(config)
+        except Exception:
+            log.warning("Could not schedule model refresh after %s", action, exc_info=True)
     return result
+
+
+def clear_model_review_items(
+    config: WayperConfig,
+    *,
+    purities: Iterable[str] | None = None,
+    orientation: str | None = None,
+) -> dict[str, object]:
+    """Filter every currently held item in a library slice without labeling it."""
+    pending = list_model_review_items(
+        config,
+        purities=purities,
+        orientation=orientation,
+        limit=500,
+    )
+    # The public list is intentionally capped. Read the index once more when a
+    # very large queue exists so Clear held still means the whole scoped queue.
+    if pending_model_review_count(
+        config,
+        purities=purities,
+        orientation=orientation,
+    ) > len(pending):
+        state = load_model_review_state(config)
+        items = state.get("items", {})
+        active = set(purities or ALL_PURITIES) & set(ALL_PURITIES)
+        if not active:
+            active = {"sfw"}
+        seen = {str(item["path"]) for item in pending}
+        if isinstance(items, dict):
+            for value in items.values():
+                record = _clean_record(value)
+                if record is None or record.get("status") != "pending":
+                    continue
+                raw_path = record.get("path")
+                if not isinstance(raw_path, str) or raw_path in seen:
+                    continue
+                if str(record.get("purity", "sfw")) not in active:
+                    continue
+                if orientation and record.get("orientation") != orientation:
+                    continue
+                pending.append(record)
+                seen.add(raw_path)
+
+    cleared: list[str] = []
+    failures: list[dict[str, str]] = []
+    for item in pending:
+        raw_path = str(item.get("path", ""))
+        if not raw_path:
+            continue
+        try:
+            resolve_model_review_item(config, raw_path, "filter")
+            cleared.append(raw_path)
+        except (FileExistsError, FileNotFoundError, OSError, ValueError) as exc:
+            failures.append({"path": raw_path, "error": str(exc)})
+            log.warning("Could not clear model-review item %s: %s", raw_path, exc)
+    return {
+        "cleared_count": len(cleared),
+        "cleared_paths": cleared,
+        "failed_count": len(failures),
+        "failures": failures,
+        "remaining_count": pending_model_review_count(
+            config,
+            purities=purities,
+            orientation=orientation,
+        ),
+    }
 
 
 def model_review_status(
@@ -486,6 +574,8 @@ def model_review_status(
 
 __all__ = [
     "MODEL_REVIEW_SCHEMA_VERSION",
+    "clear_model_review_items",
+    "filtered_model_review_filenames",
     "list_model_review_items",
     "load_model_review_state",
     "model_review_status",

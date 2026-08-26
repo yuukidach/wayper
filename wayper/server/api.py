@@ -52,6 +52,7 @@ from wayper.server.schemas import (
     ImageItem,
     ImagePage,
     ModelReviewActionRequest,
+    ModelReviewClearRequest,
     MonitorInfo,
     PreferenceFeedbackRequest,
     SetModeRequest,
@@ -91,6 +92,7 @@ __all__ = [
     "ImagePage",
     "MonitorInfo",
     "ModelReviewActionRequest",
+    "ModelReviewClearRequest",
     "PreferenceFeedbackRequest",
     "SetModeRequest",
     "SetWallpaperRequest",
@@ -1318,6 +1320,24 @@ def model_review_action_route(req: ModelReviewActionRequest):
 def model_review_feedback_route(req: ModelReviewActionRequest):
     """Alias retained for clients that call all preference decisions feedback."""
     return _resolve_model_review_action(req)
+
+
+@app.post("/api/model-review/clear")
+def model_review_clear_route(req: ModelReviewClearRequest):
+    """Blacklist all held items in scope without recording preference labels."""
+    from wayper.model_review import clear_model_review_items
+
+    purities = set(req.purities) & set(ALL_PURITIES)
+    if req.purities and not purities:
+        raise HTTPException(400, "Model review clear needs a valid purity")
+    if req.orientation not in {None, "", "landscape", "portrait"}:
+        raise HTTPException(400, "Model review clear has an invalid orientation")
+    result = clear_model_review_items(
+        get_config(),
+        purities=sorted(purities) if purities else None,
+        orientation=req.orientation or None,
+    )
+    return {"status": "ok", **result}
 
 
 @app.post("/api/rotation/{action}")

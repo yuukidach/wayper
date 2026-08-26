@@ -17,6 +17,7 @@ from wayper.pool import hydrate_tag_details, load_metadata, save_metadata
 from wayper.server.api import (
     ActionRequest,
     ModelReviewActionRequest,
+    ModelReviewClearRequest,
     PreferenceFeedbackRequest,
     UnblockRequest,
     app,
@@ -25,6 +26,7 @@ from wayper.server.api import (
     get_config_route,
     get_status,
     model_review_action_route,
+    model_review_clear_route,
     model_review_route,
     preference_suggestion_feedback,
     preference_suggestions,
@@ -741,6 +743,85 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual(response["review"]["new_path"], "sfw/landscape/candidate.jpg")
         self.assertEqual(feedback["events"][0]["action"], "keep")
         self.assertEqual(feedback["events"][0]["source"], "model_filter")
+
+    def test_clear_model_review_filters_scope_without_preference_labels(self) -> None:
+        from wayper.model_review import (
+            filtered_model_review_filenames,
+            load_model_review_state,
+            pending_model_review_count,
+            queue_model_review_item,
+        )
+        from wayper.pool import list_blacklist, save_metadata_batch
+        from wayper.preference_model import (
+            _bootstrap_historical_preference_bans,
+            collect_preference_training_snapshot,
+            load_preference_feedback,
+            load_preference_historical_bans,
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            paths = []
+            for orientation, name in (
+                ("landscape", "first.jpg"),
+                ("landscape", "second.jpg"),
+                ("portrait", "portrait.jpg"),
+            ):
+                image = config.model_review_dir / "sfw" / orientation / name
+                image.parent.mkdir(parents=True, exist_ok=True)
+                image.touch()
+                paths.append(image)
+                queue_model_review_item(
+                    config,
+                    image,
+                    purity="sfw",
+                    orientation=orientation,
+                    prediction={"probability": 0.99},
+                    strategy="model",
+                )
+            save_metadata_batch(
+                config,
+                {image.name: {"tags": [image.stem], "downloaded_at": 100} for image in paths},
+            )
+
+            def fake_trash(_config: WayperConfig, image: Path) -> None:
+                image.unlink()
+
+            with (
+                patch("wayper.server.api.get_config", return_value=config),
+                patch("wayper.model_review._trash_file", side_effect=fake_trash) as trash,
+                patch("wayper.preference_model.schedule_preference_model_retrain") as retrain,
+            ):
+                response = model_review_clear_route(
+                    ModelReviewClearRequest(purities=["sfw"], orientation="landscape")
+                )
+
+            state = load_model_review_state(config)
+            records = state["items"]
+            feedback = load_preference_feedback(config)
+            _bootstrap_historical_preference_bans(config)
+            historical_bans = load_preference_historical_bans(config)
+            snapshot = collect_preference_training_snapshot(config)
+            blacklist = {filename for _, filename in list_blacklist(config)}
+            neutral_filters = filtered_model_review_filenames(config)
+            pending_count = pending_model_review_count(config)
+
+        self.assertEqual(response["cleared_count"], 2)
+        self.assertEqual(response["failed_count"], 0)
+        self.assertEqual(response["remaining_count"], 0)
+        self.assertEqual(trash.call_count, 2)
+        retrain.assert_not_called()
+        self.assertEqual(feedback["revision"], 0)
+        self.assertEqual(historical_bans, {})
+        self.assertEqual(blacklist, {"first.jpg", "second.jpg"})
+        self.assertEqual(neutral_filters, {"first.jpg", "second.jpg"})
+        self.assertEqual(
+            {record["status"] for record in records.values()},
+            {"filter", "pending"},
+        )
+        self.assertEqual(pending_count, 1)
+        self.assertNotIn("first.jpg", {example.filename for example in snapshot.examples})
+        self.assertNotIn("second.jpg", {example.filename for example in snapshot.examples})
 
     def test_model_review_queue_keeps_same_named_files_and_scopes_counts(self) -> None:
         from wayper.model_review import (

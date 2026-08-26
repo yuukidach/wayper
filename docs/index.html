@@ -175,7 +175,20 @@ kbd {
 
 /* ── GUI section ── */
 .gui-screenshot {
-  margin-bottom: 20px; text-align: center;
+  margin: 0 0 20px; text-align: center;
+}
+.gui-screenshot-separated {
+  margin-top: 32px;
+}
+.gui-screenshot-separated::before {
+  content: ""; display: block; width: 100%; max-width: 740px; height: 1px;
+  margin: 0 auto 28px;
+  background: linear-gradient(90deg, transparent, var(--surface1) 12%, var(--surface1) 88%, transparent);
+}
+.gui-screenshot-label {
+  display: block; width: 100%; max-width: 740px; margin: 0 auto 10px;
+  text-align: left; color: var(--overlay); font-family: 'JetBrains Mono', monospace;
+  font-size: .74em; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
 }
 .gui-screenshot img {
   width: 100%; max-width: 740px; border-radius: 12px;
@@ -379,39 +392,27 @@ wayper status               # show current state
 wayper-gui                  # GUI app + tray background rotation
 wayper setup                # install .desktop entry (Linux)
 wayper --json status        # machine-readable output</code></pre>
-  <p><code>wayper model train</code> learns from local Wallhaven metadata only: normalized tags and
-  compact color/category/purity context. It never opens image files or reads pixels. FastEmbed is bundled;
-  the <code>BAAI/bge-small-en-v1.5</code> tag model is downloaded and cached on first use. Every explicit Keep/Dislike remains
-  available to KNN retrieval: an IDF-weighted pooled matrix performs coarse retrieval, then only the top
-  candidates are reranked with exact overlap, per-tag MaxSim, compact context, and balanced evidence. The
-  global sparse+dense head fits at most 2,048 balanced recent examples without truncating KNN memory. The
-  final decision combines an 80% local vote with 20% global preference probability and applies one boundary
-  calibrated on at most 640 held-out decisions for at least 80% precision. Embeddings are metadata-only and
-  cached locally. New downloads retain complete
-  Wallhaven tag objects; <code>wayper metadata backfill</code> repairs older relevant records resumably.</p>
-  <p>Before explicit feedback is balanced, older blacklist/favorite data may bootstrap the model.
-  Favorites are explicit <strong>Keep</strong> labels, including favorites synchronized from Wallhaven. Once
-  both explicit Keep and Dislike classes reach the training minimum, only those deliberate labels are used;
-  <strong>Ban</strong> remains an exact-image block. Images merely sitting in the pool are background examples.
-  Filtering stays off until both explicit classes and held-out calibration are available. The model
-  then filters likely blocks into a recoverable queue and ranks suggestions. It never changes the blacklist
-  automatically and refreshes locally after enough feedback.</p>
-  <p>Open the dedicated <strong>Review</strong> view to teach the model. Choose <code>Rules</code>,
-  <code>Model</code>, or <code>Both</code> for new downloads. <strong>Auto-held</strong> contains downloads set
-  aside by the model; <strong>Recommended</strong> contains possible blocks already in the pool. Auto-held appears
-  first. Drag, scroll, or use the arrows to move through cards; <code>Enter</code>/<code>Space</code> opens a preview,
-  <code>A</code> keeps, and <code>D</code> dislikes. Keeping an Auto-held file releases it into the pool; keeping
-  a recommendation records feedback without moving the file. In Settings, the language can follow the system
-  or be set to English/Simplified Chinese; download batch size is configured under General.</p>
+  <p><code>wayper model train</code> learns from local Wallhaven metadata—not image pixels—to personalize
+  filtering. <strong>Keep</strong> and <strong>Dislike</strong> feedback trains the model locally, while
+  <strong>Ban</strong> only blocks exact images. Use <strong>Review</strong> to check auto-held downloads and model
+  recommendations; metadata and embeddings remain on your device.</p>
 </section>
 
 <section id="browse">
   <h2>GUI</h2>
   <p class="gui-screenshot">
+    <span class="gui-screenshot-label">Browse</span>
     <img src="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png" alt="browse window" loading="lazy">
   </p>
   <p class="gui-desc">
-    <code>wayper-gui</code> — browse your pool, favorites, and banned wallpapers. Closing the window keeps automatic rotation in the system tray, with quick actions, pause/resume, settings, and a full Quit action.
+    <code>wayper-gui</code> lets you browse the pool, favorites, and banned wallpapers. Closing the window keeps rotation running in the system tray.
+  </p>
+  <p class="gui-screenshot gui-screenshot-separated">
+    <span class="gui-screenshot-label">Review</span>
+    <img src="assets/review.png" alt="English Wayper Review interface showing auto-held wallpapers" loading="lazy">
+  </p>
+  <p class="gui-desc">
+    Review auto-held downloads and model recommendations. Keep or Dislike each image to refine local filtering, or clear auto-held items without teaching the model.
   </p>
   <p class="kbd-label">Grid view</p>
   <div class="kbd-grid kbd-grid-gap">
