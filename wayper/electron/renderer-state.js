@@ -760,6 +760,17 @@ function debounce(func, wait) {
 
 const debouncedRefreshImages = debounce(() => refreshImages(), 300);
 
+function cardLayoutTop(card) {
+    // offsetTop describes the grid layout position and is not changed by the
+    // hover/focus transform. getBoundingClientRect().top is: the focused first
+    // card moves up by 3px, which can make its neighbor look like a new row.
+    const offsetTop = card?.offsetTop;
+    if (Number.isFinite(offsetTop)) return offsetTop;
+
+    const rectTop = card?.getBoundingClientRect?.().top;
+    return Number.isFinite(rectTop) ? rectTop : null;
+}
+
 function updateGridMetrics() {
     const cards = document.getElementsByClassName('wallpaper-card');
     if (cards.length < 2) {
@@ -771,9 +782,10 @@ function updateGridMetrics() {
         return;
     }
 
-    const firstTop = cards[0].getBoundingClientRect().top;
+    const firstTop = cardLayoutTop(cards[0]);
     for (let i = 1; i < cards.length; i++) {
-        if (cards[i].getBoundingClientRect().top > firstTop) {
+        const top = cardLayoutTop(cards[i]);
+        if (Number.isFinite(firstTop) && Number.isFinite(top) && top > firstTop + 1) {
             appState.gridColumns = i;
             return;
         }
@@ -816,12 +828,10 @@ function gridColumnCount(
         ? document.getElementsByClassName('wallpaper-card')
         : [],
 ) {
-    const firstRect = cards[0]?.getBoundingClientRect?.();
-    const firstTop = firstRect?.top;
+    const firstTop = cardLayoutTop(cards[0]);
     if (Number.isFinite(firstTop)) {
         for (let i = 1; i < cards.length; i++) {
-            const rect = cards[i]?.getBoundingClientRect?.();
-            const top = rect?.top;
+            const top = cardLayoutTop(cards[i]);
             if (Number.isFinite(top) && top > firstTop + 1) return i;
         }
         if (cards.length > 0) return cards.length;
@@ -835,10 +845,10 @@ function gridColumnCount(
 }
 
 function galleryCardIsInFirstRow(card, index, cards, columns) {
-    const firstRect = cards[0]?.getBoundingClientRect?.();
-    const cardRect = card?.getBoundingClientRect?.();
-    if (firstRect && cardRect && Number.isFinite(firstRect.top) && Number.isFinite(cardRect.top)) {
-        return cardRect.top <= firstRect.top + 1;
+    const firstTop = cardLayoutTop(cards[0]);
+    const cardTop = cardLayoutTop(card);
+    if (Number.isFinite(firstTop) && Number.isFinite(cardTop)) {
+        return cardTop <= firstTop + 1;
     }
     return index < columns;
 }

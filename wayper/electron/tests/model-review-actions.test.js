@@ -677,15 +677,33 @@ function testGridNavigationBridgesModelReview() {
     };
     const cardA = makeFocusable('wallpaper-card');
     const cardB = makeFocusable('wallpaper-card');
+    const cardC = makeFocusable('wallpaper-card');
+    const cardD = makeFocusable('wallpaper-card');
     const reviewA = makeFocusable('model-review-row');
     const reviewB = makeFocusable('model-review-row');
-    cards.push(cardA, cardB);
+    Object.assign(cardA, {
+        offsetTop: 20,
+        getBoundingClientRect: () => ({ top: 17 }),
+    });
+    Object.assign(cardB, {
+        offsetTop: 20,
+        getBoundingClientRect: () => ({ top: 20 }),
+    });
+    Object.assign(cardC, {
+        offsetTop: 200,
+        getBoundingClientRect: () => ({ top: 200 }),
+    });
+    Object.assign(cardD, {
+        offsetTop: 200,
+        getBoundingClientRect: () => ({ top: 200 }),
+    });
+    cards.push(cardA, cardB, cardC, cardD);
     rows.push(reviewA, reviewB);
 
     const renderer = loadRendererScript(
         'renderer-state.js',
         context,
-        ['navigateGrid', 'handleGlobalKeydown', 'appState'],
+        ['navigateGrid', 'handleGlobalKeydown', 'updateGridMetrics', 'appState'],
     );
     renderer.navigateGrid('ArrowDown');
     assert.equal(context.document.activeElement, reviewA);
@@ -703,6 +721,14 @@ function testGridNavigationBridgesModelReview() {
     context.document.activeElement = cardA;
     renderer.navigateGrid('ArrowRight');
     assert.equal(context.document.activeElement, cardB);
+
+    // Focus lifts the first card by 3px in CSS. Visual bounds therefore make
+    // card B appear lower, but layout coordinates still identify two columns.
+    renderer.updateGridMetrics();
+    assert.equal(renderer.appState.gridColumns, 2);
+    context.document.activeElement = cardA;
+    renderer.navigateGrid('ArrowDown');
+    assert.equal(context.document.activeElement, cardC);
 
     const keyEvent = key => ({
         key,
