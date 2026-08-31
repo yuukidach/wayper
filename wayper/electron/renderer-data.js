@@ -944,69 +944,104 @@ async function applyExclusionUpdate({ type, tags, action = 'add', refreshSuggest
     if (render) renderBlocklistView();
 }
 
-async function applySearchResults(query, matches) {
-    const requestId = ++appState.searchRequestId;
+async function applySearchResults(query, matches, { render = true, requestId = null } = {}) {
+    const activeRequestId = requestId ?? ++appState.searchRequestId;
+    if (activeRequestId !== appState.searchRequestId) return false;
     appState.searchQuery = query;
     appState.searchMatches = new Set(matches || []);
     els.searchInput.value = query;
     els.searchClear.classList.remove('hidden');
     document.querySelector('.search-kbd')?.classList.add('hidden');
     els.searchDropdown.classList.add('hidden');
-    await applySearchFilter(false, requestId);
-    if (requestId !== appState.searchRequestId) return;
+    const applied = render
+        ? await applySearchFilter(false, activeRequestId)
+        : await updateFilteredImages(activeRequestId);
+    if (!applied || activeRequestId !== appState.searchRequestId) return false;
+    if (!render) els.mainContent.scrollTop = 0;
     updateSearchCount();
+    return true;
 }
 
-async function searchByTags(tagList) {
-    // Use exact tag intersection search instead of text search
-    const res = await fetch(`${API_URL}/api/search?tags=${encodeURIComponent(tagList.join(','))}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    console.log('[searchByTags]', tagList, '→', data.matches?.length, 'matches, allImages:', appState.allImages.length);
-    await applySearchResults(tagList.join(' + '), data.matches);
+async function fetchTagSearchMatches(tagList) {
+    try {
+        const data = await WayperApi.searchImages({ tags: tagList });
+        console.log(
+            '[searchByTags]', tagList, '→', data.matches?.length,
+            'matches, allImages:', appState.allImages.length,
+        );
+        return data.matches || [];
+    } catch (e) {
+        console.error('Tag search failed:', e);
+        return null;
+    }
 }
 
-async function searchByUploader(name) {
-    const res = await fetch(`${API_URL}/api/search?uploader=${encodeURIComponent(name)}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    console.log('[searchByUploader]', name, '→', data.matches?.length, 'matches');
-    await applySearchResults(name, data.matches);
+async function searchByUploader(name, { render = true, requestId = null } = {}) {
+    const activeRequestId = requestId ?? ++appState.searchRequestId;
+    try {
+        const data = await WayperApi.searchImages({ uploader: name });
+        if (activeRequestId !== appState.searchRequestId) return false;
+        console.log('[searchByUploader]', name, '→', data.matches?.length, 'matches');
+        return applySearchResults(name, data.matches, { render, requestId: activeRequestId });
+    } catch (e) {
+        console.error('Uploader search failed:', e);
+        return false;
+    }
+}
+
+let comboNavigationRequestId = null;
+
+function comboNavigationPending() {
+    return comboNavigationRequestId !== null;
 }
 
 async function exitComboLevel() {
     els.searchInput.blur();
-    if (appState.comboContext.length > 1) {
-        // Pop one level — if going back to single tag, use text search for consistency
-        appState.comboContext.pop();
-        const ctx = appState.comboContext;
-        // Restore reviewingTag to match the parent level
-        if (ctx.length === 1) {
-            const original = appState.tagSuggestions?.find(s => s.tag === ctx[0]);
-            if (original) appState.reviewingTag = original;
-        }
-        navigateCombo(ctx).then(() => els.searchDropdown.classList.add('hidden'));
+    const contextTags = appState.tagReview?.tags || [];
+    if (contextTags.length > 1) {
+        await navigateCombo(contextTags.slice(0, -1));
+        els.searchDropdown.classList.add('hidden');
     } else {
-        appState.reviewingTag = null;
-        appState.comboContext = [];
-        appState.comboRefinements = [];
         await clearSearch();
     }
 }
 
 async function navigateCombo(ctx) {
-    await Promise.all([searchByTags(ctx), fetchComboRefinements(ctx)]);
-    appState.reviewingTag = { ...appState.reviewingTag, count: appState.images.length };
-    renderBlocklistView();
+    const contextTags = [...ctx];
+    if (contextTags.length === 0) {
+        await clearSearch();
+        return true;
+    }
+    const requestId = ++appState.searchRequestId;
+    comboNavigationRequestId = requestId;
+    try {
+        const [matches, refinements] = await Promise.all([
+            fetchTagSearchMatches(contextTags),
+            fetchComboRefinements(contextTags),
+        ]);
+        if (matches === null || requestId !== appState.searchRequestId) return false;
+        const searchApplied = await applySearchResults(
+            contextTags.join(' + '),
+            matches,
+            { render: false, requestId },
+        );
+        if (!searchApplied || requestId !== appState.searchRequestId) return false;
+        appState.tagReview = { tags: contextTags, refinements };
+        appState.reviewingUploader = null;
+        renderBlocklistView();
+        return true;
+    } finally {
+        if (comboNavigationRequestId === requestId) comboNavigationRequestId = null;
+    }
 }
 
 async function fetchComboRefinements(contextTags) {
     try {
         const data = await WayperApi.tagSuggestions(contextTags);
-        appState.comboRefinements = data.suggestions || [];
+        return data.suggestions || [];
     } catch (e) {
         console.error('Failed to fetch combo refinements:', e);
-        appState.comboRefinements = [];
+        return [];
     }
 }
 
@@ -1415,17 +1450,18 @@ async function performSearch(query) {
     if (searchAbortController) searchAbortController.abort();
     searchAbortController = new AbortController();
     const requestId = ++appState.searchRequestId;
+    comboNavigationRequestId = null;
 
     appState.searchQuery = query;
     try {
-        const res = await fetch(`${API_URL}/api/search?q=${encodeURIComponent(query)}`, { signal: searchAbortController.signal });
-        if (!res.ok) {
-            console.error('[search] API error:', res.status);
-            return;
-        }
-        const data = await res.json();
+        const data = await WayperApi.searchImages({
+            query,
+            signal: searchAbortController.signal,
+        });
         console.log('[search]', query, '→', data.matches?.length, 'matches, allImages:', appState.allImages.length);
         if (requestId !== appState.searchRequestId) return;
+        appState.tagReview = null;
+        appState.reviewingUploader = null;
         appState.searchMatches = new Set(data.matches || []);
         renderSearchSuggestions(data.suggestions || [], data.uploader_suggestions || []);
         await applySearchFilter(false, requestId);
@@ -1438,15 +1474,14 @@ async function performSearch(query) {
 
 async function clearSearch() {
     appState.searchRequestId++;
+    comboNavigationRequestId = null;
     if (searchAbortController) searchAbortController.abort();
     clearTimeout(searchDebounceTimer);
     els.searchInput.value = '';
     appState.searchQuery = '';
     appState.searchMatches = null;
-    appState.reviewingTag = null;
+    appState.tagReview = null;
     appState.reviewingUploader = null;
-    appState.comboContext = [];
-    appState.comboRefinements = [];
     searchHighlightIndex = -1;
     els.searchCount.classList.add('hidden');
     els.searchClear.classList.add('hidden');
@@ -1482,10 +1517,10 @@ async function ensureAllImagesLoaded(searchRequestId) {
     return true;
 }
 
-async function applySearchFilter(preserveFocus = false, searchRequestId) {
+async function updateFilteredImages(searchRequestId) {
     if (appState.searchMatches && !appState.imagesComplete) {
         const completed = await ensureAllImagesLoaded(searchRequestId);
-        if (!completed) return;
+        if (!completed) return false;
     }
 
     if (appState.searchMatches) {
@@ -1494,11 +1529,16 @@ async function applySearchFilter(preserveFocus = false, searchRequestId) {
     } else {
         appState.images = [...appState.allImages];
     }
+    return true;
+}
+
+async function applySearchFilter(preserveFocus = false, searchRequestId) {
+    if (!await updateFilteredImages(searchRequestId)) return false;
 
     if (!preserveFocus) {
         els.mainContent.scrollTop = 0;
         renderImages();
-        return;
+        return true;
     }
 
     // --- Diff-based update: only add/remove changed cards, never touch existing ones ---
@@ -1511,7 +1551,7 @@ async function applySearchFilter(preserveFocus = false, searchRequestId) {
     // First render — nothing to diff against
     if (existingCards.size === 0) {
         renderImages();
-        return;
+        return true;
     }
 
     const newPaths = new Set(appState.images.map(img => img.path));
@@ -1575,21 +1615,22 @@ async function applySearchFilter(preserveFocus = false, searchRequestId) {
 
     if (!document.querySelector('.wallpaper-card.current')) markCurrentWallpaper();
     setTimeout(updateGridMetrics, 100);
+    return true;
 }
 
 async function enterTagReview(tags) {
     const tagList = Array.isArray(tags) ? tags : [tags];
-    appState.reviewingTag = { tag: tagList.join(' + '), count: 0 };
-    appState.comboContext = tagList;
-    await Promise.all([searchByTags(tagList), fetchComboRefinements(tagList)]);
-    appState.reviewingTag.count = appState.images.length;
-    renderBlocklistView();
+    return navigateCombo(tagList);
 }
 
 async function enterUploaderReview(name) {
+    const requestId = ++appState.searchRequestId;
+    const searchApplied = await searchByUploader(name, { render: false, requestId });
+    if (!searchApplied || requestId !== appState.searchRequestId) return false;
+    appState.tagReview = null;
     appState.reviewingUploader = name;
-    await searchByUploader(name);
     renderBlocklistView();
+    return true;
 }
 
 function selectSearchTag(tag, type) {
@@ -1641,7 +1682,6 @@ function handleSearchKeydown(e) {
     if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
-        appState.reviewingTag = null;
         clearSearch();
         els.searchInput.blur();
         return;

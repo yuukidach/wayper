@@ -342,7 +342,7 @@ function createBlocklistSuggestionsBar() {
     const hasSuggestions = tagSuggestions.length > 0 || comboSuggestions.length > 0;
     if (
         appState.searchQuery
-        || appState.reviewingTag
+        || appState.tagReview
         || appState.reviewingUploader
         || !blocklistSuggestionsAreCurrent()
         || !hasSuggestions
@@ -2775,7 +2775,7 @@ function renderBlocklistView() {
     // Auto-switch tab when search has results only in the other tab.
     // Skip during tag/uploader review (user clicked an agent suggestion to explore
     // a category — switching tabs would be jarring and unrelated to their intent).
-    if (appState.searchMatches && !appState.reviewingTag && !appState.reviewingUploader) {
+    if (appState.searchMatches && !appState.tagReview && !appState.reviewingUploader) {
         if (appState.blocklistTab === 'recoverable' && recoverableCount === 0 && blockedCount > 0) {
             appState.blocklistTab = 'blocked';
         } else if (appState.blocklistTab === 'blocked' && blockedCount === 0 && recoverableCount > 0) {
@@ -2808,10 +2808,10 @@ function renderBlocklistView() {
     els.wallpaperGrid.appendChild(tabs);
 
     // Tag suggestions / review bar
-    if (appState.reviewingTag) {
+    if (appState.tagReview) {
         // Review mode: show context bar for the tag being reviewed
-        const s = appState.reviewingTag;
-        const ctx = appState.comboContext;
+        const review = appState.tagReview;
+        const ctx = review.tags;
         const isCombo = ctx.length > 1;
         const bar = document.createElement('div');
         bar.className = 'tag-review-bar';
@@ -2826,15 +2826,7 @@ function renderBlocklistView() {
             tagEl.textContent = t;
             if (ctx.length > 1) {
                 tagEl.title = `Remove "${t}" from combo`;
-                tagEl.onclick = async () => {
-                    const newCtx = ctx.filter((_, j) => j !== i);
-                    appState.comboContext = newCtx;
-                    if (newCtx.length === 1) {
-                        const original = appState.tagSuggestions?.find(sg => sg.tag === newCtx[0]);
-                        if (original) appState.reviewingTag = original;
-                    }
-                    await navigateCombo(newCtx);
-                };
+                tagEl.onclick = () => navigateCombo(ctx.filter((_, j) => j !== i));
             } else {
                 tagEl.title = 'Exit review';
                 tagEl.onclick = () => exitComboLevel();
@@ -2843,7 +2835,7 @@ function renderBlocklistView() {
         });
         const countEl = document.createElement('span');
         countEl.className = 'review-bar-count';
-        countEl.textContent = `${s.count} banned`;
+        countEl.textContent = `${appState.images.length} banned`;
         textSpan.appendChild(countEl);
         bar.appendChild(textSpan);
         const actions = document.createElement('div');
@@ -2861,9 +2853,6 @@ function renderBlocklistView() {
                     render: false,
                     dropComboSupersets: true,
                 });
-                appState.reviewingTag = null;
-                appState.comboContext = [];
-                appState.comboRefinements = [];
                 await clearSearch();
             };
         } else {
@@ -2871,13 +2860,10 @@ function renderBlocklistView() {
             excludeBtn.onclick = async () => {
                 await applyExclusionUpdate({
                     type: 'tag',
-                    tags: [s.tag],
+                    tags: [ctx[0]],
                     refreshSuggestions: true,
                     render: false,
                 });
-                appState.reviewingTag = null;
-                appState.comboContext = [];
-                appState.comboRefinements = [];
                 await clearSearch();
             };
         }
@@ -2895,23 +2881,19 @@ function renderBlocklistView() {
         els.wallpaperGrid.appendChild(bar);
 
         // Combo refinement chips
-        if (appState.comboRefinements.length > 0) {
+        if (review.refinements.length > 0) {
             const refBar = document.createElement('div');
             refBar.className = 'tag-suggestions-bar combo-refinements';
             const label = document.createElement('span');
             label.className = 'suggestion-bar-label';
             label.textContent = 'Refine with';
             refBar.appendChild(label);
-            for (const r of appState.comboRefinements) {
+            for (const r of review.refinements) {
                 const chip = document.createElement('button');
                 chip.type = 'button';
                 chip.className = 'suggestion-chip';
                 chip.title = `Add "${r.tag}" to combo — banned / kept / favorites`;
-                chip.onclick = async () => {
-                    appState.comboContext = [...ctx, r.tag];
-                    appState.reviewingTag = r;
-                    await navigateCombo(appState.comboContext);
-                };
+                chip.onclick = () => navigateCombo([...ctx, r.tag]);
                 const tagLabel = document.createElement('span');
                 tagLabel.className = 'suggestion-chip-name';
                 tagLabel.textContent = r.tag;
@@ -2936,7 +2918,7 @@ function renderBlocklistView() {
         nameEl.className = 'breadcrumb-tag';
         nameEl.textContent = uploaderName;
         nameEl.title = 'Exit review';
-        nameEl.onclick = async () => { appState.reviewingUploader = null; await clearSearch(); };
+        nameEl.onclick = () => clearSearch();
         textSpan.appendChild(nameEl);
         const countEl = document.createElement('span');
         countEl.className = 'review-bar-count';
@@ -2961,13 +2943,12 @@ function renderBlocklistView() {
                     render: false,
                 });
             }
-            appState.reviewingUploader = null;
             await clearSearch();
         };
         const backBtn = document.createElement('button');
         backBtn.className = 'review-btn-back';
         backBtn.textContent = 'Back';
-        backBtn.onclick = async () => { appState.reviewingUploader = null; await clearSearch(); };
+        backBtn.onclick = () => clearSearch();
         actions.appendChild(excludeBtn);
         actions.appendChild(backBtn);
         bar.appendChild(actions);
@@ -2979,7 +2960,7 @@ function renderBlocklistView() {
 
     // AI analysis results panel
     if (appState.aiSuggestions && !appState.aiSuggestions.error
-        && !appState.reviewingTag && !appState.reviewingUploader && !appState.searchQuery) {
+        && !appState.tagReview && !appState.reviewingUploader && !appState.searchQuery) {
         const ai = appState.aiSuggestions;
         const aiPanel = document.createElement('div');
         aiPanel.className = 'ai-results-panel';

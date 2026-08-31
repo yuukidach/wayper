@@ -62,10 +62,8 @@ let appState = {
     comboSuggestions: null, // auto-discovered combo exclusion suggestions
     tagSuggestionsKey: null, // current purity/exclusion context for suggestions
     tagSuggestionsGeneration: 0, // invalidates stale in-flight suggestion requests
-    reviewingTag: null, // tag currently being reviewed in blocklist
+    tagReview: null, // active tag/combo drill-down: { tags, refinements }
     reviewingUploader: null, // uploader currently being reviewed in blocklist
-    comboContext: [], // drill-down context for combo exclusion [tag1, tag2, ...]
-    comboRefinements: [], // refinement suggestions for current context
     aiSuggestions: null,           // Result from /api/ai-suggestions
     aiLoading: false,              // Whether AI analysis is in progress
     aiStartTime: null,             // Timestamp when AI analysis started
@@ -431,7 +429,7 @@ function handleMouseBack(e) {
     // Mouse back button (button 3) exits tag review or search
     if (e.button !== 3) return;
     if (lightboxEl) { closeLightbox(e); return; }
-    if (appState.reviewingTag) {
+    if (appState.tagReview || comboNavigationPending()) {
         e.preventDefault();
         exitComboLevel();
         return;
@@ -643,7 +641,7 @@ function handleGlobalKeydown(e) {
 
     switch(e.key) {
         case 'Escape':
-            if (appState.reviewingTag) {
+            if (appState.tagReview || comboNavigationPending()) {
                 exitComboLevel();
             } else if (appState.searchQuery) {
                 clearSearch();

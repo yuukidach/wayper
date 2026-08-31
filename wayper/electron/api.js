@@ -31,6 +31,15 @@
         return request(`/api/tag-suggestions${query}`);
     }
 
+    function searchImages({ query = '', tags = [], uploader = '', signal = null } = {}) {
+        const params = new URLSearchParams();
+        if (query) params.set('q', query);
+        if (tags.length) params.set('tags', tags.join(','));
+        if (uploader) params.set('uploader', uploader);
+        const suffix = params.size ? `?${params}` : '';
+        return request(`/api/search${suffix}`, signal ? { signal } : {});
+    }
+
     function aiSuggestionFeedback(tags, action) {
         return request('/api/ai-suggestions/feedback', {
             method: 'POST',
@@ -106,6 +115,7 @@
         request,
         config,
         patchConfig,
+        searchImages,
         tagSuggestions,
         aiSuggestionFeedback,
         aiSuggestionStatus,
