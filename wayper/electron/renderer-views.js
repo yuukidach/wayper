@@ -3220,7 +3220,10 @@ function renderNextBatch() {
 
     const fragment = document.createDocumentFragment();
     batch.forEach((img, i) => {
-        const card = createCard(img);
+        // Give the first viewport an explicit head start. Native lazy loading
+        // remains enabled for the rest of the library, but Chromium can defer
+        // even above-the-fold images while a large grid is being mounted.
+        const card = createCard(img, { eager: start === 0 && i < 12 });
         // Stagger entrance animation for visible cards
         if (i < 20) card.style.animationDelay = `${i * 30}ms`;
         fragment.appendChild(card);
@@ -3287,7 +3290,7 @@ function imageOrientation(img) {
     return null;
 }
 
-function createCard(img) {
+function createCard(img, { eager = false } = {}) {
     const card = document.createElement('div');
     card.className = 'wallpaper-card';
     card.dataset.path = img.path;
@@ -3298,10 +3301,12 @@ function createCard(img) {
     }
 
     const thumbUrl = thumbnailUrl(img.path);
+    const imageLoading = eager ? 'eager' : 'lazy';
+    const fetchPriority = eager ? 'high' : 'auto';
 
     if (appState.mode === 'trash') {
         card.innerHTML = `
-            <img class="loading" src="${thumbUrl}" loading="lazy" decoding="async" alt="${esc(img.name)}">
+            <img class="loading" src="${thumbUrl}" loading="${imageLoading}" fetchpriority="${fetchPriority}" decoding="async" alt="${esc(img.name)}">
             <div class="overlay">
                 <button class="action-btn restore" title="Restore to Pool">${ICONS.restore()}</button>
                 <button class="action-btn url" title="Open on Wallhaven (O)" aria-keyshortcuts="O">${ICONS.externalLink()}</button>
@@ -3320,7 +3325,7 @@ function createCard(img) {
         card.onclick = () => showLightbox(img);
     } else {
         card.innerHTML = `
-            <img class="loading" src="${thumbUrl}" loading="lazy" decoding="async" alt="${esc(img.name)}">
+            <img class="loading" src="${thumbUrl}" loading="${imageLoading}" fetchpriority="${fetchPriority}" decoding="async" alt="${esc(img.name)}">
             <div class="overlay">
                 <button class="action-btn" title="Set Wallpaper (Enter)" aria-keyshortcuts="Enter">${ICONS.setWallpaper()}</button>
                 <button class="action-btn fav ${img.is_favorite ? 'active' : ''}" title="Favorite (F)" aria-keyshortcuts="F">${ICONS.favorite(16, img.is_favorite)}</button>
@@ -3347,6 +3352,15 @@ function createCard(img) {
         };
         btns[4].onclick = (e) => { e.stopPropagation(); openWallhavenUrl(img.name); };
     }
+
+    // Most preview clicks are preceded by a hover or keyboard focus. Use that
+    // short window to decode the original image before the lightbox opens; the
+    // lightbox keeps only a tiny LRU so browsing does not grow memory without bound.
+    const preparePreview = () => {
+        if (typeof preloadLightboxAssets === 'function') preloadLightboxAssets(img);
+    };
+    card.addEventListener('mouseenter', preparePreview, { once: true, passive: true });
+    card.addEventListener('focusin', preparePreview, { once: true, passive: true });
 
     return card;
 }

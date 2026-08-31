@@ -9,6 +9,11 @@ let dragState = null;
 let lightboxPreviousFocus = null;
 let lightboxPreviousReviewPath = null;
 let lightboxCloseTimer = null;
+let lightboxImageRequestId = 0;
+
+const lightboxPreviewPreloads = new Map();
+const lightboxFullImagePreloads = new Map();
+const LIGHTBOX_FULL_IMAGE_CACHE_LIMIT = 3;
 
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 8;
@@ -16,6 +21,143 @@ const ZOOM_RATE = 0.0015;
 const ZOOM_STEP_FACTOR = 1.15;
 const DRAG_THRESHOLD_PX = 5;
 const ARROW_PAN_PX = 50;
+
+function lightboxIsTrash(img) {
+    return img?.isTrash ?? appState.mode === 'trash';
+}
+
+function lightboxPreviewSource(img) {
+    if (lightboxIsTrash(img)) return imageUrl(img.path);
+    return modelReviewPreviewUrl(img.path);
+}
+
+function preloadLightboxPreview(img) {
+    if (!img?.path || lightboxIsTrash(img) || typeof Image === 'undefined') return;
+    const source = lightboxPreviewSource(img);
+    if (lightboxPreviewPreloads.has(source)) return;
+
+    const loader = new Image();
+    lightboxPreviewPreloads.set(source, loader);
+    const release = () => lightboxPreviewPreloads.delete(source);
+    loader.onload = release;
+    loader.onerror = release;
+    loader.decoding = 'async';
+    loader.src = source;
+}
+
+function preloadLightboxFullImage(img) {
+    if (!img?.path || typeof Image === 'undefined') return null;
+    const source = imageUrl(img.path);
+    const cached = lightboxFullImagePreloads.get(source);
+    if (cached) {
+        // Refresh insertion order so the map doubles as a tiny LRU cache.
+        lightboxFullImagePreloads.delete(source);
+        lightboxFullImagePreloads.set(source, cached);
+        return cached;
+    }
+
+    const loader = new Image();
+    let resolveReady;
+    const entry = {
+        decoded: false,
+        loader,
+        ready: new Promise(resolve => { resolveReady = resolve; }),
+        settled: false,
+    };
+    const settle = decoded => {
+        if (entry.settled) return;
+        entry.settled = true;
+        entry.decoded = decoded;
+        if (!decoded && lightboxFullImagePreloads.get(source) === entry) {
+            lightboxFullImagePreloads.delete(source);
+        }
+        resolveReady(decoded);
+    };
+    entry.finish = settle;
+    loader.onload = async () => {
+        try {
+            await loader.decode?.();
+        } catch {
+            settle(false);
+            return;
+        }
+        settle(lightboxFullImagePreloads.get(source) === entry);
+    };
+    loader.onerror = () => settle(false);
+    loader.decoding = 'async';
+    lightboxFullImagePreloads.set(source, entry);
+
+    while (lightboxFullImagePreloads.size > LIGHTBOX_FULL_IMAGE_CACHE_LIMIT) {
+        const oldestSource = lightboxFullImagePreloads.keys().next().value;
+        const oldest = lightboxFullImagePreloads.get(oldestSource);
+        lightboxFullImagePreloads.delete(oldestSource);
+        if (oldest && !oldest.settled) {
+            oldest.loader.onload = null;
+            oldest.loader.onerror = null;
+            // Resolve any lightbox waiting on an entry that was displaced.
+            oldest.finish(false);
+        }
+    }
+
+    loader.src = source;
+    return entry;
+}
+
+function preloadLightboxAssets(img) {
+    preloadLightboxPreview(img);
+    preloadLightboxFullImage(img);
+}
+
+function preloadLightboxNeighbors(img) {
+    const items = img.reviewOnly === true ? reviewLightboxItems() : appState.images;
+    if (!Array.isArray(items)) return;
+    const index = items.findIndex(item => item?.path === img.path);
+    if (index < 0) return;
+    if (index > 0) preloadLightboxAssets(items[index - 1]);
+    if (index + 1 < items.length) preloadLightboxAssets(items[index + 1]);
+}
+
+function loadLightboxImage(img) {
+    if (!_imgEl) return;
+    const requestId = ++lightboxImageRequestId;
+
+    const previewSource = lightboxPreviewSource(img);
+    const fullSource = imageUrl(img.path);
+    const fullEntry = preloadLightboxFullImage(img);
+    let showingFull = previewSource === fullSource || fullEntry?.decoded === true;
+    const onVisibleImageLoad = () => {
+        if (requestId !== lightboxImageRequestId || !_imgEl) return;
+        _imgEl.onload = null;
+        _imgEl.onerror = null;
+        preloadLightboxNeighbors(img);
+    };
+    const showFullImage = () => {
+        if (showingFull || requestId !== lightboxImageRequestId || !_imgEl) return;
+        showingFull = true;
+        _imgEl.onload = onVisibleImageLoad;
+        _imgEl.onerror = null;
+        _imgEl.src = fullSource;
+    };
+    _imgEl.onload = onVisibleImageLoad;
+    _imgEl.onerror = () => {
+        if (requestId !== lightboxImageRequestId || !_imgEl || previewSource === fullSource) {
+            return;
+        }
+        showFullImage();
+    };
+    _imgEl.decoding = 'async';
+    _imgEl.src = showingFull ? fullSource : previewSource;
+
+    // A hover/focus preload commonly resolves before the click, in which case
+    // the original source was selected above. On a cold click, let whichever
+    // finishes first win: the preview can paint quickly, while a decoded 4K
+    // source replaces it immediately without an artificial delay.
+    if (!showingFull && fullEntry) {
+        fullEntry.ready.then(ready => {
+            if (ready) showFullImage();
+        });
+    }
+}
 
 function clamp(v, lo, hi) {
     return Math.min(hi, Math.max(lo, v));
@@ -289,7 +431,7 @@ function showLightbox(img) {
 
     // If lightbox already exists, just swap the image (avoids DOM thrashing)
     if (lightboxEl) {
-        _imgEl.src = imageUrl(img.path);
+        loadLightboxImage(img);
         resetZoom();
         focusLightboxEntry(lightboxEl);
         return;
@@ -315,7 +457,7 @@ function showLightbox(img) {
     lightboxEl.innerHTML = `
         <div class="lightbox-backdrop"></div>
         <div class="lightbox-stage">
-            <img class="lightbox-image" src="${imageUrl(img.path)}" alt="">
+            <img class="lightbox-image" alt="">
         </div>
         <div class="lightbox-toolbar">
             ${reviewOnly ? `
@@ -359,6 +501,7 @@ function showLightbox(img) {
     const createdLightbox = lightboxEl;
     _stageEl = lightboxEl.querySelector('.lightbox-stage');
     _imgEl = lightboxEl.querySelector('.lightbox-image');
+    loadLightboxImage(img);
     resetZoom();
     const revealLightbox = () => {
         if (lightboxEl !== createdLightbox) return;
@@ -438,6 +581,7 @@ function showLightbox(img) {
 
 function closeLightbox(event) {
     if (!lightboxEl) return;
+    lightboxImageRequestId++;
     // The lightbox is a separate overlay.  Keep its close gesture from
     // bubbling into the underlying blocklist controls or triggering a second
     // page-level action.
