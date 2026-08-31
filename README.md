@@ -256,7 +256,7 @@ New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
 Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
-Set the wallpaper download folder and login autostart in the GUI Settings view, or edit the options in [`example-config.toml`](example-config.toml). Autostart defaults on and can also be managed with `wayper autostart enable|disable|status` or the MCP `configure_autostart` tool. Wayper uses a graphical-session user service on Linux (so no Hyprland `exec-once` is needed), a LaunchAgent on macOS, and the Startup folder on Windows. See the example file for all options — API key, proxy, intervals, quota, minimum Wallhaven favorites, transitions, etc. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
+Set the wallpaper download folder and login autostart in the GUI Settings view, or edit the options in [`example-config.toml`](example-config.toml). Autostart defaults on and can also be managed with `wayper autostart enable|disable|status` or the MCP `configure_autostart` tool. Wayper uses a graphical-session user service on Linux (so no Hyprland `exec-once` is needed), a LaunchAgent on macOS, and a per-user Run registration on Windows that launches the GUI directly without a console window. See the example file for all options — API key, proxy, intervals, quota, minimum Wallhaven favorites, transitions, etc. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
 
 ## Requirements
 

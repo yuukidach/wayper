@@ -20,7 +20,11 @@ class AutostartError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class AutostartResult:
     enabled: bool
-    unit: Path
+    unit: Path | str
+
+
+_WINDOWS_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_WINDOWS_RUN_VALUE = "Wayper"
 
 
 def _systemd_user_dir() -> Path:
@@ -40,13 +44,17 @@ def _windows_startup_path() -> Path:
     return appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "Wayper.cmd"
 
 
-def _registration_path() -> Path:
+def _windows_registration() -> str:
+    return f"HKCU\\{_WINDOWS_RUN_KEY}\\{_WINDOWS_RUN_VALUE}"
+
+
+def _registration_path() -> Path | str:
     if sys.platform.startswith("linux"):
         return _service_path()
     if sys.platform == "darwin":
         return _launch_agent_path()
     if sys.platform == "win32":
-        return _windows_startup_path()
+        return _windows_registration()
     raise AutostartError(f"Autostart is not supported on {sys.platform}")
 
 
@@ -99,9 +107,46 @@ def _launch_agent_contents(executable: Path) -> bytes:
     )
 
 
-def _windows_startup_contents(executable: Path) -> str:
-    escaped = str(executable).replace("%", "%%")
-    return f'@start "" "{escaped}" --hidden\n'
+def _windows_run_command(executable: Path) -> str:
+    return f'"{executable}" --hidden'
+
+
+def _windows_read_registration() -> str | None:
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WINDOWS_RUN_KEY) as key:
+            value, _ = winreg.QueryValueEx(key, _WINDOWS_RUN_VALUE)
+            return str(value)
+    except FileNotFoundError:
+        return None
+
+
+def _windows_write_registration(command: str) -> None:
+    import winreg
+
+    with winreg.CreateKeyEx(
+        winreg.HKEY_CURRENT_USER, _WINDOWS_RUN_KEY, 0, winreg.KEY_SET_VALUE
+    ) as key:
+        winreg.SetValueEx(key, _WINDOWS_RUN_VALUE, 0, winreg.REG_SZ, command)
+
+
+def _windows_delete_registration() -> None:
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _WINDOWS_RUN_KEY, 0, winreg.KEY_SET_VALUE
+        ) as key:
+            winreg.DeleteValue(key, _WINDOWS_RUN_VALUE)
+    except FileNotFoundError:
+        pass
+
+
+def _registration_exists() -> bool:
+    if sys.platform == "win32":
+        return _windows_read_registration() is not None
+    return Path(_registration_path()).is_file()
 
 
 def _systemctl(*arguments: str) -> None:
@@ -126,6 +171,36 @@ def set_autostart(
 ) -> AutostartResult:
     """Apply and persist autostart using the platform's login mechanism."""
     unit = _registration_path()
+    if sys.platform == "win32":
+        legacy_startup = _windows_startup_path()
+        previous = _windows_read_registration()
+        if enabled:
+            try:
+                executable = _gui_executable()
+                _windows_write_registration(_windows_run_command(executable))
+                legacy_startup.unlink(missing_ok=True)
+            except Exception as error:
+                if previous is None:
+                    _windows_delete_registration()
+                else:
+                    _windows_write_registration(previous)
+                if isinstance(error, AutostartError):
+                    raise
+                raise AutostartError(str(error)) from error
+        else:
+            try:
+                _windows_delete_registration()
+                legacy_startup.unlink(missing_ok=True)
+            except Exception as error:
+                if isinstance(error, AutostartError):
+                    raise
+                raise AutostartError(str(error)) from error
+
+        config.autostart = enabled
+        save_config(config, config_path)
+        return AutostartResult(enabled=enabled, unit=unit)
+
+    unit = Path(unit)
     if enabled:
         previous = unit.read_bytes() if unit.is_file() else None
         unit.parent.mkdir(parents=True, exist_ok=True)
@@ -135,14 +210,8 @@ def set_autostart(
                 unit.write_text(_service_contents(executable), encoding="utf-8")
                 _systemctl("daemon-reload")
                 _systemctl("enable", unit.name)
-            elif sys.platform == "darwin":
-                unit.write_bytes(_launch_agent_contents(executable))
             else:
-                unit.write_text(
-                    _windows_startup_contents(executable),
-                    encoding="utf-8",
-                    newline="\r\n",
-                )
+                unit.write_bytes(_launch_agent_contents(executable))
         except Exception as error:
             if previous is None:
                 unit.unlink(missing_ok=True)
@@ -170,5 +239,5 @@ def set_autostart(
 
 def ensure_default_autostart(config: WayperConfig) -> None:
     """Install the default-on service on the first manual GUI launch."""
-    if config.autostart and not _registration_path().is_file():
+    if config.autostart and not _registration_exists():
         set_autostart(config, True)

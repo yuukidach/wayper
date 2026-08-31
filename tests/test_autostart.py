@@ -13,6 +13,18 @@ def linux(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
 
 
+def _mock_windows_registration(monkeypatch, startup, registry):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(autostart, "_windows_startup_path", lambda: startup)
+    monkeypatch.setattr(autostart, "_windows_read_registration", lambda: registry.get("Wayper"))
+    monkeypatch.setattr(
+        autostart, "_windows_write_registration", lambda value: registry.update(Wayper=value)
+    )
+    monkeypatch.setattr(
+        autostart, "_windows_delete_registration", lambda: registry.pop("Wayper", None)
+    )
+
+
 def test_enable_autostart_installs_hidden_graphical_service(tmp_path, monkeypatch):
     unit = tmp_path / "systemd" / "wayper.service"
     gui = tmp_path / "bin" / "wayper-gui"
@@ -87,15 +99,31 @@ def test_macos_autostart_uses_launch_agent(tmp_path, monkeypatch):
     assert payload["RunAtLoad"] is True
 
 
-def test_windows_autostart_uses_startup_folder(tmp_path, monkeypatch):
+def test_windows_autostart_uses_run_registry_and_removes_legacy_script(tmp_path, monkeypatch):
     startup = tmp_path / "Startup" / "Wayper.cmd"
+    startup.parent.mkdir()
+    startup.write_text("legacy")
     gui = tmp_path / "Program Files" / "Wayper" / "wayper-gui.exe"
     config_path = tmp_path / "config.toml"
-    monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(autostart, "_windows_startup_path", lambda: startup)
+    registry = {}
+    _mock_windows_registration(monkeypatch, startup, registry)
     monkeypatch.setattr(autostart, "_gui_executable", lambda: gui)
 
     result = autostart.set_autostart(WayperConfig(), True, config_path=config_path)
 
-    assert result.unit == startup
-    assert startup.read_text() == f'@start "" "{gui}" --hidden\n'
+    assert result.unit == autostart._windows_registration()
+    assert registry["Wayper"] == f'"{gui}" --hidden'
+    assert not startup.exists()
+
+
+def test_windows_disable_removes_registry_and_legacy_script(tmp_path, monkeypatch):
+    startup = tmp_path / "Startup" / "Wayper.cmd"
+    startup.parent.mkdir()
+    startup.write_text("legacy")
+    registry = {"Wayper": '"wayper-gui.exe" --hidden'}
+    _mock_windows_registration(monkeypatch, startup, registry)
+
+    autostart.set_autostart(WayperConfig(), False, config_path=tmp_path / "config.toml")
+
+    assert "Wayper" not in registry
+    assert not startup.exists()

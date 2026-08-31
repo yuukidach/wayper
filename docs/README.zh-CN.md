@@ -243,7 +243,7 @@ New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
 Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
-壁纸下载目录和登录自启动可在 GUI 设置页修改，也可编辑 [`example-config.toml`](../example-config.toml)。自启动在所有平台上默认开启，还可通过 `wayper autostart enable|disable|status` 或 MCP 的 `configure_autostart` 工具管理。Linux 使用图形会话级用户服务（无需再写 Hyprland `exec-once`），macOS 使用 LaunchAgent，Windows 使用“启动”文件夹。详见该文件的所有选项 — API key、代理、轮换间隔、配额、Wallhaven 最低收藏数、`wallhaven.filter_strategy`（`rules` / `model` / `rules+model`）、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
+壁纸下载目录和登录自启动可在 GUI 设置页修改，也可编辑 [`example-config.toml`](../example-config.toml)。自启动在所有平台上默认开启，还可通过 `wayper autostart enable|disable|status` 或 MCP 的 `configure_autostart` 工具管理。Linux 使用图形会话级用户服务（无需再写 Hyprland `exec-once`），macOS 使用 LaunchAgent，Windows 使用当前用户的 Run 注册项直接启动 GUI，不会出现控制台窗口。详见该文件的所有选项 — API key、代理、轮换间隔、配额、Wallhaven 最低收藏数、`wallhaven.filter_strategy`（`rules` / `model` / `rules+model`）、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
 
 ## 依赖
 
