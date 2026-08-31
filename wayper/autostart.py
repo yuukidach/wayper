@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import WayperConfig, save_config
+from .config import CONFIG_DIR, WayperConfig, save_config
 
 
 class AutostartError(RuntimeError):
@@ -42,6 +42,10 @@ def _launch_agent_path() -> Path:
 def _windows_startup_path() -> Path:
     appdata = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
     return appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "Wayper.cmd"
+
+
+def _windows_launcher_path() -> Path:
+    return CONFIG_DIR / "WayperAutostart.vbs"
 
 
 def _windows_registration() -> str:
@@ -111,6 +115,24 @@ def _windows_run_command(executable: Path) -> str:
     return f'"{executable}" --hidden'
 
 
+def _windows_needs_script_launcher() -> bool:
+    """Detect virtual environments whose GUI entry point cannot find base pythonw.exe."""
+    if sys.prefix == sys.base_prefix:
+        return False
+    base_executable = Path(getattr(sys, "_base_executable", sys.executable))
+    return not base_executable.with_name("pythonw.exe").is_file()
+
+
+def _windows_launcher_contents() -> str:
+    command = f'"{Path(sys.executable).resolve()}" -m wayper.server.launcher --hidden'
+    escaped = command.replace('"', '""')
+    return f'CreateObject("WScript.Shell").Run "{escaped}", 0, False\n'
+
+
+def _windows_script_command(launcher: Path) -> str:
+    return f'wscript.exe //B //NoLogo "{launcher}"'
+
+
 def _windows_read_registration() -> str | None:
     import winreg
 
@@ -173,17 +195,31 @@ def set_autostart(
     unit = _registration_path()
     if sys.platform == "win32":
         legacy_startup = _windows_startup_path()
+        launcher = _windows_launcher_path()
         previous = _windows_read_registration()
+        previous_launcher = launcher.read_bytes() if launcher.is_file() else None
         if enabled:
             try:
                 executable = _gui_executable()
-                _windows_write_registration(_windows_run_command(executable))
+                if _windows_needs_script_launcher():
+                    launcher.parent.mkdir(parents=True, exist_ok=True)
+                    launcher.write_text(_windows_launcher_contents(), encoding="utf-8")
+                    command = _windows_script_command(launcher)
+                else:
+                    launcher.unlink(missing_ok=True)
+                    command = _windows_run_command(executable)
+                _windows_write_registration(command)
                 legacy_startup.unlink(missing_ok=True)
             except Exception as error:
                 if previous is None:
                     _windows_delete_registration()
                 else:
                     _windows_write_registration(previous)
+                if previous_launcher is None:
+                    launcher.unlink(missing_ok=True)
+                else:
+                    launcher.parent.mkdir(parents=True, exist_ok=True)
+                    launcher.write_bytes(previous_launcher)
                 if isinstance(error, AutostartError):
                     raise
                 raise AutostartError(str(error)) from error
@@ -191,6 +227,7 @@ def set_autostart(
             try:
                 _windows_delete_registration()
                 legacy_startup.unlink(missing_ok=True)
+                launcher.unlink(missing_ok=True)
             except Exception as error:
                 if isinstance(error, AutostartError):
                     raise

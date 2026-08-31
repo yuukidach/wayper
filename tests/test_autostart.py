@@ -13,9 +13,11 @@ def linux(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
 
 
-def _mock_windows_registration(monkeypatch, startup, registry):
+def _mock_windows_registration(monkeypatch, startup, launcher, registry):
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(autostart, "_windows_startup_path", lambda: startup)
+    monkeypatch.setattr(autostart, "_windows_launcher_path", lambda: launcher)
+    monkeypatch.setattr(autostart, "_windows_needs_script_launcher", lambda: False)
     monkeypatch.setattr(autostart, "_windows_read_registration", lambda: registry.get("Wayper"))
     monkeypatch.setattr(
         autostart, "_windows_write_registration", lambda value: registry.update(Wayper=value)
@@ -101,12 +103,13 @@ def test_macos_autostart_uses_launch_agent(tmp_path, monkeypatch):
 
 def test_windows_autostart_uses_run_registry_and_removes_legacy_script(tmp_path, monkeypatch):
     startup = tmp_path / "Startup" / "Wayper.cmd"
+    launcher = tmp_path / "config" / "WayperAutostart.vbs"
     startup.parent.mkdir()
     startup.write_text("legacy")
     gui = tmp_path / "Program Files" / "Wayper" / "wayper-gui.exe"
     config_path = tmp_path / "config.toml"
     registry = {}
-    _mock_windows_registration(monkeypatch, startup, registry)
+    _mock_windows_registration(monkeypatch, startup, launcher, registry)
     monkeypatch.setattr(autostart, "_gui_executable", lambda: gui)
 
     result = autostart.set_autostart(WayperConfig(), True, config_path=config_path)
@@ -114,16 +117,38 @@ def test_windows_autostart_uses_run_registry_and_removes_legacy_script(tmp_path,
     assert result.unit == autostart._windows_registration()
     assert registry["Wayper"] == f'"{gui}" --hidden'
     assert not startup.exists()
+    assert not launcher.exists()
+
+
+def test_windows_uv_environment_uses_hidden_script_launcher(tmp_path, monkeypatch):
+    startup = tmp_path / "Startup" / "Wayper.cmd"
+    launcher = tmp_path / "config" / "WayperAutostart.vbs"
+    python = tmp_path / "venv" / "Scripts" / "python.exe"
+    gui = python.with_name("wayper-gui.exe")
+    registry = {}
+    _mock_windows_registration(monkeypatch, startup, launcher, registry)
+    monkeypatch.setattr(autostart, "_windows_needs_script_launcher", lambda: True)
+    monkeypatch.setattr(autostart, "_gui_executable", lambda: gui)
+    monkeypatch.setattr(sys, "executable", str(python))
+
+    autostart.set_autostart(WayperConfig(), True, config_path=tmp_path / "config.toml")
+
+    assert registry["Wayper"] == f'wscript.exe //B //NoLogo "{launcher}"'
+    assert f'"""{python}"" -m wayper.server.launcher --hidden' in launcher.read_text()
 
 
 def test_windows_disable_removes_registry_and_legacy_script(tmp_path, monkeypatch):
     startup = tmp_path / "Startup" / "Wayper.cmd"
+    launcher = tmp_path / "config" / "WayperAutostart.vbs"
     startup.parent.mkdir()
     startup.write_text("legacy")
+    launcher.parent.mkdir()
+    launcher.write_text("legacy")
     registry = {"Wayper": '"wayper-gui.exe" --hidden'}
-    _mock_windows_registration(monkeypatch, startup, registry)
+    _mock_windows_registration(monkeypatch, startup, launcher, registry)
 
     autostart.set_autostart(WayperConfig(), False, config_path=tmp_path / "config.toml")
 
     assert "Wayper" not in registry
     assert not startup.exists()
+    assert not launcher.exists()
