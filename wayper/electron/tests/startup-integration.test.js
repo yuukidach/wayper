@@ -8,6 +8,7 @@ const ipcHandlers = new Map()
 const windows = []
 const spawnedProcesses = []
 const trayIcons = []
+const appFocusCalls = []
 let resolveReadiness
 const readiness = new Promise(resolve => {
   resolveReadiness = resolve
@@ -22,6 +23,7 @@ class FakeBrowserWindow extends EventEmitter {
     super()
     this.options = options
     this.webContents = new FakeWebContents()
+    this.destroyed = false
     this.showCount = 0
     windows.push(this)
   }
@@ -30,7 +32,12 @@ class FakeBrowserWindow extends EventEmitter {
     setImmediate(() => this.emit('ready-to-show'))
   }
 
-  isDestroyed() { return false }
+  destroy() {
+    this.destroyed = true
+    this.emit('closed')
+  }
+
+  isDestroyed() { return this.destroyed }
   isMinimized() { return false }
   hide() {}
   focus() {}
@@ -68,6 +75,7 @@ const app = new EventEmitter()
 Object.assign(app, {
   isPackaged: true,
   getLocale: () => 'en-US',
+  focus: options => appFocusCalls.push(options),
   quit: () => {},
   requestSingleInstanceLock: () => true,
   setAppUserModelId: () => {},
@@ -153,6 +161,9 @@ async function run() {
     assert.equal(windows.length, 1)
     await flushEvents()
     assert.equal(windows[0].showCount, 1)
+    if (process.platform === 'darwin') {
+      assert.deepEqual(appFocusCalls, [{ steal: true }])
+    }
 
     const getApiPort = ipcHandlers.get('get-api-port')
     assert.equal(typeof getApiPort, 'function')
@@ -171,6 +182,24 @@ async function run() {
     app.emit('second-instance', {}, ['Wayper', '--hidden'], '', { showWindow: true })
     assert.equal(windows.length, 1)
     assert.equal(windows[0].showCount, 2)
+    if (process.platform === 'darwin') {
+      assert.deepEqual(appFocusCalls, [{ steal: true }, { steal: true }])
+
+      let closePrevented = false
+      windows[0].emit('close', { preventDefault: () => { closePrevented = true } })
+      assert.equal(closePrevented, false)
+      windows[0].destroy()
+
+      app.emit('second-instance', {}, ['Wayper', '--hidden'], '', { showWindow: true })
+      await flushEvents()
+      assert.equal(windows.length, 2)
+      assert.equal(windows[1].showCount, 1)
+      assert.deepEqual(appFocusCalls, [
+        { steal: true },
+        { steal: true },
+        { steal: true },
+      ])
+    }
 
     if (process.platform === 'darwin') {
       assert.equal(nativeImages.length, 1)

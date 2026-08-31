@@ -243,6 +243,10 @@ function revealMainWindow() {
     createWindow({ show: true })
     return
   }
+  // Status-item clicks do not reliably activate the owning app on macOS.
+  // Activate Wayper before revealing its window so the previously frontmost
+  // app cannot reclaim focus and pull the window onto another workspace.
+  if (process.platform === 'darwin') app.focus({ steal: true })
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
@@ -459,6 +463,7 @@ ipcMain.on('refresh-tray-menu', () => {
 
 function createWindow ({ show = true } = {}) {
   const isMac = process.platform === 'darwin'
+  if (show && isMac) app.focus({ steal: true })
   const iconPath = getAppIconPath()
   const availableHeight = screen.getPrimaryDisplay().workAreaSize.height
   const windowOptions = {
@@ -480,7 +485,10 @@ function createWindow ({ show = true } = {}) {
   })
 
   mainWindow.on('close', (event) => {
-    if (!isQuitting) {
+    // On macOS, let the window be destroyed while the tray process stays alive.
+    // Reopening then creates a fresh native window on the current workspace
+    // instead of restoring the hidden window's previous workspace assignment.
+    if (!isQuitting && !isMac) {
       event.preventDefault()
       mainWindow.hide()
     }
