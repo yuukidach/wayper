@@ -11,6 +11,13 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/yuukidach/wayper"><img src="https://img.shields.io/github/stars/yuukidach/wayper?style=flat&color=89b4fa&labelColor=313244&logo=github" alt="GitHub stars"></a>
+  <a href="https://github.com/yuukidach/wayper/blob/main/LICENSE"><img src="https://img.shields.io/github/license/yuukidach/wayper?style=flat&color=a6e3a1&labelColor=313244" alt="License"></a>
+  <a href="https://aur.archlinux.org/packages/wayper"><img src="https://img.shields.io/aur/version/wayper?style=flat&color=cba6f7&labelColor=313244&logo=archlinux&logoColor=cba6f7" alt="AUR version"></a>
+  <a href="https://github.com/yuukidach/wayper/releases/latest"><img src="https://img.shields.io/github/v/release/yuukidach/wayper?style=flat&color=94e2d5&labelColor=313244" alt="Latest release"></a>
+</p>
+
+<p align="center">
   <img src="assets/demo-desktop.gif" alt="wallpaper transitions" width="720">
 </p>
 
@@ -26,11 +33,12 @@ Most wallpaper tools stop at "set image on desktop." wayper is a full **Wallhave
 
 **And the fundamentals:**
 
-- **Wallhaven integration** — auto-downloads based on your search preferences. Syncs favorites and tag blacklist to your Wallhaven account.
+- **Wallhaven integration** — browse and search Wallhaven from the GUI, auto-download from your queries with minimum-favorite filtering, and sync favorites and the tag blacklist to your account.
 - **Smart tag filtering** — excluded tags sync to Wallhaven's cloud blacklist for server-side filtering; overflow tags are sent via URL query; the rest are filtered after metadata fetch. Zero wasted downloads.
 - **Auto orientation** — portrait monitors get portrait wallpapers. No sorting needed.
 - **Three-tier purity** — SFW, Sketchy, NSFW — independently toggleable, persistent across sessions.
 - **Cross-platform** — Windows, macOS, and Linux (Hyprland/Sway). CLI + GUI + MCP.
+- **Pool management** — validates, resizes, and rotates downloads, with favorites, blocklist, and history navigation built in.
 - **`--json` everywhere** — every command supports machine-readable output.
 
 ## Install
@@ -70,10 +78,18 @@ included in the standard installation.
 ## GUI
 
 <p align="center">
+  <strong>Browse</strong><br>
   <img src="assets/browse.png" alt="GUI browse view" width="720">
 </p>
 
 `wayper-gui` launches a tray-resident app for browsing, managing, and controlling your wallpaper collection. Fully operable without a mouse.
+
+<p align="center">
+  <strong>Review</strong><br>
+  <img src="docs/assets/review.png" alt="Review view with auto-held wallpapers" width="720">
+</p>
+
+Use Review to inspect auto-held downloads and model recommendations. Keep or Dislike each image to refine local filtering, or clear auto-held items without teaching the model.
 
 - **Browse & preview** — grid view with thumbnail caching, lightbox preview, set wallpaper with Enter
 - **Tag search** — search by Wallhaven tags, category, or filename with autocomplete
@@ -100,6 +116,15 @@ Use `wayper-gui --hidden` to start directly in the tray. On Hyprland, the tray i
 | `[` / `]` | Blocklist: Recoverable / All | `a` | AI analysis (Blocklist) |
 | `g` | Locate current wallpaper | `gg` / `G` | Jump to first / last |
 | `1`–`9` | Switch monitor | | |
+
+**Review:**
+
+| Key | Action |
+|-----|--------|
+| `Tab` / Arrow keys | Enter Review and move through candidates |
+| `Enter` / `Space` | Preview the focused candidate |
+| `←` / `→` | Switch candidates in the Review preview |
+| `a` / `d` | Keep / Dislike the focused candidate |
 
 **Lightbox preview:**
 

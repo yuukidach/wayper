@@ -11,6 +11,13 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/yuukidach/wayper"><img src="https://img.shields.io/github/stars/yuukidach/wayper?style=flat&color=89b4fa&labelColor=313244&logo=github" alt="GitHub stars"></a>
+  <a href="https://github.com/yuukidach/wayper/blob/main/LICENSE"><img src="https://img.shields.io/github/license/yuukidach/wayper?style=flat&color=a6e3a1&labelColor=313244" alt="开源许可"></a>
+  <a href="https://aur.archlinux.org/packages/wayper"><img src="https://img.shields.io/aur/version/wayper?style=flat&color=cba6f7&labelColor=313244&logo=archlinux&logoColor=cba6f7" alt="AUR 版本"></a>
+  <a href="https://github.com/yuukidach/wayper/releases/latest"><img src="https://img.shields.io/github/v/release/yuukidach/wayper?style=flat&color=94e2d5&labelColor=313244" alt="最新版本"></a>
+</p>
+
+<p align="center">
   <img src="../assets/demo-desktop.gif" alt="壁纸切换效果" width="720">
 </p>
 
@@ -26,11 +33,12 @@
 
 **基础能力：**
 
-- **Wallhaven 集成** — 根据搜索偏好自动下载。收藏和标签黑名单同步到 Wallhaven 账号。
+- **Wallhaven 集成** — 直接在 GUI 中浏览和搜索 Wallhaven，按查询与最低收藏数自动下载，并将收藏和标签黑名单同步到账号。
 - **智能标签过滤** — 排除标签自动同步到 Wallhaven 云端黑名单（服务端过滤）；溢出的标签通过 URL 参数发送；剩余的在元数据获取后本地过滤。零浪费下载。
 - **自动匹配方向** — 竖屏显示器自动用竖屏壁纸，无需分类。
 - **三档纯度** — SFW、Sketchy、NSFW 独立开关，跨会话持久化。
 - **跨平台** — Windows、macOS 和 Linux（Hyprland/Sway）。CLI + GUI + MCP。
+- **图库管理** — 自动校验、缩放和轮换下载，内置收藏、黑名单与历史前后导航。
 - **`--json` 全覆盖** — 所有命令支持机器可读输出。
 
 ## 安装
@@ -69,10 +77,18 @@ uv venv && uv pip install -e .
 ## GUI
 
 <p align="center">
+  <strong>浏览</strong><br>
   <img src="../assets/browse.png" alt="GUI 浏览界面" width="720">
 </p>
 
 `wayper-gui` 启动托盘常驻应用，用于浏览、管理和控制壁纸集合。完全支持键盘操作，无需鼠标。
+
+<p align="center">
+  <strong>待确认</strong><br>
+  <img src="assets/review.png" alt="包含自动拦截壁纸的待确认界面" width="720">
+</p>
+
+在「待确认」中检查模型自动拦截的下载和推荐图片。对每张图片选择「保留」或「不喜欢」可优化本地筛选；也可以清空自动拦截项而不让模型学习。
 
 - **浏览与预览** — 网格浏览（缩略图缓存）、灯箱预览、Enter 设为壁纸
 - **标签搜索** — 按 Wallhaven 标签、分类或文件名搜索，支持自动补全
@@ -99,6 +115,15 @@ uv venv && uv pip install -e .
 | `[` / `]` | 黑名单：可恢复 / 全部 | `a` | AI 分析（黑名单视图） |
 | `g` | 定位当前壁纸 | `gg` / `G` | 跳到第一张 / 最后一张 |
 | `1`–`9` | 切换显示器 | | |
+
+**待确认：**
+
+| 按键 | 操作 |
+|------|------|
+| `Tab` / 方向键 | 进入待确认区并在候选图片间移动 |
+| `Enter` / `Space` | 预览当前候选图片 |
+| `←` / `→` | 在待确认预览中切换候选图片 |
+| `a` / `d` | 保留 / 标记当前候选图片为不喜欢 |
 
 **灯箱预览：**
 
