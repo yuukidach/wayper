@@ -24,6 +24,7 @@ from wayper.server.api import (
     ban_image_route,
     dislike_image_route,
     get_config_route,
+    get_images_page,
     get_status,
     model_review_action_route,
     model_review_clear_route,
@@ -68,6 +69,20 @@ class _FakeAsyncClient:
 
 
 class RegressionTest(unittest.TestCase):
+    def test_image_page_exposes_orientation_and_portable_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            image = config.download_dir / "sfw" / "portrait" / "tall.jpg"
+            image.parent.mkdir(parents=True)
+            image.touch()
+
+            with patch("wayper.server.api.get_config", return_value=config):
+                page = get_images_page(purity="sfw", orient="portrait")
+
+        self.assertEqual(len(page.items), 1)
+        self.assertEqual(page.items[0].path, "sfw/portrait/tall.jpg")
+        self.assertEqual(page.items[0].orientation, "portrait")
+
     def test_wallhaven_search_requires_monitor_resolution(self) -> None:
         config = WayperConfig(
             monitors=[MonitorConfig("retina", 5120, 2880, "landscape")],

@@ -26,6 +26,7 @@ class ImageItem(BaseModel):
     path: str
     name: str
     is_favorite: bool = False
+    orientation: str | None = None
 
 
 class ImagePage(BaseModel):

@@ -325,9 +325,9 @@ def _relative_image(config: WayperConfig, image: Path | None) -> str | None:
     if image is None:
         return None
     try:
-        return str(image.relative_to(config.download_dir))
+        return image.relative_to(config.download_dir).as_posix()
     except ValueError:
-        return str(image)
+        return image.as_posix()
 
 
 def _relative_image_map(config: WayperConfig, images: dict[str, Path]) -> dict[str, str]:
@@ -987,7 +987,7 @@ def get_monitors():
         img_rel = None
         if img_path:
             try:
-                img_rel = str(img_path.relative_to(config.download_dir))
+                img_rel = img_path.relative_to(config.download_dir).as_posix()
             except ValueError:
                 pass
         monitors.append(MonitorInfo(name=m.name, orientation=m.orientation, current_image=img_rel))
@@ -1020,9 +1020,10 @@ def _image_items_from_records(
 ) -> list[ImageItem]:
     return [
         ImageItem(
-            path=str(path.relative_to(config.download_dir)),
+            path=path.relative_to(config.download_dir).as_posix(),
             name=path.name,
             is_favorite=is_fav,
+            orientation=path.parent.name if path.parent.name in {"landscape", "portrait"} else None,
         )
         for _, path, is_fav in records
     ]
@@ -1100,7 +1101,7 @@ def restore_image(req: ActionRequest):
         )
 
     _schedule_preference_model_retrain(config)
-    return {"status": "ok", "new_path": str(dest.relative_to(config.download_dir))}
+    return {"status": "ok", "new_path": dest.relative_to(config.download_dir).as_posix()}
 
 
 @app.get("/api/blocklist", response_model=BlocklistResponse)
@@ -1162,7 +1163,7 @@ def favorite_image(req: ActionRequest):
     if not result.ok:
         raise HTTPException(400, result.error)
 
-    new_path = str(result.image.relative_to(config.download_dir)) if result.image else ""
+    new_path = result.image.relative_to(config.download_dir).as_posix() if result.image else ""
     return {"status": "ok", "new_path": new_path, "remote_sync": result.extra.get("remote_sync")}
 
 

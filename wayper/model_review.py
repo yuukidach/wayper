@@ -453,7 +453,7 @@ def resolve_model_review_item(
         _save_model_review_state(config, state)
         result = dict(record)
         result["new_path"] = (
-            str(destination.relative_to(config.download_dir)) if action == "keep" else None
+            destination.relative_to(config.download_dir).as_posix() if action == "keep" else None
         )
 
     if action != "filter":

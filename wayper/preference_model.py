@@ -1380,7 +1380,7 @@ def preference_deletion_suggestions(
         neighbor_candidate_images += 1
         scored.append(
             {
-                "path": str(image.relative_to(config.download_dir)),
+                "path": image.relative_to(config.download_dir).as_posix(),
                 "name": filename,
                 "prediction": prediction,
                 "decision_score": decision_score,

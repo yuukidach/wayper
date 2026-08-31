@@ -3275,13 +3275,25 @@ function modelReviewPreviewUrl(path) {
     return `${API_URL}/previews?path=${encodeURIComponent(path)}`;
 }
 
+function imageOrientation(img) {
+    const explicit = String(img?.orientation || '').toLowerCase();
+    if (explicit === 'landscape' || explicit === 'portrait') return explicit;
+
+    // Compatibility with older backends. Paths are opaque identifiers in the
+    // current API, but legacy Windows responses used native backslashes.
+    const normalizedPath = String(img?.path || '').replaceAll('\\', '/');
+    if (normalizedPath.includes('/portrait/')) return 'portrait';
+    if (normalizedPath.includes('/landscape/')) return 'landscape';
+    return null;
+}
+
 function createCard(img) {
     const card = document.createElement('div');
     card.className = 'wallpaper-card';
     card.dataset.path = img.path;
     card.tabIndex = 0; // Make focusable
 
-    if (img.path.includes('/portrait/')) {
+    if (imageOrientation(img) === 'portrait') {
         card.classList.add('portrait');
     }
 

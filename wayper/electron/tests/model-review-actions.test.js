@@ -33,6 +33,22 @@ function testRecommendationCountPreservesFullCandidateTotal() {
     assert.equal(fields.recommendation_count, 17);
 }
 
+function testImageOrientationUsesApiFieldAndSupportsLegacyWindowsPaths() {
+    const context = { console };
+    context.window = context;
+    const renderer = loadRendererScript('renderer-views.js', context, ['imageOrientation']);
+
+    assert.equal(
+        renderer.imageOrientation({ path: 'opaque-id', orientation: 'portrait' }),
+        'portrait',
+    );
+    assert.equal(
+        renderer.imageOrientation({ path: String.raw`sfw\portrait\legacy.jpg` }),
+        'portrait',
+    );
+    assert.equal(renderer.imageOrientation({ path: 'sfw/landscape/wide.jpg' }), 'landscape');
+}
+
 function testRecommendationCarouselUsesTwentyFourItemWindow() {
     const recommendations = Array.from({ length: 30 }, (_, index) => ({
         path: `candidate-${index + 1}.jpg`,
@@ -2020,6 +2036,7 @@ async function testBlocklistMonitorSwitchKeepsSharedViewMounted() {
 
 (async () => {
     testRecommendationCountPreservesFullCandidateTotal();
+    testImageOrientationUsesApiFieldAndSupportsLegacyWindowsPaths();
     testRecommendationCarouselUsesTwentyFourItemWindow();
     await testStatusRequestsStayScopedToSelectedMonitor();
     await testSuggestionRefreshStaysInPlace();
