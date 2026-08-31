@@ -15,6 +15,60 @@ async function flushPromises() {
     await new Promise(resolve => setImmediate(resolve));
 }
 
+function testRecommendationCountPreservesFullCandidateTotal() {
+    const context = { console };
+    context.window = context;
+    const renderer = loadRendererScript(
+        'renderer-data.js',
+        context,
+        ['modelReviewRecommendationFields'],
+    );
+    const items = [{ path: 'first.jpg' }, { path: 'second.jpg' }];
+    const fields = renderer.modelReviewRecommendationFields({
+        status: 'ready',
+        items,
+        diagnostics: { candidate_count: 17, returned_count: 2 },
+    });
+
+    assert.equal(fields.recommendation_count, 17);
+}
+
+function testRecommendationCarouselUsesTwentyFourItemWindow() {
+    const recommendations = Array.from({ length: 30 }, (_, index) => ({
+        path: `candidate-${index + 1}.jpg`,
+    }));
+    const context = {
+        appState: {
+            modelReviewData: {
+                items: [],
+                recommendations,
+                recommendation_count: 30,
+            },
+            modelReviewSource: 'recommended',
+            modelReviewSelectedPath: recommendations[0].path,
+            modelReviewResolvedPaths: new Set(),
+        },
+        console,
+    };
+    context.window = context;
+    const renderer = loadRendererScript(
+        'renderer-views.js',
+        context,
+        ['modelReviewVisibleItems', 'modelReviewSourceCount'],
+    );
+
+    assert.equal(renderer.modelReviewSourceCount('recommended'), 30);
+    assert.equal(renderer.modelReviewVisibleItems().length, 24);
+    assert.equal(renderer.modelReviewVisibleItems()[23].path, 'candidate-24.jpg');
+
+    vm.runInContext(
+        "appState.modelReviewResolvedPaths = new Set(['candidate-1.jpg'])",
+        context,
+    );
+    assert.equal(renderer.modelReviewVisibleItems().length, 24);
+    assert.equal(renderer.modelReviewVisibleItems()[23].path, 'candidate-25.jpg');
+}
+
 async function testStatusRequestsStayScopedToSelectedMonitor() {
     const pending = [];
     const context = {
@@ -1965,6 +2019,8 @@ async function testBlocklistMonitorSwitchKeepsSharedViewMounted() {
 }
 
 (async () => {
+    testRecommendationCountPreservesFullCandidateTotal();
+    testRecommendationCarouselUsesTwentyFourItemWindow();
     await testStatusRequestsStayScopedToSelectedMonitor();
     await testSuggestionRefreshStaysInPlace();
     await testManualDislikeUsesDistinctFeedbackEndpoint();

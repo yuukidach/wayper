@@ -1243,7 +1243,7 @@ def preference_deletion_suggestions(
     *,
     purities: Iterable[str] | None = None,
     orientation: str | None = None,
-    limit: int = DEFAULT_REVIEW_LIMIT,
+    limit: int | None = DEFAULT_REVIEW_LIMIT,
     include_learning: bool = True,
     metadata_snapshot: dict[str, object] | None = None,
 ) -> dict[str, object]:
@@ -1405,7 +1405,7 @@ def preference_deletion_suggestions(
         ),
     )
     ranked_pool_count = len(ranked_all)
-    ranked_page = ranked_all[: max(1, limit)]
+    ranked_page = ranked_all if limit is None else ranked_all[: max(1, limit)]
     candidates: list[dict[str, object]] = []
     for rank, item in enumerate(ranked_page, 1):
         prediction = item["prediction"]

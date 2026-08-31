@@ -24,7 +24,10 @@ const FILTER_STRATEGY_LABELS = {
     'rules+model': 'Rules + model',
 };
 const MODEL_REVIEW_RECOMMENDATION_CACHE_MS = 60_000;
-const MODEL_REVIEW_RECOMMENDATION_LIMIT = 24;
+// Keep only this many recommendation cards mounted at once. The backing
+// recommendation list is complete so resolving a card can reveal the next one
+// immediately without making the reported total equal to the window size.
+const MODEL_REVIEW_WINDOW_SIZE = 24;
 const MODEL_REVIEW_RECOMMENDATION_STORAGE_KEY = 'wayper.model-review.recommendations.v1';
 const MODEL_REVIEW_RECOMMENDATION_STORAGE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MODEL_REVIEW_RECOMMENDATION_STORAGE_LIMIT = 8;
@@ -502,7 +505,18 @@ function persistModelReviewRecommendations(cache) {
         const entries = [...cache.entries()]
             .filter(([, value]) => Number(value?.loadedAt || 0) >= cutoff && value?.data)
             .sort((left, right) => Number(right[1].loadedAt) - Number(left[1].loadedAt))
-            .slice(0, MODEL_REVIEW_RECOMMENDATION_STORAGE_LIMIT);
+            .slice(0, MODEL_REVIEW_RECOMMENDATION_STORAGE_LIMIT)
+            .map(([key, value]) => [key, {
+                ...value,
+                // Persistence is only for the fast first paint. Keep the full
+                // backing queue in memory, but store just one visible window.
+                data: {
+                    ...value.data,
+                    items: Array.isArray(value.data?.items)
+                        ? value.data.items.slice(0, MODEL_REVIEW_WINDOW_SIZE)
+                        : [],
+                },
+            }]);
         storage.setItem(MODEL_REVIEW_RECOMMENDATION_STORAGE_KEY, JSON.stringify(entries));
     } catch (_error) {
         // Storage quotas/private mode must not affect Review itself.
@@ -534,7 +548,7 @@ function requestModelReviewRecommendations(
     const request = WayperApi.preferenceSuggestions(
         purities,
         orient,
-        MODEL_REVIEW_RECOMMENDATION_LIMIT,
+        0,
     )
         .then(data => {
             cache.set(key, { data, loadedAt: Date.now() });

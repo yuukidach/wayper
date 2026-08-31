@@ -1520,7 +1520,11 @@ function modelReviewVisibleItems(
     data = appState.modelReviewData,
     source = activeModelReviewSource(data),
 ) {
-    return modelReviewSourceItems(source, data);
+    const items = modelReviewSourceItems(source, data);
+    const windowSize = typeof MODEL_REVIEW_WINDOW_SIZE === 'number'
+        ? MODEL_REVIEW_WINDOW_SIZE
+        : 24;
+    return items.slice(0, windowSize);
 }
 
 function modelReviewMakeButton(label, className, onClick) {
@@ -2401,6 +2405,19 @@ function syncModelReviewCarouselPositions(carousel) {
     });
 }
 
+function refillModelReviewCarouselWindow(carousel, items) {
+    if (!carousel) return;
+    const mounted = new Set(
+        [...(carousel.querySelectorAll?.('.model-review-card') || [])]
+            .map(card => card.dataset?.path)
+            .filter(Boolean),
+    );
+    items.forEach((item, index) => {
+        if (mounted.has(item.path)) return;
+        carousel.appendChild(createModelReviewCard(item, index, items.length));
+    });
+}
+
 function removeResolvedModelReviewCard(path, action, { immediate = false } = {}) {
     const carousel = els.wallpaperGrid?.querySelector('.model-review-carousel');
     const card = carousel?.querySelector(modelReviewCardSelector(path));
@@ -2451,6 +2468,7 @@ function removeResolvedModelReviewCard(path, action, { immediate = false } = {})
             replaceModelReviewCarousel(deck, nextSource, { focus: true });
             return;
         }
+        refillModelReviewCarouselWindow(carousel, remaining);
         syncModelReviewCarouselPositions(carousel);
         syncModelReviewSourceControl(deck);
         const selectedPath = nextPath || remaining[0].path;

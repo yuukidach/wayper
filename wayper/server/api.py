@@ -263,7 +263,7 @@ def _preference_suggestion_state_key(
     config: WayperConfig,
     purities: list[str],
     orientation: str,
-    limit: int,
+    limit: int | None,
 ) -> tuple[object, ...]:
     """Fingerprint every cheap state input that can change Review ranking."""
     active_purities = tuple(sorted(set(purities) & set(ALL_PURITIES))) or ("sfw",)
@@ -1232,7 +1232,9 @@ def _cached_preference_suggestions(
         schedule_preference_model_retrain,
     )
 
-    bounded_limit = min(60, max(1, limit))
+    # ``limit=0`` asks for the complete ranked backing list. The renderer keeps
+    # only a small card window mounted and reveals one replacement per decision.
+    bounded_limit = None if limit == 0 else min(60, max(1, limit))
     cache_key = _preference_suggestion_state_key(config, purities, orient, bounded_limit)
     with _preference_suggestion_cache_lock:
         cached = _preference_suggestion_cache.get(cache_key)
