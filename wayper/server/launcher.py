@@ -64,6 +64,20 @@ def _icon_path() -> Path | None:
     return next((candidate for candidate in candidates if candidate.is_file()), None)
 
 
+def _hide_windows_console_for_gui_entry() -> None:
+    """Hide the console allocated by the resilient Windows GUI entry point."""
+    if sys.platform != "win32" or Path(sys.argv[0]).stem.lower() != "wayper-gui":
+        return
+    try:
+        import ctypes
+
+        console = ctypes.windll.kernel32.GetConsoleWindow()
+        if console:
+            ctypes.windll.user32.ShowWindow(console, 0)
+    except (AttributeError, OSError):
+        pass
+
+
 def _electron_command(
     electron_dir: Path,
     platform: str | None = None,
@@ -119,6 +133,8 @@ def _wait_for_api(timeout: float = 10) -> int:
 
 
 def run_app():
+    _hide_windows_console_for_gui_entry()
+
     # Autostart defaults on. The first manual launch installs the platform login
     # entry for subsequent sessions; an explicit false setting is left alone.
     try:

@@ -123,8 +123,32 @@ def _windows_needs_script_launcher() -> bool:
     return not base_executable.with_name("pythonw.exe").is_file()
 
 
+def _windows_uv_launch_arguments() -> list[str] | None:
+    """Build a resilient uv launch for a source checkout, if available."""
+    uv = shutil.which("uv")
+    if not uv:
+        return None
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "pyproject.toml").is_file() and (parent / "wayper").is_dir():
+            return [
+                uv,
+                "run",
+                "--project",
+                str(parent),
+                "python",
+                "-m",
+                "wayper.server.launcher",
+                "--hidden",
+            ]
+    return None
+
+
 def _windows_launcher_contents() -> str:
-    command = f'"{Path(sys.executable).resolve()}" -m wayper.server.launcher --hidden'
+    uv_arguments = _windows_uv_launch_arguments()
+    if uv_arguments:
+        command = subprocess.list2cmdline(uv_arguments)
+    else:
+        command = f'"{Path(sys.executable).resolve()}" -m wayper.server.launcher --hidden'
     escaped = command.replace('"', '""')
     return f'CreateObject("WScript.Shell").Run "{escaped}", 0, False\n'
 

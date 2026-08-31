@@ -937,8 +937,14 @@ function testCarouselSelectionDoesNotRerenderWorkspace() {
         };
     };
     const cards = [makeCard(first), makeCard(second)];
+    const carouselClasses = new Set();
     const carousel = {
         dataset: {},
+        classList: {
+            add: value => carouselClasses.add(value),
+            remove: value => carouselClasses.delete(value),
+            contains: value => carouselClasses.has(value),
+        },
         scrollLeft: 0,
         clientWidth: 100,
         querySelectorAll: selector => selector === '.model-review-card' ? cards : [],
@@ -947,6 +953,7 @@ function testCarouselSelectionDoesNotRerenderWorkspace() {
     Object.assign(cards[0], { offsetLeft: 0, offsetWidth: 100 });
     Object.assign(cards[1], { offsetLeft: 100, offsetWidth: 100 });
     let renders = 0;
+    const timers = [];
     const context = {
         appState: {
             mode: 'model-review',
@@ -958,7 +965,12 @@ function testCarouselSelectionDoesNotRerenderWorkspace() {
             modelReviewResolvedPaths: new Set(),
         },
         CSS: { escape: value => value },
+        clearTimeout: () => {},
         console,
+        setTimeout: callback => {
+            timers.push(callback);
+            return timers.length;
+        },
         els: {
             wallpaperGrid: {
                 querySelector: selector => selector === '.model-review-carousel'
@@ -985,12 +997,17 @@ function testCarouselSelectionDoesNotRerenderWorkspace() {
     assert.equal(scrolls.at(-1)[1], 'smooth');
     assert.equal(focused.at(-1), second.path);
     assert.equal(renders, 0);
+    assert.equal(carouselClasses.has('is-programmatic-scrolling'), true);
 
     // The first frame of a smooth scroll is still geometrically closest to
     // the old card. It must not roll back an explicit arrow-key target.
     renderer.syncModelReviewSelectionFromScroll(carousel);
     assert.equal(context.appState.modelReviewSelectedPath, second.path);
     assert.equal(carousel.dataset.selectionTarget, second.path);
+
+    timers.at(-1)();
+    assert.equal(carouselClasses.has('is-programmatic-scrolling'), false);
+    assert.equal(carousel.dataset.selectionTarget, undefined);
 
     assert.equal(renderer.moveModelReviewSelection(1), false);
     assert.equal(context.appState.modelReviewSelectedPath, second.path);
@@ -1195,6 +1212,29 @@ function testModelReviewHydratesOnlyActiveCardAndNeighbors() {
     assert.equal(cards[1].images[1].fetchPriority, 'low');
     assert.equal(cards[1].images[2].fetchPriority, 'auto');
     assert.equal(cards[3].images[2].fetchPriority, 'auto');
+
+    renderer.markActiveModelReviewCard(
+        carousel,
+        'image-4',
+        { deferNeighborImages: true },
+    );
+    assert.equal(cards[4].images[0].src, 'thumb-4-backdrop');
+    assert.equal(cards[4].images[1].src, 'thumb-4-foreground');
+    assert.equal(cards[4].images[2].src, '', 'rapid navigation defers a new full decode');
+    renderer.markActiveModelReviewCard(carousel, 'image-2', { force: true });
+
+    renderer.markActiveModelReviewCard(
+        carousel,
+        'image-3',
+        { deferNeighborImages: true },
+    );
+    assert.equal(cards[3].images[2].src, 'full-3');
+    assert.equal(cards[4].images[2].src, '', 'the next decode waits for scrollend');
+    assert.equal(cards[1].images[2].src, 'full-1', 'source teardown waits for scrollend');
+
+    renderer.markActiveModelReviewCard(carousel, 'image-3', { force: true });
+    assert.equal(cards[4].images[2].src, 'full-4');
+    assert.equal(cards[1].images[2].src, '');
 
     renderer.markActiveModelReviewCard(carousel, 'image-4');
     assert.equal(cards[2].images[0].src, 'thumb-2-backdrop');

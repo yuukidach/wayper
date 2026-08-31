@@ -7,11 +7,16 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+import zlib
 from pathlib import Path
 
 from .config import WayperConfig
 from .process import windows_no_window_kwargs
 from .util import atomic_write
+
+_windows_recycle_cache: tuple[float, dict[str, Path]] | None = None
+_WINDOWS_RECYCLE_CACHE_SECONDS = 1.0
 
 
 def _system_trash_dirs() -> list[Path]:
@@ -107,10 +112,73 @@ def _write_trash_map(config: WayperConfig, mapping: dict[str, str]) -> None:
     atomic_write(config.trash_map_file, json.dumps(mapping))
 
 
+def _windows_recycle_bin_items() -> dict[str, Path]:
+    """Return original filenames mapped to their current Recycle Bin paths."""
+    global _windows_recycle_cache
+
+    now = time.monotonic()
+    if (
+        _windows_recycle_cache is not None
+        and now - _windows_recycle_cache[0] < _WINDOWS_RECYCLE_CACHE_SECONDS
+    ):
+        return _windows_recycle_cache[1]
+
+    script = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$shell = New-Object -ComObject Shell.Application
+$recycle = $shell.Namespace(10)
+if ($null -eq $recycle) { exit 1 }
+$items = @($recycle.Items() | ForEach-Object {
+    [PSCustomObject]@{ Name = $_.Name; Path = $_.Path }
+})
+ConvertTo-Json -Compress -InputObject @($items)
+"""
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+            **windows_no_window_kwargs(),
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return {}
+    if result.returncode != 0 or not result.stdout.strip():
+        return {}
+    try:
+        raw = json.loads(result.stdout)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(raw, list):
+        return {}
+
+    found: dict[str, Path] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("Name")
+        path = item.get("Path")
+        if isinstance(name, str) and name and isinstance(path, str) and path:
+            # If duplicate names exist, Shell.Application returns newest-first
+            # on current Windows versions. Preserve the first usable match.
+            found.setdefault(name, Path(path))
+    _windows_recycle_cache = (now, found)
+    return found
+
+
+def _invalidate_windows_recycle_cache() -> None:
+    global _windows_recycle_cache
+    _windows_recycle_cache = None
+
+
 def find_in_trash(config: WayperConfig, filename: str) -> Path | None:
     """Find a file in system trash — check stored path first, then scan dirs."""
     if sys.platform == "win32":
-        return None
+        return _windows_recycle_bin_items().get(filename)
 
     # Check stored trash path (works without FDA)
     mapping = _read_trash_map(config)
@@ -130,8 +198,11 @@ def find_in_trash(config: WayperConfig, filename: str) -> Path | None:
 
 def find_many_in_trash(config: WayperConfig, filenames: set[str]) -> dict[str, Path]:
     """Find multiple files in system trash while reading trash state once."""
-    if not filenames or sys.platform == "win32":
+    if not filenames:
         return {}
+    if sys.platform == "win32":
+        items = _windows_recycle_bin_items()
+        return {filename: items[filename] for filename in filenames if filename in items}
 
     found: dict[str, Path] = {}
     mapping = _read_trash_map(config)
@@ -185,6 +256,10 @@ def trash_state_token(config: WayperConfig) -> tuple[int, ...]:
         except OSError:
             return 0
 
+    if sys.platform == "win32":
+        items = _windows_recycle_bin_items()
+        signature = "\0".join(f"{name}\0{path}" for name, path in sorted(items.items()))
+        return (mtime(config.trash_map_file), zlib.crc32(signature.encode("utf-8")))
     return (mtime(config.trash_map_file), *(mtime(path) for path in _trash_search_dirs(config)))
 
 
@@ -218,6 +293,9 @@ def _trash_file(config: WayperConfig, src: Path) -> None:
         import send2trash
 
         send2trash.send2trash(src)
+
+    if sys.platform == "win32":
+        _invalidate_windows_recycle_cache()
 
     if trash_path:
         mapping = _read_trash_map(config)
@@ -308,6 +386,7 @@ def restore_from_trash(config: WayperConfig, filename: str, dest_dir: Path) -> P
         restored = _restore_from_windows_recycle_bin(filename, dest_dir)
         if restored is None:
             return None
+        _invalidate_windows_recycle_cache()
         mapping = _read_trash_map(config)
         mapping.pop(filename, None)
         _write_trash_map(config, mapping)

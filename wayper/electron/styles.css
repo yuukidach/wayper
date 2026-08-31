@@ -3738,6 +3738,11 @@ footer {
 .model-review-grid .model-review-carousel.is-dragging,
 .model-review-grid .model-review-carousel.is-wheel-scrolling {
   cursor: grabbing;
+}
+
+.model-review-grid .model-review-carousel.is-dragging,
+.model-review-grid .model-review-carousel.is-wheel-scrolling,
+.model-review-grid .model-review-carousel.is-programmatic-scrolling {
   scroll-behavior: auto;
   scroll-snap-type: none;
 }
@@ -3869,11 +3874,15 @@ footer {
     width 380ms cubic-bezier(0.22, 1, 0.36, 1),
     margin-right 380ms cubic-bezier(0.22, 1, 0.36, 1),
     opacity 260ms cubic-bezier(0.22, 1, 0.36, 1),
-    filter 260ms cubic-bezier(0.22, 1, 0.36, 1),
     transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    border-color 240ms ease,
-    box-shadow 320ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: transform, opacity, flex-basis;
+    border-color 240ms ease;
+  will-change: auto;
+}
+
+.model-review-grid .model-review-card.active,
+.model-review-grid .model-review-card.near-active,
+.model-review-grid .model-review-card.is-resolving {
+  will-change: transform, opacity;
 }
 
 .model-review-grid .model-review-card.is-resolving {

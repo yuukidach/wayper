@@ -154,8 +154,9 @@ class RegressionTest(unittest.TestCase):
                     "wayper.trash._device_id",
                     side_effect=lambda path: 2 if mount in path.parents else 1,
                 ),
+                patch("wayper.trash.sys.platform", "linux"),
                 patch("wayper.trash._mount_point", return_value=mount),
-                patch("wayper.trash.os.getuid", return_value=1000),
+                patch("wayper.trash.os.getuid", return_value=1000, create=True),
             ):
                 found = find_many_in_trash(config, {"disliked.jpg", "banned.png"})
                 payload = _blocklist_payload(config)

@@ -9,7 +9,10 @@ from wayper.config import WayperConfig, load_config
 
 
 @pytest.fixture(autouse=True)
-def linux(monkeypatch):
+def linux(monkeypatch, tmp_path_factory):
+    # Resolve pytest's base temp directory before changing the process-wide
+    # platform value. On Windows, pytest otherwise looks for os.getuid().
+    tmp_path_factory.getbasetemp()
     monkeypatch.setattr(sys, "platform", "linux")
 
 
@@ -129,12 +132,41 @@ def test_windows_uv_environment_uses_hidden_script_launcher(tmp_path, monkeypatc
     _mock_windows_registration(monkeypatch, startup, launcher, registry)
     monkeypatch.setattr(autostart, "_windows_needs_script_launcher", lambda: True)
     monkeypatch.setattr(autostart, "_gui_executable", lambda: gui)
+    monkeypatch.setattr(autostart, "_windows_uv_launch_arguments", lambda: None)
     monkeypatch.setattr(sys, "executable", str(python))
 
     autostart.set_autostart(WayperConfig(), True, config_path=tmp_path / "config.toml")
 
     assert registry["Wayper"] == f'wscript.exe //B //NoLogo "{launcher}"'
     assert f'"""{python}"" -m wayper.server.launcher --hidden' in launcher.read_text()
+
+
+def test_windows_source_autostart_uses_uv_instead_of_venv_python(tmp_path, monkeypatch):
+    startup = tmp_path / "Startup" / "Wayper.cmd"
+    launcher = tmp_path / "config" / "WayperAutostart.vbs"
+    gui = tmp_path / "venv" / "Scripts" / "wayper-gui.exe"
+    registry = {}
+    uv_arguments = [
+        str(tmp_path / "uv.exe"),
+        "run",
+        "--project",
+        str(tmp_path / "project with spaces"),
+        "python",
+        "-m",
+        "wayper.server.launcher",
+        "--hidden",
+    ]
+    _mock_windows_registration(monkeypatch, startup, launcher, registry)
+    monkeypatch.setattr(autostart, "_windows_needs_script_launcher", lambda: True)
+    monkeypatch.setattr(autostart, "_gui_executable", lambda: gui)
+    monkeypatch.setattr(autostart, "_windows_uv_launch_arguments", lambda: uv_arguments)
+
+    autostart.set_autostart(WayperConfig(), True, config_path=tmp_path / "config.toml")
+
+    contents = launcher.read_text()
+    assert str(tmp_path / "uv.exe") in contents
+    assert 'run --project ""' in contents
+    assert ".venv\\Scripts\\python.exe" not in contents
 
 
 def test_windows_disable_removes_registry_and_legacy_script(tmp_path, monkeypatch):

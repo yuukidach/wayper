@@ -56,8 +56,8 @@ def test_wayper_gui_uses_windowed_entry_point() -> None:
     project_root = Path(__file__).resolve().parents[1]
     metadata = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert "wayper-gui" not in metadata["project"]["scripts"]
-    assert metadata["project"]["gui-scripts"]["wayper-gui"] == ("wayper.server.launcher:run_app")
+    assert metadata["project"]["scripts"]["wayper-gui"] == ("wayper.server.launcher:run_app")
+    assert "gui-scripts" not in metadata["project"]
 
 
 def test_source_launcher_finds_repository_icon() -> None:

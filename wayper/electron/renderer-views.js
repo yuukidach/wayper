@@ -1587,7 +1587,11 @@ function modelReviewCardSelector(path) {
     return '.model-review-card[data-path="' + CSS.escape(path) + '"]';
 }
 
-function markActiveModelReviewCard(carousel, path, { force = false } = {}) {
+function markActiveModelReviewCard(
+    carousel,
+    path,
+    { force = false, deferNeighborImages = false } = {},
+) {
     if (!carousel) return;
     const deckBusy = carousel.classList?.contains?.('is-resolving-card') === true;
     if (carousel.dataset?.activePath === path && !deckBusy && !force) return;
@@ -1596,12 +1600,13 @@ function markActiveModelReviewCard(carousel, path, { force = false } = {}) {
     const activeIndex = cards.findIndex(card => card.dataset.path === path);
     cards.forEach((card, index) => {
         const active = card.dataset.path === path;
+        const distance = activeIndex >= 0 ? Math.abs(index - activeIndex) : cards.length;
         card.classList.toggle('active', active);
+        card.classList.toggle('near-active', !active && distance === 1);
         card.classList.toggle('before-active', activeIndex >= 0 && index < activeIndex);
         card.classList.toggle('after-active', activeIndex >= 0 && index > activeIndex);
         card.setAttribute('aria-current', String(active));
         card.tabIndex = active ? 0 : -1;
-        const distance = activeIndex >= 0 ? Math.abs(index - activeIndex) : cards.length;
         if (card.style) {
             card.style.zIndex = String(Math.max(1, 20 - distance));
             card.style.setProperty?.('--review-card-depth', `${Math.min(distance, 4) * 4 + 10}px`);
@@ -1610,9 +1615,17 @@ function markActiveModelReviewCard(carousel, path, { force = false } = {}) {
                 String(Math.max(0.88, 0.95 - Math.min(distance, 4) * 0.012)),
             );
         }
-        if (distance <= 1) {
-            hydrateModelReviewCardImages(card, { priority: active });
-        } else {
+        // The target card was hydrated while it was the previous card's
+        // neighbor. Keep navigation frames free of new image decodes and src
+        // teardown; synchronize the new neighbors once scrolling settles.
+        if (active) {
+            hydrateModelReviewCardImages(card, {
+                priority: true,
+                includeFull: !deferNeighborImages,
+            });
+        } else if (!deferNeighborImages && distance <= 1) {
+            hydrateModelReviewCardImages(card);
+        } else if (!deferNeighborImages) {
             releaseModelReviewCardImages(card);
         }
         const busy = card.classList.contains('is-busy');
@@ -1625,6 +1638,40 @@ function markActiveModelReviewCard(carousel, path, { force = false } = {}) {
     const next = deck?.querySelector?.('.model-review-deck-nav.next');
     if (previous) previous.disabled = cards.length < 2 || activeIndex <= 0;
     if (next) next.disabled = cards.length < 2 || activeIndex < 0 || activeIndex >= cards.length - 1;
+}
+
+function finishModelReviewProgrammaticScroll(carousel) {
+    if (!carousel) return;
+    if (
+        carousel._modelReviewScrollSettleTimer !== undefined
+        && typeof clearTimeout === 'function'
+    ) {
+        clearTimeout(carousel._modelReviewScrollSettleTimer);
+    }
+    delete carousel._modelReviewScrollSettleTimer;
+    carousel.classList?.remove?.('is-programmatic-scrolling');
+    const path = carousel.dataset?.selectionTarget || appState.modelReviewSelectedPath;
+    if (carousel.dataset) delete carousel.dataset.selectionTarget;
+    if (path) markActiveModelReviewCard(carousel, path, { force: true });
+}
+
+function beginModelReviewProgrammaticScroll(carousel) {
+    if (!carousel) return;
+    if (
+        carousel._modelReviewScrollSettleTimer !== undefined
+        && typeof clearTimeout === 'function'
+    ) {
+        clearTimeout(carousel._modelReviewScrollSettleTimer);
+    }
+    carousel.classList?.add?.('is-programmatic-scrolling');
+    if (typeof setTimeout === 'function') {
+        // Chromium emits scrollend for smooth scrolling. The timer covers an
+        // interrupted animation or a renderer that does not support it yet.
+        carousel._modelReviewScrollSettleTimer = setTimeout(
+            () => finishModelReviewProgrammaticScroll(carousel),
+            800,
+        );
+    }
 }
 
 function scrollModelReviewCardIntoView(carousel, card, behavior = 'smooth') {
@@ -1655,15 +1702,20 @@ function selectModelReviewItem(
     if (!item) return false;
     appState.modelReviewSelectedPath = path;
     const carousel = els.wallpaperGrid?.querySelector('.model-review-carousel');
-    markActiveModelReviewCard(carousel, path);
     const card = carousel?.querySelector(modelReviewCardSelector(path));
     // While a smooth keyboard scroll is starting, its first scroll event still
     // reports the old card as geometrically nearest. Keep the explicit target
     // authoritative until scrolling settles instead of immediately undoing the
     // ArrowLeft/ArrowRight selection.
     if (carousel?.dataset) carousel.dataset.selectionTarget = path;
+    const smooth = behavior === 'smooth';
+    if (smooth) beginModelReviewProgrammaticScroll(carousel);
+    markActiveModelReviewCard(carousel, path, { deferNeighborImages: smooth });
     const scrolling = scrollModelReviewCardIntoView(carousel, card, behavior);
-    if (!scrolling && carousel?.dataset) delete carousel.dataset.selectionTarget;
+    if (!scrolling) {
+        if (smooth) finishModelReviewProgrammaticScroll(carousel);
+        else if (carousel?.dataset) delete carousel.dataset.selectionTarget;
+    }
     if (focus && card) {
         card?.focus?.({ preventScroll: true });
     }
@@ -1756,6 +1808,10 @@ function setupModelReviewCarousel(carousel) {
         });
     }, { passive: true });
     carousel.addEventListener('scrollend', () => {
+        if (carousel.classList.contains('is-programmatic-scrolling')) {
+            finishModelReviewProgrammaticScroll(carousel);
+            return;
+        }
         if (
             carousel.classList.contains('is-dragging')
             || carousel.classList.contains('is-wheel-scrolling')
@@ -1797,6 +1853,9 @@ function setupModelReviewCarousel(carousel) {
             : event.deltaX;
         if (!delta) return;
         event.preventDefault();
+        if (carousel.classList.contains('is-programmatic-scrolling')) {
+            finishModelReviewProgrammaticScroll(carousel);
+        }
         delete carousel.dataset.selectionTarget;
         const unit = event.deltaMode === 1
             ? 28
@@ -1815,6 +1874,9 @@ function setupModelReviewCarousel(carousel) {
         if (carousel.classList.contains('is-resolving-card')) return;
         if (event.pointerType === 'mouse' && event.button !== 0) return;
         if (event.target?.closest?.('.model-review-card-decision')) return;
+        if (carousel.classList.contains('is-programmatic-scrolling')) {
+            finishModelReviewProgrammaticScroll(carousel);
+        }
         delete carousel.dataset.selectionTarget;
         pointerId = event.pointerId;
         startX = event.clientX;
@@ -1891,12 +1953,19 @@ function releaseModelReviewCardImages(card) {
     }
 }
 
-function hydrateModelReviewCardImages(card, { priority = false } = {}) {
+function hydrateModelReviewCardImages(
+    card,
+    { priority = false, includeFull = true } = {},
+) {
     for (const image of card?.querySelectorAll?.(
         '.model-review-card-backdrop, .model-review-card-image',
     ) || []) {
-        image.loading = priority ? 'eager' : 'lazy';
         const fullPreview = image.classList?.contains?.('model-review-card-full-image');
+        if (fullPreview && !includeFull) {
+            if (modelReviewImageHasSource(image)) image.fetchPriority = priority ? 'high' : 'auto';
+            continue;
+        }
+        image.loading = priority ? 'eager' : 'lazy';
         image.fetchPriority = priority ? 'high' : fullPreview ? 'auto' : 'low';
         if (!modelReviewImageHasSource(image) && image.dataset?.src) {
             image.src = image.dataset.src;
