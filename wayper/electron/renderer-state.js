@@ -226,6 +226,8 @@ const els = {
     countFavorites: document.getElementById('count-favorites'),
     countBlocklist: document.getElementById('count-blocklist'),
     countModelReview: document.getElementById('count-model-review'),
+    countModelReviewHeld: document.getElementById('count-model-review-held'),
+    countModelReviewRecommended: document.getElementById('count-model-review-recommended'),
 
     // Search
     searchInput: document.getElementById('search-input'),

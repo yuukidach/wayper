@@ -3503,8 +3503,27 @@ footer {
   white-space: nowrap;
 }
 
-.model-review-nav .badge {
+.model-review-nav-counts {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 34px;
   margin-left: auto;
+  color: var(--overlay0);
+  background-color: rgb(108 112 134 / 10%);
+}
+
+.model-review-nav-count-separator {
+  width: 1px;
+  height: 10px;
+  background-color: currentColor;
+  opacity: 0.55;
+}
+
+#btn-model-review.active .model-review-nav-counts {
+  color: var(--subtext0);
+  background-color: rgb(205 214 244 / 6%);
 }
 
 .model-review-workspace {

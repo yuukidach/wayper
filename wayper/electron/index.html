@@ -93,7 +93,11 @@
                         <button id="btn-model-review" class="nav-item filter-nav-item model-review-nav" title="Review queue" aria-label="Review queue">
                             <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="13" height="16" rx="2"/><path d="M4 7v12a2 2 0 0 0 2 2h10"/></svg></span>
                             <span class="filter-nav-copy"><span class="filter-nav-title">Review</span></span>
-                            <span id="count-model-review" class="badge"></span><kbd>M</kbd>
+                            <span id="count-model-review" class="badge model-review-nav-counts" aria-label="Review counts">
+                                <span id="count-model-review-held" class="model-review-nav-count" title="Auto-held"></span>
+                                <span class="model-review-nav-count-separator" aria-hidden="true"></span>
+                                <span id="count-model-review-recommended" class="model-review-nav-count" title="Recommended"></span>
+                            </span><kbd>M</kbd>
                         </button>
                         <button id="btn-blocklist" class="nav-item filter-nav-item" title="Blocklist and tag rules" aria-label="Blocklist and tag rules">
                             <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg></span>

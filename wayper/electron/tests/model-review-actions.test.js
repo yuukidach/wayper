@@ -85,6 +85,45 @@ function testRecommendationCarouselUsesTwentyFourItemWindow() {
     assert.equal(renderer.modelReviewVisibleItems()[23].path, 'candidate-25.jpg');
 }
 
+function testReviewNavKeepsHeldAndRecommendedCountsSeparate() {
+    const element = () => ({
+        textContent: '',
+        title: '',
+        setAttribute() {},
+    });
+    const held = element();
+    const recommended = element();
+    const context = {
+        appState: {
+            status: { model_review_count: 3 },
+            modelReviewData: {
+                items: [{ path: 'held.jpg' }],
+                recommendations: [{ path: 'recommended.jpg' }],
+                pending_count: 3,
+                recommendation_count: 11,
+            },
+        },
+        els: {
+            countModelReviewHeld: held,
+            countModelReviewRecommended: recommended,
+        },
+        console,
+    };
+    context.window = context;
+    const renderer = loadRendererScript(
+        'renderer-views.js',
+        context,
+        ['updateModelReviewNavCounts'],
+    );
+
+    renderer.updateModelReviewNavCounts();
+
+    assert.equal(held.textContent, '3');
+    assert.equal(recommended.textContent, '11');
+    assert.equal(held.title, '3 auto-held');
+    assert.equal(recommended.title, '11 recommended');
+}
+
 async function testStatusRequestsStayScopedToSelectedMonitor() {
     const pending = [];
     const context = {
@@ -2038,6 +2077,7 @@ async function testBlocklistMonitorSwitchKeepsSharedViewMounted() {
     testRecommendationCountPreservesFullCandidateTotal();
     testImageOrientationUsesApiFieldAndSupportsLegacyWindowsPaths();
     testRecommendationCarouselUsesTwentyFourItemWindow();
+    testReviewNavKeepsHeldAndRecommendedCountsSeparate();
     await testStatusRequestsStayScopedToSelectedMonitor();
     await testSuggestionRefreshStaysInPlace();
     await testManualDislikeUsesDistinctFeedbackEndpoint();

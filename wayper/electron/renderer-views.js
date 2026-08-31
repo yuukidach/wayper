@@ -45,6 +45,39 @@ function updateUI() {
         updateFilterStrategyUI();
     }
 }
+
+function updateModelReviewNavCounts() {
+    if (!els.countModelReviewHeld || !els.countModelReviewRecommended) return;
+    const reviewData = modelReviewDataIsCurrent() ? appState.modelReviewData : null;
+    let cachedRecommendations = null;
+    if (!reviewData && typeof cachedModelReviewRecommendations === 'function') {
+        cachedRecommendations = cachedModelReviewRecommendations(appState.currentOrient)?.data || null;
+    }
+    const held = Number(
+        appState.status.model_review_count ?? reviewData?.pending_count,
+    );
+    const recommended = Number(
+        reviewData?.recommendation_count
+        ?? cachedRecommendations?.diagnostics?.candidate_count
+        ?? cachedRecommendations?.items?.length
+        ?? 0,
+    );
+    const heldCount = Number.isFinite(held) ? Math.max(0, held) : 0;
+    const recommendationCount = Number.isFinite(recommended)
+        ? Math.max(0, recommended)
+        : 0;
+
+    els.countModelReviewHeld.textContent = String(heldCount);
+    els.countModelReviewRecommended.textContent = String(recommendationCount);
+    els.countModelReviewHeld.title = `${heldCount} auto-held`;
+    els.countModelReviewRecommended.title = `${recommendationCount} recommended`;
+    els.countModelReviewHeld.setAttribute?.('aria-label', `${heldCount} auto-held`);
+    els.countModelReviewRecommended.setAttribute?.(
+        'aria-label',
+        `${recommendationCount} recommended`,
+    );
+}
+
 function updateStatusUI() {
     const active = !!appState.status.auto_rotation;
     const paused = !!appState.status.rotation_paused;
@@ -59,22 +92,8 @@ function updateStatusUI() {
     if (appState.status.blocklist_count !== undefined) {
         els.countBlocklist.innerText = appState.status.blocklist_count;
     }
-    if (els.countModelReview && appState.status.model_review_count !== undefined) {
-        const reviewData = modelReviewModeActive() && modelReviewDataIsCurrent()
-            ? appState.modelReviewData
-            : null;
-        const held = Number(
-            reviewData?.pending_count ?? appState.status.model_review_count,
-        );
-        const recommended = Number(reviewData?.recommendation_count);
-        const heldCount = Number.isFinite(held) ? Math.max(0, held) : 0;
-        const recommendationCount = Number.isFinite(recommended)
-            ? Math.max(0, recommended)
-            : 0;
-        els.countModelReview.innerText = heldCount + recommendationCount;
-        els.countModelReview.title = reviewData
-            ? `${heldCount} auto-held · ${recommendationCount} recommended`
-            : `${heldCount} auto-held`;
+    if (appState.status.model_review_count !== undefined) {
+        updateModelReviewNavCounts();
     }
 
     if (active) {

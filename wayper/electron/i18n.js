@@ -27,6 +27,7 @@
         'Filtering workflows': '筛选与确认',
         Review: '待确认',
         'Review queue': '待确认图片',
+        'Review counts': '待确认数量',
         Blocklist: '已屏蔽',
         'Blocklist and tag rules': '已屏蔽图片与排除规则',
         'Automatic filtering': '下载筛选方式',
