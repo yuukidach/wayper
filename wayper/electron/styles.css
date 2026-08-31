@@ -3961,6 +3961,16 @@ footer {
   filter: drop-shadow(0 12px 28px rgb(0 0 0 / 28%));
 }
 
+.model-review-grid .model-review-card-full-image {
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 140ms ease-out;
+}
+
+.model-review-grid .model-review-card-full-image.is-ready {
+  opacity: 1;
+}
+
 .model-review-grid .model-review-card-image.missing {
   opacity: 0.28;
 }

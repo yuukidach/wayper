@@ -1855,19 +1855,11 @@ function modelReviewImageHasSource(image) {
 }
 
 function releaseModelReviewCardImages(card) {
-    for (const image of card?.querySelectorAll?.(
-        '.model-review-card-backdrop, .model-review-card-image',
-    ) || []) {
-        if (image._modelReviewFullLoader) {
-            image._modelReviewFullLoader.onload = null;
-            image._modelReviewFullLoader.onerror = null;
-            image._modelReviewFullLoader = null;
-        }
-        if (image._modelReviewFullQueueHandler) {
-            image.removeEventListener?.('load', image._modelReviewFullQueueHandler);
-            image._modelReviewFullQueueHandler = null;
-        }
-        if (image.dataset) delete image.dataset.fullState;
+    // Keep the inexpensive thumbnail layers resident once they have painted.
+    // Clearing them made a revisited/shifted card expose its empty background
+    // while the browser requested and decoded the same thumbnail again.
+    for (const image of card?.querySelectorAll?.('.model-review-card-full-image') || []) {
+        image.classList?.remove?.('is-ready');
         if (typeof image.removeAttribute === 'function') {
             image.removeAttribute('src');
         } else {
@@ -1876,57 +1868,16 @@ function releaseModelReviewCardImages(card) {
     }
 }
 
-function promoteModelReviewCardImage(image) {
-    const fullSource = image?.dataset?.fullSrc;
-    if (!fullSource || image.dataset.fullState) return;
-    if (typeof image.addEventListener === 'function' && image.complete !== true) {
-        image.dataset.fullState = 'waiting';
-        const startPromotion = () => {
-            image.removeEventListener?.('load', startPromotion);
-            image._modelReviewFullQueueHandler = null;
-            if (image.dataset?.fullState !== 'waiting') return;
-            delete image.dataset.fullState;
-            promoteModelReviewCardImage(image);
-        };
-        image._modelReviewFullQueueHandler = startPromotion;
-        image.addEventListener('load', startPromotion, { once: true });
-        return;
-    }
-    image.dataset.fullState = 'loading';
-
-    const applyFullSource = () => {
-        image._modelReviewFullLoader = null;
-        if (image.dataset?.fullState !== 'loading' || image.isConnected === false) return;
-        image.src = fullSource;
-        image.dataset.fullState = 'loaded';
-    };
-    if (typeof Image !== 'function') {
-        applyFullSource();
-        return;
-    }
-
-    const loader = new Image();
-    image._modelReviewFullLoader = loader;
-    loader.decoding = 'async';
-    loader.fetchPriority = 'high';
-    loader.onload = applyFullSource;
-    loader.onerror = () => {
-        if (image.dataset?.fullState === 'loading') image.dataset.fullState = 'failed';
-        image._modelReviewFullLoader = null;
-    };
-    loader.src = fullSource;
-}
-
 function hydrateModelReviewCardImages(card, { priority = false } = {}) {
     for (const image of card?.querySelectorAll?.(
         '.model-review-card-backdrop, .model-review-card-image',
     ) || []) {
         image.loading = priority ? 'eager' : 'lazy';
-        image.fetchPriority = priority ? 'high' : 'low';
+        const fullPreview = image.classList?.contains?.('model-review-card-full-image');
+        image.fetchPriority = priority ? 'high' : fullPreview ? 'auto' : 'low';
         if (!modelReviewImageHasSource(image) && image.dataset?.src) {
             image.src = image.dataset.src;
         }
-        if (priority && image.dataset?.fullSrc) promoteModelReviewCardImage(image);
     }
 }
 
@@ -1987,19 +1938,41 @@ function createModelReviewCard(item, index, total) {
     backdrop.draggable = false;
     backdrop.setAttribute('aria-hidden', 'true');
     const image = document.createElement('img');
-    image.className = 'model-review-card-image';
-    // Paint the thumbnail immediately, then promote only the active card to
-    // a screen-sized cached preview once that resource is ready. Neighbours
-    // remain cheap thumbnails, so arrows never wait on large original decodes.
+    image.className = 'model-review-card-image model-review-card-thumbnail';
+    // Keep a contained thumbnail painted under the full preview. Replacing the
+    // source of one image briefly exposed the blurred backdrop during decode.
     image.dataset.src = previewUrl;
-    image.dataset.fullSrc = sourceUrl;
     image.alt = item.name || 'Model review candidate';
     image.decoding = 'async';
     image.loading = 'lazy';
     image.fetchPriority = 'low';
     image.draggable = false;
     image.onerror = () => image.classList.add('missing');
-    preview.append(backdrop, image);
+    const fullImage = document.createElement('img');
+    fullImage.className = 'model-review-card-image model-review-card-full-image';
+    // Adjacent cards are hydrated alongside the active card, so the next
+    // screen-sized preview can be generated and decoded before a decision
+    // advances the deck.
+    fullImage.dataset.src = sourceUrl;
+    fullImage.alt = '';
+    fullImage.decoding = 'async';
+    fullImage.loading = 'lazy';
+    fullImage.fetchPriority = 'auto';
+    fullImage.draggable = false;
+    fullImage.setAttribute('aria-hidden', 'true');
+    fullImage.onload = async () => {
+        try {
+            await fullImage.decode?.();
+        } catch {
+            // A successful load can still reject decode while the renderer is
+            // being torn down. Keep the thumbnail visible in that case.
+        }
+        if (fullImage.isConnected !== false && modelReviewImageHasSource(fullImage)) {
+            fullImage.classList.add('is-ready');
+        }
+    };
+    fullImage.onerror = () => fullImage.classList.remove('is-ready');
+    preview.append(backdrop, image, fullImage);
     card.appendChild(preview);
 
     const actions = document.createElement('div');

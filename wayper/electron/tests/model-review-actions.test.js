@@ -1006,23 +1006,28 @@ function testLeavingModelReviewClearsDeckWithoutMatchingCache() {
 }
 
 function testModelReviewHydratesOnlyActiveCardAndNeighbors() {
-    const makeImage = (path, fullPath = null) => {
+    const makeImage = (path, className) => {
+        const classes = new Set(className.split(' '));
         const image = {
             src: '',
             dataset: { src: path },
             loading: 'lazy',
             fetchPriority: 'low',
+            classList: {
+                contains: value => classes.has(value),
+                remove: value => classes.delete(value),
+            },
             getAttribute: name => name === 'src' ? image.src : null,
             removeAttribute: name => { if (name === 'src') image.src = ''; },
         };
-        if (fullPath) image.dataset.fullSrc = fullPath;
         return image;
     };
     const makeCard = index => {
         const classes = new Set(['model-review-card']);
         const images = [
-            makeImage(`thumb-${index}-backdrop`),
-            makeImage(`thumb-${index}-foreground`, `full-${index}`),
+            makeImage(`thumb-${index}-backdrop`, 'model-review-card-backdrop'),
+            makeImage(`thumb-${index}-foreground`, 'model-review-card-image'),
+            makeImage(`full-${index}`, 'model-review-card-image model-review-card-full-image'),
         ];
         return {
             dataset: { path: `image-${index}` },
@@ -1035,9 +1040,14 @@ function testModelReviewHydratesOnlyActiveCardAndNeighbors() {
             },
             style: { setProperty: () => {} },
             setAttribute: () => {},
-            querySelectorAll: selector => selector.includes('model-review-card-backdrop')
-                ? images
-                : [],
+            querySelectorAll: selector => {
+                if (selector === '.model-review-card-full-image') {
+                    return images.filter(image => image.classList.contains(
+                        'model-review-card-full-image',
+                    ));
+                }
+                return selector.includes('model-review-card-backdrop') ? images : [];
+            },
             images,
         };
     };
@@ -1048,14 +1058,7 @@ function testModelReviewHydratesOnlyActiveCardAndNeighbors() {
         querySelectorAll: selector => selector === '.model-review-card' ? cards : [],
         closest: () => null,
     };
-    class ImmediateImage {
-        set src(value) {
-            this._src = value;
-            this.onload?.();
-        }
-        get src() { return this._src; }
-    }
-    const context = { console, Image: ImmediateImage };
+    const context = { console };
     context.window = context;
     const renderer = loadRendererScript(
         'renderer-views.js',
@@ -1072,16 +1075,23 @@ function testModelReviewHydratesOnlyActiveCardAndNeighbors() {
         assert.ok(cards[index].images.every(image => image.src !== ''));
     }
     assert.equal(cards[2].images[0].src, 'thumb-2-backdrop');
-    assert.equal(cards[2].images[1].src, 'full-2');
+    assert.equal(cards[2].images[1].src, 'thumb-2-foreground');
+    assert.equal(cards[2].images[2].src, 'full-2');
     assert.equal(cards[1].images[1].src, 'thumb-1-foreground');
+    assert.equal(cards[1].images[2].src, 'full-1');
     assert.equal(cards[3].images[1].src, 'thumb-3-foreground');
+    assert.equal(cards[3].images[2].src, 'full-3');
     assert.ok(cards[2].images.every(image => image.fetchPriority === 'high'));
-    assert.ok(cards[1].images.every(image => image.fetchPriority === 'low'));
-    assert.ok(cards[3].images.every(image => image.fetchPriority === 'low'));
+    assert.equal(cards[1].images[0].fetchPriority, 'low');
+    assert.equal(cards[1].images[1].fetchPriority, 'low');
+    assert.equal(cards[1].images[2].fetchPriority, 'auto');
+    assert.equal(cards[3].images[2].fetchPriority, 'auto');
 
     renderer.markActiveModelReviewCard(carousel, 'image-4');
-    assert.ok(cards[2].images.every(image => image.src === ''));
-    assert.equal(cards[4].images[1].src, 'full-4');
+    assert.equal(cards[2].images[0].src, 'thumb-2-backdrop');
+    assert.equal(cards[2].images[1].src, 'thumb-2-foreground');
+    assert.equal(cards[2].images[2].src, '');
+    assert.equal(cards[4].images[2].src, 'full-4');
 }
 
 function testReviewZeroStateDistinguishesCompletionLearningAndFailure() {
