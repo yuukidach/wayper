@@ -1,12 +1,14 @@
-"""Linux backend: awww + hyprctl."""
+"""Linux backend: awww with Hyprland or Sway session discovery."""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 import time
+from functools import partial
 from pathlib import Path
 
 from ..config import MonitorConfig, TransitionConfig
@@ -14,52 +16,103 @@ from .base import WallpaperBackend
 
 log = logging.getLogger("wayper")
 
+_ROTATED_TRANSFORMS = {"1", "3", "5", "7", "90", "270", "flipped-90", "flipped-270"}
+
+
+def _monitors(data: object, *, sway: bool = False) -> list[MonitorConfig]:
+    monitors: list[MonitorConfig] = []
+    for item in data if isinstance(data, list) else []:
+        if not isinstance(item, dict) or item.get("active") is False:
+            continue
+        mode = item.get("current_mode") if sway else item
+        physical_dimensions = isinstance(mode, dict)
+        dimensions = mode if physical_dimensions else item.get("rect")
+        name = item.get("name")
+        if not isinstance(dimensions, dict) or not name:
+            continue
+        try:
+            width = int(dimensions["width"])
+            height = int(dimensions["height"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        transform = str(item.get("transform", "normal")).lower()
+        if physical_dimensions and transform in _ROTATED_TRANSFORMS:
+            width, height = height, width
+        if width > 0 and height > 0:
+            monitors.append(
+                MonitorConfig(
+                    name=str(name),
+                    width=width,
+                    height=height,
+                    orientation="portrait" if height > width else "landscape",
+                )
+            )
+    return monitors
+
+
+def _focused_output(data: object) -> object | None:
+    if isinstance(data, dict):
+        return data.get("monitor")
+    if isinstance(data, list):
+        return next(
+            (
+                workspace.get("output")
+                for workspace in data
+                if isinstance(workspace, dict) and workspace.get("focused") is True
+            ),
+            None,
+        )
+    return None
+
+
+def _session_order() -> tuple[str, str]:
+    return ("sway", "hyprland") if os.environ.get("SWAYSOCK") else ("hyprland", "sway")
+
+
+def _json_command(command: list[str]) -> object | None:
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return json.loads(result.stdout)
+    except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+_SESSION_QUERIES = {
+    "hyprland": {
+        "monitors": (["hyprctl", "monitors", "-j"], _monitors),
+        "focus": (["hyprctl", "activeworkspace", "-j"], _focused_output),
+    },
+    "sway": {
+        "monitors": (["swaymsg", "-t", "get_outputs", "-r"], partial(_monitors, sway=True)),
+        "focus": (["swaymsg", "-t", "get_workspaces", "-r"], _focused_output),
+    },
+}
+
+
+def _session_query(name: str) -> object | None:
+    for session in _session_order():
+        command, parse = _SESSION_QUERIES[session][name]
+        if result := parse(_json_command(command)):
+            return result
+    return None
+
 
 class LinuxBackend(WallpaperBackend):
-    """Wayland backend using awww and hyprctl."""
+    """Wayland backend using awww with Hyprland or Sway output discovery."""
 
     _notify_id: str | None = None
 
     def detect_monitors(self) -> list[MonitorConfig]:
-        try:
-            result = subprocess.run(
-                ["hyprctl", "monitors", "-j"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            data = json.loads(result.stdout)
-            monitors = []
-            for m in data:
-                # Transform: 0=normal, 1=90, 2=180, 3=270, 4=flip, 5=flip+90, 6=flip+180, 7=flip+270
-                # 0, 2, 4, 6 -> landscape (width > height usually, but check transform)
-                # 1, 3, 5, 7 -> portrait (swapped)
-
-                # However, hyprctl reports width/height as configured (ignoring transform?)
-                # Actually transform rotates the output.
-                # If transform is odd, width and height are swapped for orientation purposes.
-
-                width = m["width"]
-                height = m["height"]
-                transform = m["transform"]
-
-                if transform in (1, 3, 5, 7):
-                    width, height = height, width
-
-                orientation = "portrait" if height > width else "landscape"
-
-                monitors.append(
-                    MonitorConfig(
-                        name=m["name"],
-                        width=width,
-                        height=height,
-                        orientation=orientation,
-                    )
-                )
+        monitors = _session_query("monitors")
+        if isinstance(monitors, list):
             return monitors
-        except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError):
-            log.warning("Failed to detect monitors via hyprctl")
-            return []
+        log.warning("Failed to detect monitors via Hyprland or Sway")
+        return []
 
     def ensure_ready(self) -> None:
         """Start awww-daemon if it is not already running."""
@@ -120,17 +173,8 @@ class LinuxBackend(WallpaperBackend):
             )
 
     def get_focused_monitor(self) -> str | None:
-        try:
-            result = subprocess.run(
-                ["hyprctl", "activeworkspace", "-j"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            data = json.loads(result.stdout)
-            return data.get("monitor")
-        except Exception:
-            return None
+        monitor = _session_query("focus")
+        return str(monitor) if monitor else None
 
     def query_current(self) -> dict[str, Path | None]:
         result = subprocess.run(

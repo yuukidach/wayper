@@ -1652,17 +1652,22 @@ async def ai_suggestions_feedback(body: dict = Body()):
     return {"ok": True}
 
 
-@app.head("/trash/{filename}")
-@app.get("/trash/{filename}")
-def serve_trash_image(filename: str):
-    """Serve an image from system trash (not under download_dir)."""
-    config = get_config()
+def _readable_trash_image(config: WayperConfig, filename: str) -> Path:
+    """Resolve a readable image from the host platform's system trash."""
     trashed = find_in_trash(config, filename)
     if not trashed:
         raise HTTPException(404, "Image not found in trash")
     if not os.access(trashed, os.R_OK):
-        log.warning("No permission to read %s — grant Full Disk Access to your terminal", trashed)
-        raise HTTPException(403, "Permission denied: grant Full Disk Access to terminal")
+        log.warning("No permission to read image from system trash: %s", trashed)
+        raise HTTPException(403, "Permission denied while reading image from system trash")
+    return trashed
+
+
+@app.head("/trash/{filename}")
+@app.get("/trash/{filename}")
+def serve_trash_image(filename: str):
+    """Serve an image from system trash (not under download_dir)."""
+    trashed = _readable_trash_image(get_config(), filename)
     return FileResponse(trashed)
 
 
@@ -1673,12 +1678,7 @@ def serve_trash_thumbnail(filename: str):
     from wayper.image import generate_thumbnail
 
     config = get_config()
-    trashed = find_in_trash(config, filename)
-    if not trashed:
-        raise HTTPException(404, "Image not found in trash")
-    if not os.access(trashed, os.R_OK):
-        log.warning("No permission to read %s — grant Full Disk Access to your terminal", trashed)
-        raise HTTPException(403, "Permission denied: grant Full Disk Access to terminal")
+    trashed = _readable_trash_image(config, filename)
 
     cache_dir = config.download_dir / ".thumbnails" / "__trash"
     thumb = generate_thumbnail(trashed, cache_dir)

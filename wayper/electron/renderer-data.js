@@ -1614,7 +1614,7 @@ async function applySearchFilter(preserveFocus = false, searchRequestId) {
     }
 
     if (!document.querySelector('.wallpaper-card.current')) markCurrentWallpaper();
-    setTimeout(updateGridMetrics, 100);
+    scheduleResponsiveLayout();
     return true;
 }
 

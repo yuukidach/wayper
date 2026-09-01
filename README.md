@@ -100,7 +100,7 @@ Use Review to inspect auto-held downloads and model recommendations. Keep or Dis
 - **Settings** — configure the download folder, Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI. Changes apply to automatic rotation instantly
 - **Keyboard-driven** — every action has a shortcut: grid navigation, lightbox, favorites, Dislike, Ban, and undo
 
-Use `wayper-gui --hidden` to start directly in the tray. On Hyprland, the tray is supplied by a status bar such as Waybar; make sure its `tray` module is enabled.
+Use `wayper-gui --hidden` to start directly in the tray. On Hyprland or Sway, the tray is supplied by a status bar such as Waybar; make sure its `tray` module is enabled.
 
 **Grid view:**
 
@@ -288,7 +288,9 @@ Set the wallpaper download folder and login autostart in the GUI Settings view, 
 - Python 3.12+
 - [Wallhaven API key](https://wallhaven.cc/settings/account)
 
-**Linux:** [awww](https://codeberg.org/LGFae/awww), [Hyprland](https://hyprland.org/)
+**Linux:** [awww](https://codeberg.org/LGFae/awww), plus
+[Hyprland](https://hyprland.org/) or [Sway](https://swaywm.org/). Wayper detects
+the active compositor and preserves transformed output dimensions on both.
 
 **macOS:** Python 3.12+, Node.js (for Electron GUI)
 

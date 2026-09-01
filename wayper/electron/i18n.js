@@ -158,6 +158,8 @@
         'to your terminal in System Settings > Privacy & Security.': '（系统设置 > 隐私与安全性）。',
         'Open System Settings': '打开系统设置',
         'Open Settings': '打开设置',
+        'Cannot read images from the Recycle Bin. Check Wayper file access or restore the image manually.': '无法读取回收站中的图片。请检查 Wayper 的文件访问权限，或手动恢复该图片。',
+        'Cannot read images from Trash. Check the file permissions for your Trash directory.': '无法读取回收站中的图片。请检查回收站目录的文件权限。',
         Analyzing: '分析中',
         'Preparing…': '准备中…',
         Preview: '预览',

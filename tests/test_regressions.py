@@ -20,6 +20,7 @@ from wayper.server.api import (
     ModelReviewClearRequest,
     PreferenceFeedbackRequest,
     UnblockRequest,
+    _readable_trash_image,
     app,
     ban_image_route,
     dislike_image_route,
@@ -69,6 +70,21 @@ class _FakeAsyncClient:
 
 
 class RegressionTest(unittest.TestCase):
+    def test_trash_permission_error_is_platform_neutral(self) -> None:
+        config = WayperConfig()
+        trashed = Path("/system-trash/image.jpg")
+
+        with (
+            patch("wayper.server.api.find_in_trash", return_value=trashed),
+            patch("wayper.server.api.os.access", return_value=False),
+            self.assertRaises(HTTPException) as error,
+        ):
+            _readable_trash_image(config, trashed.name)
+
+        self.assertEqual(error.exception.status_code, 403)
+        self.assertIn("system trash", error.exception.detail)
+        self.assertNotIn("Full Disk Access", error.exception.detail)
+
     def test_image_page_exposes_orientation_and_portable_paths(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             config = WayperConfig(download_dir=Path(td))
@@ -1153,7 +1169,7 @@ class RegressionTest(unittest.TestCase):
         self.assertTrue(ordinary_deleted)
         self.assertTrue(blacklisted_still_present)
         self.assertIn("error", directory_result)
-        do_ban.assert_called_once_with(config, image=blacklisted, wait_remote=False)
+        do_ban.assert_called_once_with(config, image=blacklisted.resolve(), wait_remote=False)
 
 
 if __name__ == "__main__":

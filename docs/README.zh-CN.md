@@ -99,7 +99,7 @@ uv venv && uv pip install -e .
 - **设置** — 在 GUI 中配置下载目录、Wallhaven 查询、排除标签/组合、内容级别和显示器；修改会即时生效
 - **全键盘操作** — 每个操作都有快捷键：网格导航、灯箱、收藏、不喜欢、拉黑和撤销
 
-使用 `wayper-gui --hidden` 可直接启动到托盘。Hyprland 的托盘由 Waybar 等状态栏提供，请确保已启用其 `tray` 模块。
+使用 `wayper-gui --hidden` 可直接启动到托盘。Hyprland 或 Sway 的托盘由 Waybar 等状态栏提供，请确保已启用其 `tray` 模块。
 
 **网格浏览：**
 
@@ -275,7 +275,9 @@ Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 - Python 3.12+
 - [Wallhaven API key](https://wallhaven.cc/settings/account)
 
-**Linux：** [awww](https://codeberg.org/LGFae/awww)、[Hyprland](https://hyprland.org/)
+**Linux：** [awww](https://codeberg.org/LGFae/awww)，以及
+[Hyprland](https://hyprland.org/) 或 [Sway](https://swaywm.org/)。Wayper 会自动识别当前合成器，
+并在两者上正确处理经过旋转的显示器尺寸。
 
 **macOS：** Python 3.12+、Node.js（用于 Electron GUI）
 

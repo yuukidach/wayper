@@ -6,6 +6,11 @@ function modelReviewModeActive() {
         : appState?.mode === 'model-review';
 }
 
+function rendererScrollBehavior(requested = 'auto') {
+    const reduced = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    return requested === 'smooth' && reduced ? 'auto' : requested;
+}
+
 function modelReviewDataIsCurrent() {
     const data = appState.modelReviewData;
     if (!data) return false;
@@ -127,7 +132,7 @@ function markCurrentWallpaper() {
 function scrollToFirst() {
     const cards = document.getElementsByClassName('wallpaper-card');
     if (cards.length === 0) return;
-    cards[0].scrollIntoView({ block: 'start', behavior: 'smooth' });
+    cards[0].scrollIntoView({ block: 'start', behavior: rendererScrollBehavior('smooth') });
     cards[0].focus({ preventScroll: true });
 }
 
@@ -151,7 +156,7 @@ function scrollToLast() {
     const cards = document.getElementsByClassName('wallpaper-card');
     const last = cards[cards.length - 1];
     if (last) {
-        last.scrollIntoView({ block: 'end', behavior: 'smooth' });
+        last.scrollIntoView({ block: 'end', behavior: rendererScrollBehavior('smooth') });
         last.focus({ preventScroll: true });
     }
 }
@@ -184,7 +189,7 @@ async function scrollToCurrentWallpaper() {
         card = document.querySelector('.wallpaper-card.current');
     }
     if (card) {
-        card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        card.scrollIntoView({ block: 'center', behavior: rendererScrollBehavior('smooth') });
         card.focus({ preventScroll: true });
     }
 }
@@ -297,7 +302,7 @@ function renderImages() {
     }
 
     renderNextBatch();
-    setTimeout(updateGridMetrics, 100);
+    scheduleResponsiveLayout();
 }
 
 function suggestionEvidence(item) {
@@ -1491,18 +1496,6 @@ function modelReviewRecommendationItems(data = appState.modelReviewData) {
     return sanitizeModelReviewItems(data?.recommendations);
 }
 
-function modelReviewQueueItems(data = appState.modelReviewData) {
-    const seen = new Set();
-    return [
-        ...modelReviewRecommendationItems(data),
-        ...modelReviewHeldItems(data),
-    ].filter(item => {
-        if (seen.has(item.path)) return false;
-        seen.add(item.path);
-        return true;
-    });
-}
-
 function modelReviewSourceItems(source, data = appState.modelReviewData) {
     return source === 'held'
         ? modelReviewHeldItems(data)
@@ -1676,6 +1669,7 @@ function beginModelReviewProgrammaticScroll(carousel) {
 
 function scrollModelReviewCardIntoView(carousel, card, behavior = 'smooth') {
     if (!carousel || !card) return false;
+    behavior = rendererScrollBehavior(behavior);
     const geometry = [card.offsetLeft, card.offsetWidth, carousel.clientWidth];
     if (geometry.every(Number.isFinite) && card.offsetWidth > 0 && carousel.clientWidth > 0) {
         const target = Math.max(
@@ -1708,6 +1702,7 @@ function selectModelReviewItem(
     // authoritative until scrolling settles instead of immediately undoing the
     // ArrowLeft/ArrowRight selection.
     if (carousel?.dataset) carousel.dataset.selectionTarget = path;
+    behavior = rendererScrollBehavior(behavior);
     const smooth = behavior === 'smooth';
     if (smooth) beginModelReviewProgrammaticScroll(carousel);
     markActiveModelReviewCard(carousel, path, { deferNeighborImages: smooth });
@@ -2277,69 +2272,6 @@ function switchModelReviewSource(source) {
     if (source === activeModelReviewSource()) return false;
     const deck = els.wallpaperGrid?.querySelector('.model-review-deck');
     return replaceModelReviewCarousel(deck, source);
-}
-
-function applyModelReviewDecisionResult(item, action, result) {
-    const automaticallyHeld = item?.auto_filtered === true;
-    const itemsBefore = modelReviewVisibleItems();
-    const indexBefore = itemsBefore.findIndex(candidate => candidate.path === item.path);
-    if (!(appState.modelReviewResolvedPaths instanceof Set)) {
-        appState.modelReviewResolvedPaths = new Set();
-    }
-    appState.modelReviewResolvedPaths.add(item.path);
-    if (typeof invalidateModelReviewCaches === 'function') {
-        invalidateModelReviewCaches(item.path);
-    } else if (typeof invalidateModelReviewRecommendationCache === 'function') {
-        invalidateModelReviewRecommendationCache(item.path);
-    }
-    if (appState.modelReviewData) {
-        const data = appState.modelReviewData;
-        const sourceKey = automaticallyHeld ? 'items' : 'recommendations';
-        const sourceItems = Array.isArray(data[sourceKey]) ? data[sourceKey] : [];
-        const remaining = sourceItems.filter(candidate => candidate?.path !== item.path);
-        const removed = remaining.length < sourceItems.length;
-        const updated = {
-            ...data,
-            learning: result?.learning || data.learning,
-            [sourceKey]: remaining,
-        };
-        if (automaticallyHeld) {
-            const pending = Number(data.pending_count);
-            updated.pending_count = removed && Number.isFinite(pending)
-                ? Math.max(0, pending - 1)
-                : data.pending_count;
-            updated.model_filter = result?.model_filter || data.model_filter;
-        } else {
-            const recommendationCount = Number(data.recommendation_count);
-            updated.recommendation_count = removed && Number.isFinite(recommendationCount)
-                ? Math.max(0, recommendationCount - 1)
-                : data.recommendation_count;
-            updated.recommendation_learning = result?.learning
-                || data.recommendation_learning;
-        }
-        appState.modelReviewData = updated;
-    }
-
-    const next = modelReviewVisibleItems();
-    appState.modelReviewSelectedPath = next[indexBefore]?.path
-        || next[indexBefore - 1]?.path
-        || next[0]?.path
-        || null;
-
-    if (automaticallyHeld) {
-        if (!appState.status || typeof appState.status !== 'object') appState.status = {};
-        appState.status.model_review_count = Math.max(
-            0,
-            Number(appState.status.model_review_count || 0) - 1,
-        );
-        if (action === 'keep' && result?.review?.new_path) {
-            appState.status.pool_count = Number(appState.status.pool_count || 0) + 1;
-        }
-        if (action === 'ban') {
-            appState.status.blocklist_count = Number(appState.status.blocklist_count || 0) + 1;
-        }
-    }
-    return appState.modelReviewSelectedPath;
 }
 
 function applyOptimisticModelReviewDecision(item, action) {
@@ -3170,7 +3102,7 @@ function renderBlocklistView() {
             return;
         }
         renderNextBatch();
-        setTimeout(updateGridMetrics, 100);
+        scheduleResponsiveLayout();
     } else {
         renderBlockedList(filteredEntries);
     }
@@ -3293,8 +3225,14 @@ function renderNextBatch() {
         // remains enabled for the rest of the library, but Chromium can defer
         // even above-the-fold images while a large grid is being mounted.
         const card = createCard(img, { eager: start === 0 && i < 12 });
-        // Stagger entrance animation for visible cards
-        if (i < 20) card.style.animationDelay = `${i * 30}ms`;
+        // Animate only the first two likely-visible rows, and keep the entire
+        // cascade below a single interaction beat. The previous 20 × 30ms
+        // sequence left the final visible card waiting almost a second.
+        if (start === 0 && i < 12) {
+            card.style.animationDelay = `${Math.min(126, i * 14)}ms`;
+        } else {
+            card.classList.add('without-entrance-motion');
+        }
         fragment.appendChild(card);
     });
 
@@ -3311,20 +3249,34 @@ function renderNextBatch() {
 }
 
 let _trashBannerShown = false;
+function trashPermissionPresentation(platform = globalThis.window?.electronAPI?.platform) {
+    if (platform === 'darwin') {
+        return {
+            message: 'Cannot read images from Trash — grant <strong>Full Disk Access</strong> to your terminal in System Settings &gt; Privacy &amp; Security.',
+            settingsUrl: 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
+        };
+    }
+    return {
+        message: platform === 'win32'
+            ? 'Cannot read images from the Recycle Bin. Check Wayper file access or restore the image manually.'
+            : 'Cannot read images from Trash. Check the file permissions for your Trash directory.',
+    };
+}
+
 function showTrashPermissionBanner() {
     if (_trashBannerShown) return;
     _trashBannerShown = true;
 
+    const presentation = trashPermissionPresentation();
     const banner = document.createElement('div');
     banner.className = 'permission-banner';
     banner.innerHTML = `
-        <span>Cannot read images from Trash — grant <strong>Full Disk Access</strong> to your terminal in System Settings &gt; Privacy &amp; Security.</span>
-        <button class="banner-open" title="Open System Settings">Open Settings</button>
-        <button class="banner-close" title="Dismiss">&times;</button>
+        <span>${presentation.message}</span>
+        ${presentation.settingsUrl ? '<button type="button" class="banner-open" title="Open System Settings">Open Settings</button>' : ''}
+        <button type="button" class="banner-close" title="Dismiss" aria-label="Dismiss">&times;</button>
     `;
-    banner.querySelector('.banner-open').onclick = () => {
-        window.open('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles');
-    };
+    const open = banner.querySelector('.banner-open');
+    if (open) open.onclick = () => window.open(presentation.settingsUrl);
     banner.querySelector('.banner-close').onclick = () => banner.remove();
     els.wallpaperGrid.prepend(banner);
 }
@@ -3363,7 +3315,7 @@ function createCard(img, { eager = false } = {}) {
     const card = document.createElement('div');
     card.className = 'wallpaper-card';
     card.dataset.path = img.path;
-    card.tabIndex = 0; // Make focusable
+    card.tabIndex = 0;
 
     if (imageOrientation(img) === 'portrait') {
         card.classList.add('portrait');
@@ -3372,55 +3324,51 @@ function createCard(img, { eager = false } = {}) {
     const thumbUrl = thumbnailUrl(img.path);
     const imageLoading = eager ? 'eager' : 'lazy';
     const fetchPriority = eager ? 'high' : 'auto';
+    const trashMode = appState.mode === 'trash';
+    const overlay = trashMode
+        ? `
+            <div class="overlay">
+                <button class="action-btn restore" data-action="restore" title="Restore to Pool">${ICONS.restore()}</button>
+                <button class="action-btn url" data-action="url" title="Open on Wallhaven (O)" aria-keyshortcuts="O">${ICONS.externalLink()}</button>
+            </div>`
+        : `
+            <div class="overlay">
+                <button class="action-btn" data-action="set" title="Set Wallpaper (Enter)" aria-keyshortcuts="Enter">${ICONS.setWallpaper()}</button>
+                <button class="action-btn fav ${img.is_favorite ? 'active' : ''}" data-action="favorite" title="Favorite (F)" aria-keyshortcuts="F">${ICONS.favorite(16, img.is_favorite)}</button>
+                <button class="action-btn dislike" data-action="dislike" title="Dislike and teach the model (D)" aria-keyshortcuts="D">${ICONS.dislike()}</button>
+                <button class="action-btn ban" data-action="ban" title="Ban this exact image only (X)" aria-keyshortcuts="X Delete">${ICONS.ban()}</button>
+                <button class="action-btn url" data-action="url" title="Open on Wallhaven (O)" aria-keyshortcuts="O">${ICONS.externalLink()}</button>
+            </div>`;
+    card.innerHTML = `
+        <img class="loading" src="${thumbUrl}" loading="${imageLoading}" fetchpriority="${fetchPriority}" decoding="async" draggable="false" alt="${esc(img.name)}">
+        ${overlay}
+    `;
+    card.onclick = () => showLightbox(img);
 
-    if (appState.mode === 'trash') {
-        card.innerHTML = `
-            <img class="loading" src="${thumbUrl}" loading="${imageLoading}" fetchpriority="${fetchPriority}" decoding="async" alt="${esc(img.name)}">
-            <div class="overlay">
-                <button class="action-btn restore" title="Restore to Pool">${ICONS.restore()}</button>
-                <button class="action-btn url" title="Open on Wallhaven (O)" aria-keyshortcuts="O">${ICONS.externalLink()}</button>
-            </div>
-        `;
-        const cardImg = card.querySelector('img');
-        cardImg.onload = () => cardImg.classList.remove('loading');
-        cardImg.onerror = () => {
-            fetch(thumbUrl, { method: 'HEAD' }).then(r => {
-                if (r.status === 403) showTrashPermissionBanner();
-            }).catch(() => {});
+    const actions = trashMode
+        ? { restore: () => restoreImage(img.path), url: () => openWallhavenUrl(img.name) }
+        : {
+            set: () => setWallpaper(img.path),
+            favorite: () => toggleFavoriteImage(img.path),
+            dislike: () => dislikeImage(img.path),
+            ban: () => banImage(img.path),
+            url: () => openWallhavenUrl(img.name),
         };
-        const btns = card.querySelectorAll('.action-btn');
-        btns[0].onclick = (e) => { e.stopPropagation(); restoreImage(img.path); };
-        btns[1].onclick = (e) => { e.stopPropagation(); openWallhavenUrl(img.name); };
-        card.onclick = () => showLightbox(img);
-    } else {
-        card.innerHTML = `
-            <img class="loading" src="${thumbUrl}" loading="${imageLoading}" fetchpriority="${fetchPriority}" decoding="async" alt="${esc(img.name)}">
-            <div class="overlay">
-                <button class="action-btn" title="Set Wallpaper (Enter)" aria-keyshortcuts="Enter">${ICONS.setWallpaper()}</button>
-                <button class="action-btn fav ${img.is_favorite ? 'active' : ''}" title="Favorite (F)" aria-keyshortcuts="F">${ICONS.favorite(16, img.is_favorite)}</button>
-                <button class="action-btn dislike" title="Dislike and teach the model (D)" aria-keyshortcuts="D">${ICONS.dislike()}</button>
-                <button class="action-btn ban" title="Ban this exact image only (X)" aria-keyshortcuts="X Delete">${ICONS.ban()}</button>
-                <button class="action-btn url" title="Open on Wallhaven (O)" aria-keyshortcuts="O">${ICONS.externalLink()}</button>
-            </div>
-        `;
-        const cardImg = card.querySelector('img');
-        cardImg.onload = () => cardImg.classList.remove('loading');
-        card.onclick = () => showLightbox(img);
-        const btns = card.querySelectorAll('.action-btn');
-        btns[0].onclick = (e) => { e.stopPropagation(); setWallpaper(img.path); };
-        btns[1].onclick = (e) => { e.stopPropagation(); toggleFavoriteImage(img.path); };
-        btns[2].onclick = (e) => {
-            e.stopPropagation();
+    card.querySelector('.overlay').onclick = event => {
+        const actionName = event.target.closest?.('[data-action]')?.dataset.action;
+        if (!actions[actionName]) return;
+        event.stopPropagation();
+        if (actionName === 'dislike' || actionName === 'ban') {
             card.focus({ preventScroll: true });
-            dislikeImage(img.path);
-        };
-        btns[3].onclick = (e) => {
-            e.stopPropagation();
-            card.focus({ preventScroll: true });
-            banImage(img.path);
-        };
-        btns[4].onclick = (e) => { e.stopPropagation(); openWallhavenUrl(img.name); };
-    }
+        }
+        actions[actionName]();
+    };
+
+    prepareWallpaperCardImage(card.querySelector('img'), trashMode ? () => {
+        fetch(thumbUrl, { method: 'HEAD' }).then(response => {
+            if (response.status === 403) showTrashPermissionBanner();
+        }).catch(() => {});
+    } : null);
 
     // Most preview clicks are preceded by a hover or keyboard focus. Use that
     // short window to decode the original image before the lightbox opens; the
@@ -3432,4 +3380,20 @@ function createCard(img, { eager = false } = {}) {
     card.addEventListener('focusin', preparePreview, { once: true, passive: true });
 
     return card;
+}
+
+function prepareWallpaperCardImage(image, onError) {
+    image.onload = async () => {
+        try {
+            await image.decode?.();
+        } catch (_) {
+            // A removed image can reject decode; never leave its skeleton behind.
+        }
+        image.classList.remove('loading');
+    };
+    image.onerror = event => {
+        image.classList.remove('loading');
+        onError?.(event);
+    };
+    if (image.complete) (image.naturalWidth ? image.onload : image.onerror)();
 }

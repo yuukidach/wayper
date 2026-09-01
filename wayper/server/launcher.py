@@ -100,6 +100,16 @@ def _electron_command(
     return [*command, "--", *arguments] if arguments else command
 
 
+def _electron_dependencies_ready(electron_dir: Path) -> bool:
+    """Check npm's installed lock against the current source lock."""
+    try:
+        installed = electron_dir / "node_modules" / ".package-lock.json"
+        source = electron_dir / "package-lock.json"
+        return installed.stat().st_mtime_ns >= source.stat().st_mtime_ns
+    except OSError:
+        return False
+
+
 def _wait_for_api(timeout: float = 10) -> int:
     """Poll API port file and then the API until it responds. Returns the port."""
     pf = port_file()
@@ -155,7 +165,7 @@ def run_app():
     electron_dir = _electron_workdir(Path(__file__).parent.parent / "electron")
 
     # Check dependencies first
-    if not (electron_dir / "node_modules").exists():
+    if not _electron_dependencies_ready(electron_dir):
         print("Installing dependencies...")
         subprocess.check_call(
             [_npm_executable(), "ci"],

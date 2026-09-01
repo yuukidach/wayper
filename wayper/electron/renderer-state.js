@@ -117,6 +117,7 @@ let observer = null;
 let sentinel = null;
 let blocklistObserver = null;
 let blocklistSentinel = null;
+let responsiveLayoutPending = false;
 // Keep a small ranked queue in memory so removing a visible candidate can be
 // filled immediately without waiting for another round-trip.  The renderer
 // only shows the number that forms complete rows and refills when needed.
@@ -262,15 +263,7 @@ async function init() {
         setupInfiniteScroll();
         setupBlocklistInfiniteScroll();
 
-        // Resize listener for grid layout
-        window.addEventListener('resize', debounce(() => {
-            updateGridMetrics();
-            // The review list has its own responsive grid.  Keep its visible window
-            // aligned to complete rows when the app/sidebar is resized.
-            if (typeof syncPreferenceReviewLayout === 'function') {
-                syncPreferenceReviewLayout();
-            }
-        }, 200));
+        setupResponsiveLayoutTracking();
 
         // Phase 1: config and monitors are independent. The backend owns rotation startup.
         await Promise.all([fetchConfig(), fetchMonitors()]);
@@ -279,8 +272,8 @@ async function init() {
     } finally {
         hideLoader();
     }
-    // Initial metrics update after images loaded (or attempted)
-    setTimeout(updateGridMetrics, 500);
+    // Measure after the initial DOM mutations without adding a visible delay.
+    scheduleResponsiveLayout();
 
     // SSE for real-time mode changes
     connectSSE();
@@ -765,6 +758,21 @@ function debounce(func, wait) {
 }
 
 const debouncedRefreshImages = debounce(() => refreshImages(), 300);
+
+function scheduleResponsiveLayout() {
+    if (responsiveLayoutPending) return;
+    responsiveLayoutPending = true;
+    requestAnimationFrame(() => {
+        responsiveLayoutPending = false;
+        updateGridMetrics();
+        syncPreferenceReviewLayout?.();
+    });
+}
+
+function setupResponsiveLayoutTracking() {
+    window.addEventListener('resize', scheduleResponsiveLayout, { passive: true });
+    new ResizeObserver(scheduleResponsiveLayout).observe(els.wallpaperGrid);
+}
 
 function cardLayoutTop(card) {
     // offsetTop describes the grid layout position and is not changed by the

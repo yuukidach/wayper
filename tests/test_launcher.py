@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 from unittest.mock import patch
 
-from wayper.server.launcher import _electron_command, _icon_path, _wait_for_api
+from wayper.server.launcher import (
+    _electron_command,
+    _electron_dependencies_ready,
+    _icon_path,
+    _wait_for_api,
+)
 
 
 def _touch(path: Path) -> Path:
@@ -50,6 +56,21 @@ def test_hidden_argument_is_forwarded_through_npm(tmp_path: Path) -> None:
         "--",
         "--hidden",
     ]
+
+
+def test_electron_dependencies_follow_current_package_lock(tmp_path: Path) -> None:
+    source_lock = _touch(tmp_path / "package-lock.json")
+    installed_lock = _touch(tmp_path / "node_modules" / ".package-lock.json")
+
+    os.utime(installed_lock, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(source_lock, ns=(2_000_000_000, 2_000_000_000))
+    assert not _electron_dependencies_ready(tmp_path)
+
+    os.utime(installed_lock, ns=(3_000_000_000, 3_000_000_000))
+    assert _electron_dependencies_ready(tmp_path)
+
+    installed_lock.unlink()
+    assert not _electron_dependencies_ready(tmp_path)
 
 
 def test_wayper_gui_uses_windowed_entry_point() -> None:

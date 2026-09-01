@@ -62,7 +62,7 @@
   --shadow-float: 0 14px 36px rgb(0 0 0 / 30%);
 
   /* Typography */
-  --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: 'Outfit Variable', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
   --font-size-micro: 10px;
   --font-size-xs: 11px;
@@ -75,7 +75,9 @@
   /* Timing */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --duration: 0.2s;
+  --duration-fast: 120ms;
+  --duration: 180ms;
+  --duration-slow: 260ms;
 }
 
 /* ---------- Reset ---------- */
@@ -106,19 +108,6 @@ body {
 html:lang(zh) body {
   --font-sans: 'Noto Sans SC', 'Microsoft YaHei', 'PingFang SC',
     -apple-system, BlinkMacSystemFont, sans-serif;
-}
-
-/* Subtle noise texture for depth */
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 99999;
-  opacity: 0.018;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  background-repeat: repeat;
-  background-size: 256px 256px;
 }
 
 /* ---------- Common Components ---------- */
@@ -860,10 +849,15 @@ main {
   border: none;
   scroll-margin: 24px;
   box-shadow: 0 3px 10px rgb(0 0 0 / 26%), inset 0 0 0 1px var(--border-subtle);
-  transition: transform 0.28s var(--ease-out), box-shadow 0.28s var(--ease-out);
+  transition: transform var(--duration-slow) var(--ease-out),
+              box-shadow var(--duration-slow) var(--ease-out);
   content-visibility: auto;
   contain-intrinsic-size: auto 280px auto 158px;
-  animation: card-enter 0.4s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation: card-enter var(--duration-slow) var(--ease-out) backwards;
+}
+
+.wallpaper-card.without-entrance-motion {
+  animation: none;
 }
 
 .wallpaper-card.portrait {
@@ -874,7 +868,7 @@ main {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s ease;
+  transition: transform 360ms var(--ease-out), opacity var(--duration-slow) var(--ease);
 }
 
 .wallpaper-card img.loading {
@@ -980,7 +974,7 @@ main {
   padding: 0;
   transition: background-color var(--duration) var(--ease),
               border-color var(--duration) var(--ease),
-              transform 0.15s var(--ease);
+              transform var(--duration-fast) var(--ease);
 }
 
 .action-btn svg {
@@ -4325,5 +4319,9 @@ footer {
   .wallpaper-card:hover img,
   .wallpaper-card:focus-visible img {
     transform: none;
+  }
+
+  .model-review-grid .model-review-carousel {
+    scroll-behavior: auto;
   }
 }

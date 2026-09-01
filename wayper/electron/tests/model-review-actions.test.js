@@ -1429,154 +1429,6 @@ function testReviewLightboxUsesDedicatedReviewLane() {
     assert.deepEqual(renderer.reviewLightboxItems(), legacy);
 }
 
-function testInboxDecisionUpdatesDedicatedQueueState() {
-    const first = {
-        path: '.model-review/sfw/landscape/first.jpg',
-        name: 'first.jpg',
-        auto_filtered: true,
-    };
-    const second = {
-        path: '.model-review/sfw/landscape/second.jpg',
-        name: 'second.jpg',
-        auto_filtered: true,
-    };
-    const context = {
-        appState: {
-            mode: 'model-review',
-            modelReviewData: {
-                items: [first, second],
-                pending_count: 2,
-                learning: { pending_feedback: 1 },
-            },
-            modelReviewSelectedPath: first.path,
-            modelReviewResolvedPaths: new Set(),
-            status: {
-                model_review_count: 2,
-                pool_count: 10,
-                blocklist_count: 4,
-            },
-        },
-        console,
-    };
-    context.window = context;
-    const renderer = loadRendererScript(
-        'renderer-views.js',
-        context,
-        ['applyModelReviewDecisionResult', 'modelReviewQueueItems'],
-    );
-
-    const next = renderer.applyModelReviewDecisionResult(first, 'keep', {
-        review: { new_path: 'sfw/landscape/first.jpg' },
-        learning: { pending_feedback: 2 },
-    });
-
-    assert.equal(next, second.path);
-    assert.equal(
-        renderer.modelReviewQueueItems().map(item => item.path).join(','),
-        second.path,
-    );
-    assert.equal(context.appState.modelReviewData.pending_count, 1);
-    assert.equal(context.appState.modelReviewData.learning.pending_feedback, 2);
-    assert.equal(context.appState.status.model_review_count, 1);
-    assert.equal(context.appState.status.pool_count, 11);
-    assert.equal(context.appState.status.blocklist_count, 4);
-}
-
-function testRecommendationDecisionDoesNotChangeHeldOrLibraryCounts() {
-    const held = {
-        path: '.model-review/sfw/landscape/held.jpg',
-        auto_filtered: true,
-    };
-    const first = { path: 'sfw/landscape/first.jpg', rank: 1 };
-    const second = { path: 'sfw/landscape/second.jpg', rank: 2 };
-    const context = {
-        appState: {
-            mode: 'model-review',
-            modelReviewData: {
-                items: [held],
-                recommendations: [first, second],
-                pending_count: 1,
-                recommendation_count: 2,
-                learning: { pending_feedback: 1 },
-            },
-            modelReviewSelectedPath: first.path,
-            modelReviewResolvedPaths: new Set(),
-            status: {
-                model_review_count: 1,
-                pool_count: 10,
-                blocklist_count: 4,
-            },
-        },
-        console,
-    };
-    context.window = context;
-    const renderer = loadRendererScript(
-        'renderer-views.js',
-        context,
-        ['applyModelReviewDecisionResult', 'modelReviewQueueItems'],
-    );
-
-    const next = renderer.applyModelReviewDecisionResult(first, 'keep', {
-        learning: { pending_feedback: 2 },
-    });
-
-    assert.equal(next, second.path);
-    assert.equal(
-        renderer.modelReviewQueueItems().map(item => item.path).join(','),
-        [second.path, held.path].join(','),
-    );
-    assert.equal(context.appState.modelReviewData.items.length, 1);
-    assert.equal(context.appState.modelReviewData.items[0], held);
-    assert.equal(context.appState.modelReviewData.pending_count, 1);
-    assert.equal(context.appState.modelReviewData.recommendation_count, 1);
-    assert.equal(context.appState.modelReviewData.learning.pending_feedback, 2);
-    assert.equal(context.appState.status.model_review_count, 1);
-    assert.equal(context.appState.status.pool_count, 10);
-    assert.equal(context.appState.status.blocklist_count, 4);
-}
-
-function testResolvingLastHoldMovesToRecommendationLane() {
-    const held = {
-        path: '.model-review/sfw/landscape/held.jpg',
-        auto_filtered: true,
-    };
-    const recommendation = { path: 'sfw/landscape/recommended.jpg', rank: 1 };
-    const context = {
-        appState: {
-            mode: 'model-review',
-            modelReviewSource: 'held',
-            modelReviewData: {
-                items: [held],
-                recommendations: [recommendation],
-                pending_count: 1,
-                recommendation_count: 1,
-            },
-            modelReviewSelectedPath: held.path,
-            modelReviewResolvedPaths: new Set(),
-            status: {
-                model_review_count: 1,
-                pool_count: 10,
-                blocklist_count: 4,
-            },
-        },
-        console,
-    };
-    context.window = context;
-    const renderer = loadRendererScript(
-        'renderer-views.js',
-        context,
-        ['applyModelReviewDecisionResult', 'modelReviewVisibleItems'],
-    );
-
-    const next = renderer.applyModelReviewDecisionResult(held, 'keep', {
-        review: { new_path: 'sfw/landscape/held.jpg' },
-    });
-
-    assert.equal(context.appState.modelReviewSource, 'recommended');
-    assert.equal(next, recommendation.path);
-    assert.deepEqual(renderer.modelReviewVisibleItems(), [recommendation]);
-}
-
 async function testInboxRoutesDecisionsByCandidateSource() {
     const held = {
         path: '.model-review/sfw/landscape/held.jpg',
@@ -1660,6 +1512,7 @@ async function testInboxRoutesDecisionsByCandidateSource() {
     assert.equal(context.appState.status.model_review_count, 0);
     assert.equal(context.appState.status.pool_count, 11);
     assert.equal(context.appState.status.blocklist_count, 4);
+    assert.equal(context.appState.modelReviewSource, 'recommended');
 }
 
 async function testAutomaticHoldsStayVisibleWhenAutomaticFilteringIsOff() {
@@ -2145,9 +1998,6 @@ async function testBlocklistMonitorSwitchKeepsSharedViewMounted() {
     testResolvedCardCollapsesBeforeRemovalWithoutSecondScroll();
     testReviewLightboxArrowNeighbors();
     testReviewLightboxUsesDedicatedReviewLane();
-    testInboxDecisionUpdatesDedicatedQueueState();
-    testRecommendationDecisionDoesNotChangeHeldOrLibraryCounts();
-    testResolvingLastHoldMovesToRecommendationLane();
     console.log('model review action tests passed');
 })().catch(error => {
     console.error(error);

@@ -1,0 +1,58 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cross-platform:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: wayper/electron/package-lock.json
+
+      - name: Install Python dependencies
+        run: uv sync --extra dev
+
+      - name: Lint Python
+        run: uv run ruff check wayper tests
+
+      - name: Check Python formatting
+        run: uv run ruff format --check wayper tests
+
+      - name: Test Python
+        run: uv run pytest -q
+
+      - name: Install Electron dependencies
+        working-directory: wayper/electron
+        run: npm ci
+
+      - name: Test Electron renderer and lifecycle
+        working-directory: wayper/electron
+        run: npm test
