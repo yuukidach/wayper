@@ -2045,11 +2045,16 @@ function resetImagePaging() {
     appState.nextOffset = null;
     appState.imagesComplete = false;
     appState.loadingMoreImages = false;
+    appState.initialImagePageRequestId = null;
     appState.currentBatchIndex = 0;
 }
 
 async function loadMoreImages({ render = true } = {}) {
-    if (appState.loadingMoreImages || appState.imagesComplete) {
+    if (
+        appState.loadingMoreImages
+        || appState.imagesComplete
+        || appState.initialImagePageRequestId === appState.imageRequestId
+    ) {
         return false;
     }
 
@@ -2070,10 +2075,20 @@ async function loadMoreImages({ render = true } = {}) {
         appState.imagesComplete = data.next_offset === null
             || data.next_offset === undefined
             || items.length === 0;
-        appState.allImages.push(...items);
+        // Keep path identity unique even if two requests for the same page race.
+        // This is primarily defensive: refreshImages holds the paging lock while
+        // replacing page zero, but a response already queued by IntersectionObserver
+        // must never be able to mount a second copy of the same wallpaper.
+        const knownPaths = new Set(appState.allImages.map(image => image.path));
+        const newItems = items.filter(image => {
+            if (knownPaths.has(image.path)) return false;
+            knownPaths.add(image.path);
+            return true;
+        });
+        appState.allImages.push(...newItems);
 
         if (!appState.searchMatches) {
-            appState.images.push(...items);
+            appState.images.push(...newItems);
             if (render) renderNextBatch();
         }
         return items.length > 0;
@@ -2282,6 +2297,10 @@ async function refreshImages(preserveFocus = false) {
     } else {
         try {
             resetImagePaging();
+            // The old grid and its observed sentinel remain mounted until the
+            // replacement page is ready. Lock pagination across that gap so a
+            // queued observer callback cannot request page zero alongside us.
+            appState.initialImagePageRequestId = requestId;
             const [statusData, pageData] = await Promise.all([
                 fetch(statusUrl({ monitor: requestedMonitor, orient, includeRecoverable: false }))
                     .then(r => r.json()),
@@ -2298,6 +2317,7 @@ async function refreshImages(preserveFocus = false) {
                 appState.loadedImageMode = appState.mode;
                 appState.loadedImageContextKey = libraryViewContextKey(appState.mode, orient);
                 appState.status = statusData;
+                appState.initialImagePageRequestId = null;
                 while (
                     preserveFocus
                     && appState.allImages.length < renderedTarget
@@ -2314,6 +2334,9 @@ async function refreshImages(preserveFocus = false) {
         } catch (e) { console.error(e); }
     }
     if (requestId === appState.imageRequestId) {
+        if (appState.initialImagePageRequestId === requestId) {
+            appState.initialImagePageRequestId = null;
+        }
         appState.refreshing = false;
     }
 }

@@ -104,6 +104,7 @@ let appState = {
     nextOffset: null,
     imagesComplete: false,
     loadingMoreImages: false,
+    initialImagePageRequestId: null,
     imageRequestId: 0,
     currentOrient: 'landscape',
     loadedImageMode: null,          // Library mode represented by images/allImages
