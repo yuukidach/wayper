@@ -105,8 +105,6 @@ def _session_query(name: str) -> object | None:
 class LinuxBackend(WallpaperBackend):
     """Wayland backend using awww with Hyprland or Sway output discovery."""
 
-    _notify_id: str | None = None
-
     def detect_monitors(self) -> list[MonitorConfig]:
         monitors = _session_query("monitors")
         if isinstance(monitors, list):
@@ -210,12 +208,27 @@ class LinuxBackend(WallpaperBackend):
         return False
 
     def notify(self, title: str, message: str, timeout_ms: int = 2000) -> None:
-        cmd = ["notify-send", "-t", str(timeout_ms), "-p", title, message]
-        if self._notify_id is not None:
-            cmd[4:4] = ["-r", self._notify_id]
+        # A CLI invocation gets a fresh backend, so a process-local replacement
+        # ID cannot group notifications triggered by compositor key bindings.
+        # The synchronous hint lets compatible daemons keep the grouping key
+        # across processes and avoids updating an expired notification by ID.
+        cmd = [
+            "notify-send",
+            "--app-name=wayper",
+            "--transient",
+            "--hint=string:synchronous:wayper",
+            "--expire-time",
+            str(timeout_ms),
+            title,
+            message,
+        ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            if result.stdout.strip():
-                self._notify_id = result.stdout.strip()
+            subprocess.run(
+                cmd,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass

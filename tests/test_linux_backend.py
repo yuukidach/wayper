@@ -109,3 +109,30 @@ def test_detection_falls_back_from_hyprland_to_sway() -> None:
         ("hyprctl", "monitors", "-j"),
         ("swaymsg", "-t", "get_outputs", "-r"),
     ]
+
+
+def test_notification_uses_cross_process_synchronous_hint() -> None:
+    with patch("wayper.backend.linux.subprocess.run") as run:
+        LinuxBackend().notify("Wallpaper", "Next wallpaper", timeout_ms=2500)
+
+    run.assert_called_once_with(
+        [
+            "notify-send",
+            "--app-name=wayper",
+            "--transient",
+            "--hint=string:synchronous:wayper",
+            "--expire-time",
+            "2500",
+            "Wallpaper",
+            "Next wallpaper",
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=5,
+    )
+
+
+def test_notification_ignores_missing_notify_send() -> None:
+    with patch("wayper.backend.linux.subprocess.run", side_effect=FileNotFoundError):
+        LinuxBackend().notify("Wallpaper", "Next wallpaper")
