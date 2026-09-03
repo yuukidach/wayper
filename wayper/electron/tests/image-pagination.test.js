@@ -163,10 +163,42 @@ async function testRefreshPublishesStatusBeforeSlowPage() {
     await refresh;
 }
 
+function testLibraryViewRestoresSynchronously() {
+    const state = makeState();
+    state.allImages = [{ path: 'portrait-a.jpg' }, { path: 'portrait-b.jpg' }];
+    state.images = [...state.allImages];
+    state.totalImages = 2;
+    state.nextOffset = null;
+    state.imagesComplete = true;
+    state.currentBatchIndex = 2;
+    state.loadedImageMode = 'pool';
+    state.loadedImageContextKey = JSON.stringify({
+        mode: 'pool', purities: ['sfw'], orient: 'portrait',
+    });
+    let renders = 0;
+    const context = makeContext(state, async () => ({ ok: false, status: 500 }));
+    context.renderImages = () => { renders++; };
+    const renderer = loadRendererData(
+        context,
+        ['cacheCurrentLibraryView', 'restoreLibraryView'],
+    );
+
+    assert.equal(renderer.cacheCurrentLibraryView(), true);
+    state.allImages = [];
+    state.images = [];
+    state.currentBatchIndex = 0;
+
+    assert.equal(renderer.restoreLibraryView('pool', 'portrait'), true);
+    assert.equal(state.images.map(image => image.path).join(','), 'portrait-a.jpg,portrait-b.jpg');
+    assert.equal(state.currentBatchIndex, 0, 'the restored grid should render from its first card');
+    assert.equal(renders, 1, 'cached cards should paint before network revalidation');
+}
+
 (async () => {
     await testRefreshLocksPageZeroAgainstObserverRace();
     await testRepeatedPageCannotDuplicatePaths();
     await testRefreshPublishesStatusBeforeSlowPage();
+    testLibraryViewRestoresSynchronously();
     console.log('image pagination tests passed');
 })().catch(error => {
     console.error(error);

@@ -335,6 +335,115 @@ function libraryViewContextKey(
     });
 }
 
+function libraryViewCache() {
+    if (!(appState.libraryViewCache instanceof Map)) {
+        appState.libraryViewCache = new Map();
+    }
+    return appState.libraryViewCache;
+}
+
+function cacheCurrentLibraryView(
+    mode = appState.mode,
+    orient = appState.currentOrient,
+) {
+    if (!['pool', 'favorites'].includes(mode)) return false;
+    if (appState.searchMatches || appState.searchQuery) return false;
+    const key = libraryViewContextKey(mode, orient);
+    if (appState.loadedImageContextKey !== key || appState.loadedImageMode !== mode) {
+        return false;
+    }
+    libraryViewCache().set(key, {
+        allImages: [...appState.allImages],
+        images: [...appState.images],
+        totalImages: appState.totalImages,
+        nextOffset: appState.nextOffset,
+        imagesComplete: appState.imagesComplete,
+        currentBatchIndex: appState.currentBatchIndex,
+    });
+    return true;
+}
+
+function restoreLibraryView(mode = appState.mode, orient = appState.currentOrient) {
+    if (!['pool', 'favorites'].includes(mode)) return false;
+    if (appState.searchMatches || appState.searchQuery) return false;
+    const key = libraryViewContextKey(mode, orient);
+    const cached = libraryViewCache().get(key);
+    if (!cached) return false;
+    appState.allImages = [...cached.allImages];
+    appState.images = [...cached.images];
+    appState.totalImages = cached.totalImages;
+    appState.nextOffset = cached.nextOffset;
+    appState.imagesComplete = cached.imagesComplete;
+    appState.currentBatchIndex = 0;
+    appState.loadingMoreImages = false;
+    appState.initialImagePageRequestId = null;
+    appState.loadedImageMode = mode;
+    appState.loadedImageContextKey = key;
+    if (typeof renderImages === 'function') renderImages();
+    return true;
+}
+
+function libraryPrefetchRequests() {
+    if (!(appState.libraryPrefetchRequests instanceof Map)) {
+        appState.libraryPrefetchRequests = new Map();
+    }
+    return appState.libraryPrefetchRequests;
+}
+
+function prefetchLibraryView(mode, orient) {
+    const purities = [...appState.purity];
+    const key = libraryViewContextKey(mode, orient);
+    if (libraryViewCache().has(key)) return Promise.resolve(true);
+    const requests = libraryPrefetchRequests();
+    if (requests.has(key)) return requests.get(key);
+    const request = fetch(imagePageUrl(0, { mode, purities, orient }))
+        .then(response => response.ok ? response.json() : Promise.reject(new Error(
+            `HTTP ${response.status}`,
+        )))
+        .then(data => {
+            const items = data.items || [];
+            libraryViewCache().set(key, {
+                allImages: items,
+                images: items,
+                totalImages: data.total ?? items.length,
+                nextOffset: data.next_offset,
+                imagesComplete: data.next_offset === null || data.next_offset === undefined,
+                currentBatchIndex: 0,
+            });
+            // Fetching the first visible row through Chromium warms its HTTP
+            // cache, so restored cards do not wait on twelve cold requests.
+            if (typeof thumbnailUrl === 'function') {
+                for (const item of items.slice(0, 12)) {
+                    void fetch(thumbnailUrl(item.path)).catch(() => {});
+                }
+            }
+            return true;
+        })
+        .catch(error => {
+            console.debug(`Could not prefetch ${mode}/${orient}:`, error);
+            return false;
+        })
+        .finally(() => {
+            if (requests.get(key) === request) requests.delete(key);
+        });
+    requests.set(key, request);
+    return request;
+}
+
+async function prefetchLibraryViews() {
+    const orientations = [
+        ...new Set(
+            (appState.monitors || [])
+                .map(monitor => monitor?.orientation)
+                .filter(orient => ['landscape', 'portrait'].includes(orient)),
+        ),
+    ];
+    // Pool is the monitor-switch hot path. Favorites follows only after Pool
+    // pages are ready, keeping startup network and decoding pressure bounded.
+    await Promise.all(orientations.map(orient => prefetchLibraryView('pool', orient)));
+    await Promise.all(orientations.map(orient => prefetchLibraryView('favorites', orient)));
+}
+
 function statusContextKey(orient = appState.currentOrient) {
     return JSON.stringify({
         purities: [...(appState.purity || [])].map(String).sort(),
@@ -443,6 +552,7 @@ function switchMonitor(monitorName) {
 
     const previous = appState.monitors?.find(item => item.name === appState.selectedMonitor);
     const previousOrient = previous?.orientation || appState.currentOrient || '';
+    cacheCurrentLibraryView(appState.mode, previousOrient);
     appState.selectedMonitor = next.name;
     appState.currentOrient = next.orientation || 'landscape';
     renderMonitors();
@@ -465,6 +575,7 @@ function switchMonitor(monitorName) {
     // any filesystem-backed requests. A cache miss simply keeps the current
     // values until the independent status request below returns.
     restoreStatusContext(next.name, appState.currentOrient);
+    restoreLibraryView(appState.mode, appState.currentOrient);
 
     if (appState.mode === 'trash') {
         // Keep the blocklist DOM and its pager intact.  Only the footer counts
@@ -1228,9 +1339,11 @@ async function controlAction(action) {
 
 async function setViewMode(mode) {
     const previousMode = appState.mode;
+    cacheCurrentLibraryView(previousMode, appState.currentOrient);
     appState.mode = mode;
     switchView('grid'); // Ensure we are in grid view
     updateUI();
+    restoreLibraryView(mode, appState.currentOrient);
     if (mode === 'model-review' && typeof renderModelReviewView === 'function') {
         // Replace the library synchronously, using the last deck when it is
         // still valid. A first visit remains visually quiet until held cards
@@ -2147,6 +2260,7 @@ async function loadMoreImages({ render = true } = {}) {
             appState.images.push(...newItems);
             if (render) renderNextBatch();
         }
+        cacheCurrentLibraryView(mode, orient);
         return items.length > 0;
     } catch (e) {
         console.error('Load more images failed:', e);
@@ -2346,7 +2460,6 @@ async function refreshImages(preserveFocus = false) {
         } catch (e) { console.error(e); }
     } else {
         try {
-            resetImagePaging();
             // The old grid and its observed sentinel remain mounted until the
             // replacement page is ready. Lock pagination across that gap so a
             // queued observer callback cannot request page zero alongside us.
@@ -2355,6 +2468,11 @@ async function refreshImages(preserveFocus = false) {
             if (
                 imageResponseMatchesContext(requestId, requestedContextKey)
             ) {
+                // Preserve the cached context in memory as well as the DOM
+                // until its replacement is ready. Rapid monitor switches can
+                // otherwise snapshot an empty array while this request waits.
+                resetImagePaging();
+                appState.initialImagePageRequestId = requestId;
                 appState.allImages = pageData.items || [];
                 appState.totalImages = pageData.total ?? appState.allImages.length;
                 appState.nextOffset = pageData.next_offset;
@@ -2374,6 +2492,7 @@ async function refreshImages(preserveFocus = false) {
                     'pool:', appState.status?.pool_count,
                     'fav:', appState.status?.favorites_count);
                 await applySearchFilter(preserveFocus);
+                cacheCurrentLibraryView(appState.mode, orient);
             }
         } catch (e) { console.error(e); }
     }

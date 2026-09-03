@@ -113,6 +113,10 @@ let appState = {
     currentOrient: 'landscape',
     loadedImageMode: null,          // Library mode represented by images/allImages
     loadedImageContextKey: null,    // Purity/orientation represented by the cached library
+    // Pool/Favorites snapshots let monitor and nav switches paint the last
+    // decoded view synchronously while the API revalidates it in background.
+    libraryViewCache: new Map(),
+    libraryPrefetchRequests: new Map(),
 
     // Layout
     gridColumns: 1
@@ -281,9 +285,10 @@ async function init() {
     // Measure after the initial DOM mutations without adding a visible delay.
     scheduleResponsiveLayout();
 
-    // Prepare both monitor orientations after first paint. This also caches an
-    // empty result, so opening Review with no suggestions is immediate.
-    void prefetchModelReviewRecommendations();
+    // Prioritize the interactive Pool/Favorites surfaces, then prepare Review.
+    // This also caches an empty Review result without competing with the first
+    // monitor switch for browser/network work.
+    void prefetchLibraryViews().then(() => prefetchModelReviewRecommendations());
 
     // SSE for real-time mode changes
     connectSSE();
