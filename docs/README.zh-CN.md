@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../assets/icon.svg" width="100" alt="wayper logo">
+  <img src="../assets/icon-512.png" width="100" alt="wayper logo">
   <h1 align="center">wayper</h1>
   <p align="center">
     越用越懂你的壁纸管理器。<br>

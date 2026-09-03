@@ -30,7 +30,7 @@
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
 }
 </script>
-<link rel="icon" href="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/icon-64.png">
+<link rel="icon" href="assets/icon-64.png">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 :root {
@@ -73,7 +73,7 @@ nav .inner {
   height: 52px;
 }
 nav .logo { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 1.05em; color: var(--text); }
-nav .logo svg { width: 28px; height: 28px; }
+nav .logo img { width: 28px; height: 28px; }
 nav .links { display: flex; gap: 20px; font-size: .9em; }
 nav .links a { color: var(--subtext); }
 nav .links a:hover { color: var(--text); }
@@ -95,7 +95,7 @@ nav .gh-btn:hover { background: var(--surface1); color: var(--text); }
 .hero .title-row {
   display: inline-flex; align-items: center; gap: 20px; margin-bottom: 12px;
 }
-.hero .title-row svg {
+.hero .title-row img {
   width: 72px; height: 72px; flex-shrink: 0;
   border: 1px solid var(--surface1); border-radius: 14px;
   filter: drop-shadow(0 0 24px rgba(14,165,233,.25));
@@ -222,7 +222,7 @@ footer .links a { color: var(--subtext); }
 /* ── Mobile ── */
 @media (max-width: 640px) {
   .hero h1 { font-size: 2.4em; }
-  .hero .title-row svg { width: 52px; height: 52px; }
+  .hero .title-row img { width: 52px; height: 52px; }
   .hero .title-row { gap: 14px; }
   .hero { padding: 72px 20px 48px; }
   .features { grid-template-columns: 1fr; }
@@ -242,13 +242,7 @@ footer .links a { color: var(--subtext); }
 <nav>
   <div class="inner">
     <a class="logo" href="#">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-        <defs><linearGradient id="ng" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#0ea5e9"/><stop offset="100%" stop-color="#00e5d0"/>
-        </linearGradient></defs>
-        <rect x="8" y="8" width="112" height="112" rx="24" fill="#1a1b2e"/>
-        <polyline points="28,40 44,92 64,50 84,92 100,40" stroke="url(#ng)" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
+      <img src="assets/icon-64.png" width="28" height="28" alt="">
       wayper
     </a>
     <div class="links">
@@ -266,13 +260,7 @@ footer .links a { color: var(--subtext); }
 
 <div class="hero">
   <div class="title-row">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-      <defs><linearGradient id="hg" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#0ea5e9"/><stop offset="100%" stop-color="#00e5d0"/>
-      </linearGradient></defs>
-      <rect x="8" y="8" width="112" height="112" rx="24" fill="#1a1b2e"/>
-      <polyline points="28,40 44,92 64,50 84,92 100,40" stroke="url(#hg)" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
+    <img src="assets/icon-128.png" width="72" height="72" alt="Wayper logo">
     <h1>wayper</h1>
   </div>
   <p class="tagline">The wallpaper manager that learns what you like. Wallhaven integration, AI-native, keyboard-driven.</p>
