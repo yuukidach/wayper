@@ -335,6 +335,37 @@ function libraryViewContextKey(
     });
 }
 
+function statusContextKey(orient = appState.currentOrient) {
+    return JSON.stringify({
+        purities: [...(appState.purity || [])].map(String).sort(),
+        orient: String(orient || ''),
+    });
+}
+
+function statusContextCache() {
+    if (!(appState.statusContextCache instanceof Map)) {
+        appState.statusContextCache = new Map();
+    }
+    return appState.statusContextCache;
+}
+
+function cacheStatusContext(data, orient = appState.currentOrient) {
+    if (!data || typeof data !== 'object') return;
+    statusContextCache().set(statusContextKey(orient), { ...data });
+}
+
+function restoreStatusContext(monitor, orient = appState.currentOrient) {
+    const cached = statusContextCache().get(statusContextKey(orient));
+    if (!cached) return false;
+    appState.status = {
+        ...cached,
+        monitor: monitor || null,
+        orientation: orient || null,
+    };
+    if (typeof updateStatusUI === 'function') updateStatusUI();
+    return true;
+}
+
 function modelReviewContextCache() {
     if (!(appState.modelReviewContextCache instanceof Map)) {
         appState.modelReviewContextCache = new Map();
@@ -429,6 +460,11 @@ function switchMonitor(monitorName) {
         }
         return true;
     }
+
+    // Repaint counts from the last visit to this orientation before issuing
+    // any filesystem-backed requests. A cache miss simply keeps the current
+    // values until the independent status request below returns.
+    restoreStatusContext(next.name, appState.currentOrient);
 
     if (appState.mode === 'trash') {
         // Keep the blocklist DOM and its pager intact.  Only the footer counts
@@ -560,6 +596,26 @@ function requestModelReviewRecommendations(
         });
     requests.set(key, request);
     return request;
+}
+
+async function prefetchModelReviewRecommendations() {
+    const orientations = [
+        ...new Set(
+            (appState.monitors || [])
+                .map(monitor => monitor?.orientation)
+                .filter(orient => ['landscape', 'portrait'].includes(orient)),
+        ),
+    ];
+    for (const orient of orientations) {
+        try {
+            await requestModelReviewRecommendations(orient);
+            if (orient === appState.currentOrient && typeof updateStatusUI === 'function') {
+                updateStatusUI();
+            }
+        } catch (error) {
+            console.debug(`Could not prefetch ${orient} Review recommendations:`, error);
+        }
+    }
 }
 
 function invalidateModelReviewRecommendationCache(path = null) {
@@ -2126,7 +2182,7 @@ function connectSSE() {
     es.onerror = () => {};
 }
 
-async function fetchStatus() {
+async function fetchStatus({ refreshGridOnChange = true } = {}) {
     const requestedMonitor = appState.selectedMonitor || null;
     const requestedMonitorInfo = appState.monitors?.find(
         item => item.name === requestedMonitor,
@@ -2155,7 +2211,10 @@ async function fetchStatus() {
 
         // Check for external mode change (e.g. via CLI)
         const newMode = Array.isArray(data.mode) ? data.mode : [data.mode];
-        if (JSON.stringify(newMode.sort()) !== JSON.stringify([...appState.purity].sort())) {
+        if (
+            data.mode !== undefined
+            && JSON.stringify(newMode.sort()) !== JSON.stringify([...appState.purity].sort())
+        ) {
             console.log(`Mode changed externally: ${appState.purity} -> ${newMode}`);
             appState.purity = newMode;
             updateUI();
@@ -2173,6 +2232,7 @@ async function fetchStatus() {
             || data.model_review_count !== prev.model_review_count;
 
         appState.status = data;
+        cacheStatusContext(data, requestedOrient);
         if (appState.mode === 'trash' && appState.blocklistData) {
             appState.status.recoverable_count = appState.blocklistData.recoverable_count || 0;
         }
@@ -2181,7 +2241,7 @@ async function fetchStatus() {
             console.log('[status] counts changed pool:', prev?.pool_count, '→', data.pool_count,
                 'fav:', prev?.favorites_count, '→', data.favorites_count);
             // Refresh grid when current mode's count changes externally
-            if (prev && !appState.refreshing) {
+            if (prev && refreshGridOnChange && !appState.refreshing) {
                 const countKey = appState.mode === 'favorites' ? 'favorites_count'
                     : appState.mode === 'trash' ? 'blocklist_count'
                     : isModelReviewMode() ? 'model_review_count'
@@ -2196,7 +2256,7 @@ async function fetchStatus() {
         if (
             requestId === appState.statusRequestId
             && requestedMonitor === (appState.selectedMonitor || null)
-            && (appState.status.auto_rotation !== false || appState.status.rotation_paused)
+            && (appState.status?.auto_rotation !== false || appState.status?.rotation_paused)
         ) {
             appState.status = { auto_rotation: false, rotation_paused: false };
             updateStatusUI();
@@ -2243,22 +2303,15 @@ async function refreshImages(preserveFocus = false) {
     appState.currentOrient = orient;
     console.log('[refresh] start', appState.mode, orient);
 
+    // Sidebar counts are a small, independent response. Commit them as soon
+    // as they arrive instead of making them wait for a gallery page or the
+    // substantially more expensive Review ranking request.
+    void fetchStatus({ refreshGridOnChange: false });
+
     if (isModelReviewMode()) {
         appState.preferenceSuggestions = null;
         try {
-            const [statusData] = await Promise.all([
-                fetch(statusUrl({ monitor: requestedMonitor, orient, includeRecoverable: false }))
-                    .then(r => r.json()),
-                fetchModelReview({ orient, requestId }),
-            ]);
-            if (
-                imageResponseMatchesContext(requestId, requestedContextKey)
-                && statusResponseMatchesOrientation(statusData, orient)
-                && isModelReviewMode()
-            ) {
-                appState.status = statusData;
-                updateStatusUI();
-            }
+            await fetchModelReview({ orient, requestId });
         } catch (e) {
             console.error(e);
         }
@@ -2270,15 +2323,12 @@ async function refreshImages(preserveFocus = false) {
         els.wallpaperGrid.querySelector('.model-review-panel')?.remove();
         const suggestionsPromise = fetchTagSuggestions({ render: true, requestId });
         try {
-            const [statusData, blocklistData, pageData] = await Promise.all([
-                fetch(statusUrl({ monitor: requestedMonitor, orient, includeRecoverable: false }))
-                    .then(r => r.json()),
+            const [blocklistData, pageData] = await Promise.all([
                 fetchBlocklist(),
                 fetch(imagePageUrl(0)).then(r => r.json()),
             ]);
             if (
                 imageResponseMatchesContext(requestId, requestedContextKey)
-                && statusResponseMatchesOrientation(statusData, orient)
             ) {
                 appState.allImages = pageData.items || [];
                 appState.totalImages = pageData.total ?? appState.allImages.length;
@@ -2286,8 +2336,8 @@ async function refreshImages(preserveFocus = false) {
                 appState.imagesComplete = pageData.next_offset === null || pageData.next_offset === undefined;
                 appState.loadedImageMode = appState.mode;
                 appState.loadedImageContextKey = libraryViewContextKey(appState.mode, orient);
-                statusData.recoverable_count = blocklistData.recoverable_count || 0;
-                appState.status = statusData;
+                if (!appState.status || typeof appState.status !== 'object') appState.status = {};
+                appState.status.recoverable_count = blocklistData.recoverable_count || 0;
                 updateStatusUI();
                 await applySearchFilter(preserveFocus);
                 renderBlocklistSuggestionsBar();
@@ -2301,14 +2351,9 @@ async function refreshImages(preserveFocus = false) {
             // replacement page is ready. Lock pagination across that gap so a
             // queued observer callback cannot request page zero alongside us.
             appState.initialImagePageRequestId = requestId;
-            const [statusData, pageData] = await Promise.all([
-                fetch(statusUrl({ monitor: requestedMonitor, orient, includeRecoverable: false }))
-                    .then(r => r.json()),
-                fetch(imagePageUrl(0)).then(r => r.json()),
-            ]);
+            const pageData = await fetch(imagePageUrl(0)).then(r => r.json());
             if (
                 imageResponseMatchesContext(requestId, requestedContextKey)
-                && statusResponseMatchesOrientation(statusData, orient)
             ) {
                 appState.allImages = pageData.items || [];
                 appState.totalImages = pageData.total ?? appState.allImages.length;
@@ -2316,7 +2361,6 @@ async function refreshImages(preserveFocus = false) {
                 appState.imagesComplete = pageData.next_offset === null || pageData.next_offset === undefined;
                 appState.loadedImageMode = appState.mode;
                 appState.loadedImageContextKey = libraryViewContextKey(appState.mode, orient);
-                appState.status = statusData;
                 appState.initialImagePageRequestId = null;
                 while (
                     preserveFocus
@@ -2327,8 +2371,8 @@ async function refreshImages(preserveFocus = false) {
                     if (!loaded || requestId !== appState.imageRequestId) break;
                 }
                 console.log('[refresh] done', appState.mode, orient,
-                    'pool:', statusData.pool_count, 'fav:', statusData.favorites_count);
-                updateStatusUI();
+                    'pool:', appState.status?.pool_count,
+                    'fav:', appState.status?.favorites_count);
                 await applySearchFilter(preserveFocus);
             }
         } catch (e) { console.error(e); }

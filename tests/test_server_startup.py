@@ -2,12 +2,42 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import uvicorn
 
 from wayper.server import api
+
+
+def test_review_warmup_matches_full_gui_query(monkeypatch) -> None:
+    calls: list[tuple[str, str, int]] = []
+
+    async def no_delay(_seconds: float) -> None:
+        return None
+
+    def fake_suggestions(*, purity: str, orient: str, limit: int) -> None:
+        calls.append((purity, orient, limit))
+
+    config = SimpleNamespace(
+        monitors=[
+            SimpleNamespace(orientation="landscape"),
+            SimpleNamespace(orientation="portrait"),
+        ]
+    )
+    monkeypatch.setattr(api.asyncio, "sleep", no_delay)
+    monkeypatch.setattr(api, "get_config", lambda: config)
+    monkeypatch.setattr(api, "read_mode", lambda _config: {"sfw"})
+    monkeypatch.setattr(api, "preference_suggestions", fake_suggestions)
+
+    asyncio.run(api._warm_review_suggestions())
+
+    assert sorted(calls) == [
+        ("sfw", "landscape", 0),
+        ("sfw", "portrait", 0),
+    ]
 
 
 def test_api_run_does_not_require_console_streams(monkeypatch, tmp_path: Path) -> None:

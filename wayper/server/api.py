@@ -156,12 +156,16 @@ async def _warm_review_suggestions() -> None:
         orientations = sorted(
             {monitor.orientation for monitor in config.monitors} & {"landscape", "portrait"}
         ) or ["landscape"]
+        # Match the dedicated Review request exactly (including ``limit=0``),
+        # otherwise the warm-up fills a different cache entry and the first
+        # empty Review view still has to rescore the whole library. Keep the
+        # model-heavy passes sequential so startup stays responsive.
         for orientation in orientations:
             await asyncio.to_thread(
                 preference_suggestions,
                 purity=purities,
                 orient=orientation,
-                limit=24,
+                limit=0,
             )
     except asyncio.CancelledError:
         raise
@@ -226,6 +230,7 @@ _cached_meta_token: tuple[str, int, int, int] | None = None
 _PREFERENCE_SUGGESTION_CACHE_LIMIT = 12
 _preference_suggestion_cache_lock = threading.Lock()
 _preference_suggestion_cache: dict[tuple[object, ...], dict[str, object]] = {}
+_preference_suggestion_inflight: dict[tuple[object, ...], threading.Event] = {}
 
 
 def _get_metadata() -> dict:
@@ -1237,10 +1242,22 @@ def _cached_preference_suggestions(
     # only a small card window mounted and reveals one replacement per decision.
     bounded_limit = None if limit == 0 else min(60, max(1, limit))
     cache_key = _preference_suggestion_state_key(config, purities, orient, bounded_limit)
-    with _preference_suggestion_cache_lock:
-        cached = _preference_suggestion_cache.get(cache_key)
-        if cached is not None:
-            return copy.deepcopy(cached)
+    # Coalesce requests for the same scope without serializing landscape and
+    # portrait ranking behind one global lock. The old lock covered the entire
+    # model pass, which made startup warm-up and monitor navigation queue up.
+    while True:
+        with _preference_suggestion_cache_lock:
+            cached = _preference_suggestion_cache.get(cache_key)
+            if cached is not None:
+                return copy.deepcopy(cached)
+            pending = _preference_suggestion_inflight.get(cache_key)
+            if pending is None:
+                pending = threading.Event()
+                _preference_suggestion_inflight[cache_key] = pending
+                break
+        pending.wait()
+
+    try:
         result = preference_deletion_suggestions(
             config,
             purities=purities,
@@ -1267,10 +1284,15 @@ def _cached_preference_suggestions(
             # A CLI/MCP action may have recorded feedback in another process. Queue
             # the non-blocking refresh when the long-lived API process next observes it.
             schedule_preference_model_retrain(config, force=True)
-        _preference_suggestion_cache[cache_key] = copy.deepcopy(result)
-        while len(_preference_suggestion_cache) > _PREFERENCE_SUGGESTION_CACHE_LIMIT:
-            _preference_suggestion_cache.pop(next(iter(_preference_suggestion_cache)))
+        with _preference_suggestion_cache_lock:
+            _preference_suggestion_cache[cache_key] = copy.deepcopy(result)
+            while len(_preference_suggestion_cache) > _PREFERENCE_SUGGESTION_CACHE_LIMIT:
+                _preference_suggestion_cache.pop(next(iter(_preference_suggestion_cache)))
         return result
+    finally:
+        with _preference_suggestion_cache_lock:
+            if _preference_suggestion_inflight.pop(cache_key, None) is pending:
+                pending.set()
 
 
 @app.get("/api/preference-suggestions")

@@ -5,6 +5,7 @@ import json
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -796,6 +797,49 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual(build.call_count, 2)
         self.assertEqual(len(second["items"]), 1)
         self.assertEqual(len(third["items"]), 1)
+
+    def test_preference_suggestion_route_coalesces_same_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(download_dir=Path(td))
+            build_started = threading.Event()
+            release_build = threading.Event()
+
+            def build_ranked(*_args, **_kwargs):
+                build_started.set()
+                self.assertTrue(release_build.wait(timeout=2))
+                return {"status": "ready", "items": []}
+
+            with (
+                patch("wayper.server.api.get_config", return_value=config),
+                patch("wayper.server.api._get_metadata", return_value={}),
+                patch(
+                    "wayper.server.api._preference_learning_payload",
+                    return_value={"status": "ready", "due": False},
+                ),
+                patch(
+                    "wayper.preference_model.preference_deletion_suggestions",
+                    side_effect=build_ranked,
+                ) as build,
+                ThreadPoolExecutor(max_workers=2) as executor,
+            ):
+                first = executor.submit(
+                    preference_suggestions,
+                    purity="sfw",
+                    orient="portrait",
+                    limit=0,
+                )
+                self.assertTrue(build_started.wait(timeout=2))
+                second = executor.submit(
+                    preference_suggestions,
+                    purity="sfw",
+                    orient="portrait",
+                    limit=0,
+                )
+                release_build.set()
+                self.assertEqual(first.result(timeout=2)["status"], "ready")
+                self.assertEqual(second.result(timeout=2)["status"], "ready")
+
+        self.assertEqual(build.call_count, 1)
 
     def test_automatic_model_review_keep_moves_quarantine_to_pool_and_records_label(self) -> None:
         from wayper.model_review import queue_model_review_item

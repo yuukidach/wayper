@@ -51,6 +51,10 @@ let appState = {
     selectedMonitor: null, // monitor name
     status: { auto_rotation: false, rotation_paused: false },
     statusRequestId: 0, // Invalidates status responses for a previous monitor
+    // Counts are scoped by active purity and monitor orientation. Restoring a
+    // previously seen scope makes monitor navigation update the sidebar in the
+    // same frame while a fresh status request verifies it in the background.
+    statusContextCache: new Map(),
     refreshing: false, // true while refreshImages is in-flight
     images: [],
     config: null, // Full config object
@@ -268,13 +272,18 @@ async function init() {
 
         // Phase 1: config and monitors are independent. The backend owns rotation startup.
         await Promise.all([fetchConfig(), fetchMonitors()]);
-        // Phase 2: all depend on config/monitors being ready
-        await Promise.all([fetchStatus(), fetchDiskUsage(), refreshImages()]);
+        // Phase 2: all depend on config/monitors being ready. refreshImages
+        // starts the independent status request itself, so do not duplicate it.
+        await Promise.all([fetchDiskUsage(), refreshImages()]);
     } finally {
         hideLoader();
     }
     // Measure after the initial DOM mutations without adding a visible delay.
     scheduleResponsiveLayout();
+
+    // Prepare both monitor orientations after first paint. This also caches an
+    // empty result, so opening Review with no suggestions is immediate.
+    void prefetchModelReviewRecommendations();
 
     // SSE for real-time mode changes
     connectSSE();

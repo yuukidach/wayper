@@ -1966,6 +1966,43 @@ async function testBlocklistMonitorSwitchKeepsSharedViewMounted() {
     assert.equal(statusRequests, 1, 'only the scoped status should refresh');
 }
 
+function testMonitorSwitchRestoresCachedCountsSynchronously() {
+    let statusUpdates = 0;
+    const portraitKey = JSON.stringify({ purities: ['sfw'], orient: 'portrait' });
+    const context = {
+        appState: {
+            mode: 'pool',
+            purity: ['sfw'],
+            selectedMonitor: 'DP-1',
+            currentOrient: 'landscape',
+            monitors: [
+                { name: 'DP-1', orientation: 'landscape' },
+                { name: 'DP-2', orientation: 'portrait' },
+            ],
+            status: { pool_count: 10, favorites_count: 1 },
+        },
+        console,
+        updateStatusUI: () => { statusUpdates++; },
+    };
+    context.window = context;
+    const renderer = loadRendererScript(
+        'renderer-data.js',
+        context,
+        ['restoreStatusContext'],
+    );
+    vm.runInContext(`appState.statusContextCache = new Map([[${JSON.stringify(portraitKey)}, {
+        pool_count: 20,
+        favorites_count: 2,
+        blocklist_count: 4,
+        model_review_count: 1,
+    }]])`, context);
+
+    assert.equal(renderer.restoreStatusContext('DP-2', 'portrait'), true);
+    assert.equal(context.appState.status.pool_count, 20);
+    assert.equal(context.appState.status.monitor, 'DP-2');
+    assert.equal(statusUpdates, 1);
+}
+
 (async () => {
     testRecommendationCountPreservesFullCandidateTotal();
     testImageOrientationUsesApiFieldAndSupportsLegacyWindowsPaths();
@@ -1987,6 +2024,7 @@ async function testBlocklistMonitorSwitchKeepsSharedViewMounted() {
     await testLateModelReviewResponseCannotRemountDeckAfterLeaving();
     await testModelReviewContextIsRestoredFromCache();
     await testBlocklistMonitorSwitchKeepsSharedViewMounted();
+    testMonitorSwitchRestoresCachedCountsSynchronously();
     testReviewRowsUseSpatialArrowNavigation();
     testGridNavigationBridgesModelReview();
     testCarouselSelectionDoesNotRerenderWorkspace();

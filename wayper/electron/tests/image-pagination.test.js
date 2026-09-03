@@ -11,6 +11,10 @@ function loadRendererData(context, exportedNames) {
     return context.__testExports;
 }
 
+async function flushPromises() {
+    await new Promise(resolve => setImmediate(resolve));
+}
+
 function makeState() {
     return {
         selectedMonitor: 'DP-2',
@@ -114,9 +118,55 @@ async function testRepeatedPageCannotDuplicatePaths() {
     assert.equal(state.images.map(image => image.path).join(','), 'first.jpg,second.jpg');
 }
 
+async function testRefreshPublishesStatusBeforeSlowPage() {
+    const pending = [];
+    const state = makeState();
+    state.status = { auto_rotation: false, rotation_paused: false, pool_count: 1 };
+    let statusUpdates = 0;
+    const context = makeContext(
+        state,
+        url => new Promise(resolve => pending.push({ url, resolve })),
+    );
+    context.updateStatusUI = () => { statusUpdates++; };
+    const renderer = loadRendererData(context, ['refreshImages']);
+
+    let refreshFinished = false;
+    const refresh = renderer.refreshImages().then(() => { refreshFinished = true; });
+    const statusRequest = pending.find(request => request.url.includes('/api/status'));
+    const pageRequest = pending.find(request => request.url.includes('/api/images/page'));
+    assert.ok(statusRequest && pageRequest);
+
+    statusRequest.resolve({
+        ok: true,
+        json: async () => ({
+            auto_rotation: false,
+            rotation_paused: false,
+            monitor: 'DP-2',
+            orientation: 'portrait',
+            pool_count: 42,
+            favorites_count: 7,
+            blocklist_count: 3,
+            model_review_count: 0,
+            mode: ['sfw'],
+        }),
+    });
+    await flushPromises();
+
+    assert.equal(state.status.pool_count, 42);
+    assert.equal(statusUpdates, 1);
+    assert.equal(refreshFinished, false, 'the gallery page should still be pending');
+
+    pageRequest.resolve({
+        ok: true,
+        json: async () => ({ items: [], total: 0, next_offset: null }),
+    });
+    await refresh;
+}
+
 (async () => {
     await testRefreshLocksPageZeroAgainstObserverRace();
     await testRepeatedPageCannotDuplicatePaths();
+    await testRefreshPublishesStatusBeforeSlowPage();
     console.log('image pagination tests passed');
 })().catch(error => {
     console.error(error);
