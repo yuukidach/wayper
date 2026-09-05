@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 from wayper.backend.linux import LinuxBackend, _monitors
+from wayper.config import TransitionConfig
 
 
 def _result(payload: object) -> subprocess.CompletedProcess[str]:
@@ -109,6 +111,28 @@ def test_detection_falls_back_from_hyprland_to_sway() -> None:
         ("hyprctl", "monitors", "-j"),
         ("swaymsg", "-t", "get_outputs", "-r"),
     ]
+
+
+def test_wallpaper_is_scaled_only_at_display_time_with_high_quality_filter() -> None:
+    with patch("wayper.backend.linux.subprocess.run", return_value=_result({})) as run:
+        LinuxBackend().set_wallpaper(
+            "DP-2",
+            Path("/wallpapers/original.jpg"),
+            TransitionConfig(),
+        )
+
+    command = run.call_args.args[0]
+    assert command[:8] == [
+        "awww",
+        "img",
+        "/wallpapers/original.jpg",
+        "--outputs",
+        "DP-2",
+        "--resize",
+        "crop",
+        "--filter",
+    ]
+    assert command[8] == "Lanczos3"
 
 
 def test_notification_uses_cross_process_synchronous_hint() -> None:

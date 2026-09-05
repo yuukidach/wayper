@@ -14,7 +14,7 @@ from fastapi import HTTPException
 
 from wayper.config import MonitorConfig, WallhavenConfig, WayperConfig, load_config
 from wayper.model_review import queue_model_review_item
-from wayper.pool import hydrate_tag_details, load_metadata, save_metadata
+from wayper.pool import hydrate_tag_details, load_metadata, pool_dir, save_metadata
 from wayper.server.api import (
     ActionRequest,
     ModelReviewActionRequest,
@@ -100,7 +100,7 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual(page.items[0].path, "sfw/portrait/tall.jpg")
         self.assertEqual(page.items[0].orientation, "portrait")
 
-    def test_wallhaven_search_requires_monitor_resolution(self) -> None:
+    def test_wallhaven_search_keeps_smaller_originals_eligible(self) -> None:
         config = WayperConfig(
             monitors=[MonitorConfig("retina", 5120, 2880, "landscape")],
         )
@@ -114,7 +114,43 @@ class RegressionTest(unittest.TestCase):
             asyncio.run(client.close())
 
         params = client.client.get.call_args.kwargs["params"]
-        self.assertEqual(params["atleast"], "5120x2880")
+        self.assertNotIn("atleast", params)
+
+    def test_wallhaven_download_preserves_original_dimensions(self) -> None:
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(
+                download_dir=Path(td),
+                monitors=[MonitorConfig("portrait", 144, 256, "portrait")],
+                wallhaven=WallhavenConfig(batch_size=1),
+            )
+            item = {
+                "id": "original",
+                "path": "https://wallhaven.test/original.jpg",
+                "favorites": 10,
+            }
+            detail = {**item, "tags": [], "purity": "sfw", "category": "general"}
+            client = WallhavenClient(config)
+            client.search = AsyncMock(return_value=[item])
+            client.wallpaper_info = AsyncMock(return_value=detail)
+
+            async def download(_url: str, destination: Path) -> bool:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (300, 400)).save(destination)
+                return True
+
+            client.download_image = AsyncMock(side_effect=download)
+            try:
+                asyncio.run(client.download_for("portrait", "sfw"))
+            finally:
+                asyncio.run(client.close())
+
+            destination = pool_dir(config, "sfw", "portrait") / "original.jpg"
+            with Image.open(destination) as downloaded:
+                dimensions = downloaded.size
+
+        self.assertEqual(dimensions, (300, 400))
 
     def test_wallhaven_search_omits_resolution_without_matching_monitor(self) -> None:
         config = WayperConfig(

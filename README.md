@@ -38,7 +38,7 @@ Most wallpaper tools stop at "set image on desktop." wayper is a full **Wallhave
 - **Auto orientation** — portrait monitors get portrait wallpapers. No sorting needed.
 - **Three-tier purity** — SFW, Sketchy, NSFW — independently toggleable, persistent across sessions.
 - **Cross-platform** — Windows, macOS, and Linux (Hyprland/Sway). CLI + GUI + MCP.
-- **Pool management** — validates, resizes, and rotates downloads, with favorites, blocklist, and history navigation built in.
+- **Pool management** — preserves and validates original downloads, then rotates them with favorites, blocklist, and history navigation built in.
 - **`--json` everywhere** — every command supports machine-readable output.
 
 ## Install

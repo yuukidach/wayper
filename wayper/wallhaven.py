@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 
 from .config import WayperConfig, normalize_filter_strategy
-from .image import resize_crop, validate_image
+from .image import validate_image
 from .pool import extract_tag_names, favorites_dir, is_blacklisted, pool_dir, save_metadata
 from .tags import normalize_tag
 
@@ -175,15 +175,6 @@ class WallhavenClient:
             "ratios": orientation,
             "page": 1,
         }
-        monitor = next(
-            (item for item in self.config.monitors if item.orientation == orientation),
-            None,
-        )
-        if monitor is not None:
-            # Avoid downloading a low-resolution source only to upscale it to the
-            # monitor target in resize_crop(). This is especially visible on Retina
-            # displays, whose backing dimensions exceed their logical point size.
-            params["atleast"] = f"{monitor.width}x{monitor.height}"
         exclude_q = self._exclude_query()
         if exclude_q:
             params["q"] = exclude_q
@@ -368,13 +359,6 @@ class WallhavenClient:
         downloaded = 0
 
         if items:
-            # Find monitor config for resize dimensions
-            mon = None
-            for m in config.monitors:
-                if m.orientation == orientation:
-                    mon = m
-                    break
-
             sample = random.sample(items, min(config.wallhaven.batch_size, len(items)))
             sampled = len(sample)
             candidates: list[tuple[str, str, dict, Path]] = []  # (filename, url, item, dest)
@@ -468,10 +452,6 @@ class WallhavenClient:
                             if not await self.download_image(url, review_dest):
                                 skipped["fail"] += 1
                                 continue
-                            if mon and not resize_crop(review_dest, mon.width, mon.height):
-                                review_dest.unlink(missing_ok=True)
-                                skipped["fail"] += 1
-                                continue
                             save_metadata(config, filename, item, complete=True)
                             try:
                                 prediction_payload = prediction.to_dict()
@@ -514,9 +494,6 @@ class WallhavenClient:
 
                     save_metadata(config, filename, item, complete=True)
                     downloaded += 1
-
-                    if mon and not resize_crop(dest, mon.width, mon.height):
-                        dest.unlink(missing_ok=True)
 
         log.info(
             "Download[%(mode)s/%(orient)s] results=%(results)d sampled=%(sampled)d "
@@ -625,11 +602,6 @@ class WallhavenClient:
                     url = str(item.get("path", url))
                     fav_dest.parent.mkdir(parents=True, exist_ok=True)
                     if not await self.download_image(url, fav_dest):
-                        continue
-
-                    mon = next((m for m in config.monitors if m.orientation == orientation), None)
-                    if mon and not resize_crop(fav_dest, mon.width, mon.height):
-                        fav_dest.unlink(missing_ok=True)
                         continue
 
                     save_metadata(config, filename, item, complete=True)
