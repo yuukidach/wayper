@@ -114,18 +114,18 @@ def test_detection_falls_back_from_hyprland_to_sway() -> None:
 
 
 def test_wallpaper_is_scaled_only_at_display_time_with_high_quality_filter() -> None:
+    image = Path("/wallpapers/original.jpg")
     with patch("wayper.backend.linux.subprocess.run", return_value=_result({})) as run:
         LinuxBackend().set_wallpaper(
             "DP-2",
-            Path("/wallpapers/original.jpg"),
+            image,
             TransitionConfig(),
         )
 
     command = run.call_args.args[0]
-    assert command[:8] == [
-        "awww",
-        "img",
-        "/wallpapers/original.jpg",
+    assert command[:2] == ["awww", "img"]
+    assert command[2] == str(image)
+    assert command[3:8] == [
         "--outputs",
         "DP-2",
         "--resize",
