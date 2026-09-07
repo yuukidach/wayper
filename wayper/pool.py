@@ -315,19 +315,14 @@ def enforce_quota(config: WayperConfig) -> None:
             total -= size
 
 
-def should_download(config: WayperConfig, purities: set[str]) -> dict[str, bool]:
-    """Return dict of {purity: needs_download} for each active purity."""
-    result = {}
-    for purity in purities:
-        needs = False
-        for orient in ORIENTATIONS:
-            if count_images(pool_dir(config, purity, orient)) < 30:
-                needs = True
-                break
-        if not needs:
-            needs = random.random() < 0.2
-        result[purity] = needs
-    return result
+def should_download(config: WayperConfig, purities: set[str]) -> bool:
+    """Return whether the selected screen and purity scope needs one global batch."""
+    below_minimum = any(
+        count_images(pool_dir(config, purity, orientation)) < 30
+        for purity in purities
+        for orientation in ORIENTATIONS
+    )
+    return below_minimum or random.random() < 0.2
 
 
 def _metadata_record(

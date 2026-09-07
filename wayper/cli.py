@@ -102,19 +102,15 @@ def next_cmd(ctx):
 
     # Refill the pool after a manual change using the same policy as auto rotation.
     purities = read_mode(config)
-    download_map = should_download(config, purities)
-    to_download = [p for p, needs in download_map.items() if needs]
-    if to_download:
+    if should_download(config, purities):
         from .wallhaven import WallhavenClient
 
         async def _download():
             client = WallhavenClient(config)
             try:
-                tasks = []
-                for purity in to_download:
-                    tasks.append(client.download_for("landscape", purity))
-                    tasks.append(client.download_for("portrait", purity))
-                await asyncio.gather(*tasks)
+                orientations = {monitor.orientation for monitor in config.monitors}
+                if orientations:
+                    await client.download_for(orientations, purities)
             finally:
                 await client.close()
 

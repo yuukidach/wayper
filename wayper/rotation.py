@@ -105,25 +105,13 @@ async def _download_pending(
     purities: set[str],
 ) -> None:
     try:
-        download_map = should_download(config, purities)
         orientations = {monitor.orientation for monitor in config.monitors}
-        tasks = [
-            (orientation, purity)
-            for purity, needed in download_map.items()
-            if needed
-            for orientation in orientations
-        ]
-        if tasks:
+        if orientations and should_download(config, purities):
             model_filter_context = await asyncio.to_thread(client._model_filter_context)
-            await asyncio.gather(
-                *(
-                    client.download_for(
-                        orientation,
-                        purity,
-                        model_filter_context=model_filter_context,
-                    )
-                    for orientation, purity in tasks
-                )
+            await client.download_for(
+                orientations,
+                purities,
+                model_filter_context=model_filter_context,
             )
     except Exception as exc:
         log.warning("Background download failed: %s", exc)

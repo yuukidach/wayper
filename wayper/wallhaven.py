@@ -42,7 +42,6 @@ def _item_favorites(item: dict) -> int:
         return 0
 
 
-_PURITY_CODES = {"sfw": "100", "sketchy": "010", "nsfw": "001"}
 _ModelFilterContext = tuple[object | None, bool, dict[str, object]]
 
 
@@ -162,17 +161,20 @@ class WallhavenClient:
             for combo in self.config.wallhaven.exclude_combos
         )
 
-    async def search(self, orientation: str, purity: str) -> list[dict]:
-        """Return list of wallpaper data dicts from wallhaven search."""
-        purity_code = _PURITY_CODES.get(purity, "001")
+    async def search(self, orientations: set[str], purities: set[str]) -> list[dict]:
+        """Return one search result spanning the requested orientations and purities."""
+        orientation_query = ",".join(sorted(orientations))
+        purity_query = "".join(
+            "1" if value in purities else "0" for value in ("sfw", "sketchy", "nsfw")
+        )
         params = {
             "categories": self.config.wallhaven.categories,
-            "purity": purity_code,
+            "purity": purity_query,
             "topRange": self.config.wallhaven.top_range,
             "sorting": self._download_sorting(),
             "order": "desc",
             "ai_art_filter": self.config.wallhaven.ai_art_filter,
-            "ratios": orientation,
+            "ratios": orientation_query,
             "page": 1,
         }
         exclude_q = self._exclude_query()
@@ -210,15 +212,15 @@ class WallhavenClient:
             log.info(
                 "Wallhaven search falling back to page 1 after page fetch failures "
                 "(orientation=%s, purity=%s)",
-                orientation,
-                purity,
+                orientation_query,
+                ",".join(sorted(purities)),
             )
             return page_one
         except Exception:
             log.warning(
                 "Wallhaven search failed (orientation=%s, purity=%s)",
-                orientation,
-                purity,
+                orientation_query,
+                ",".join(sorted(purities)),
                 exc_info=True,
             )
             return []
@@ -316,15 +318,13 @@ class WallhavenClient:
 
     async def download_for(
         self,
-        orientation: str,
-        mode: str,
+        orientations: set[str],
+        modes: set[str],
         *,
         model_filter_context: _ModelFilterContext | None = None,
     ) -> None:
-        """Download a batch of wallpapers for given orientation and mode."""
+        """Download one global batch for the requested screen and purity scope."""
         config = self.config
-        target_dir = pool_dir(config, mode, orientation)
-        fav_dir = favorites_dir(config, mode, orientation)
 
         # Loading the model once per batch keeps the normal rules-only path
         # cheap. Model hits go to a recoverable review queue, so a current model
@@ -338,11 +338,11 @@ class WallhavenClient:
             log.info(
                 "Model filter selected for %s/%s but no compatible model is ready; "
                 "downloads remain eligible until the model is trained",
-                mode,
-                orientation,
+                ",".join(sorted(modes)),
+                ",".join(sorted(orientations)),
             )
 
-        items = await self.search(orientation, mode)
+        items = await self.search(orientations, modes)
         skipped = {
             "dup": 0,
             "fav": 0,
@@ -361,18 +361,27 @@ class WallhavenClient:
         if items:
             sample = random.sample(items, min(config.wallhaven.batch_size, len(items)))
             sampled = len(sample)
-            candidates: list[tuple[str, str, dict, Path]] = []  # (filename, url, item, dest)
+            candidates: list[tuple[str, str, dict, Path]] = []
             for item in sample:
                 url = item.get("path", "")
                 if not url:
                     continue
                 filename = url.rsplit("/", 1)[-1]
-                dest = target_dir / filename
+                mode = item.get("purity")
+                orientation = (
+                    "portrait"
+                    if item.get("dimension_y", 0) > item.get("dimension_x", 0)
+                    else "landscape"
+                )
+                if mode not in modes or orientation not in orientations:
+                    continue
+                dest = pool_dir(config, mode, orientation) / filename
+                fav_dest = favorites_dir(config, mode, orientation) / filename
 
                 if dest.exists():
                     skipped["dup"] += 1
                     continue
-                if (fav_dir / filename).exists():
+                if fav_dest.exists():
                     skipped["fav"] += 1
                     continue
                 if is_blacklisted(config, filename):
@@ -401,6 +410,8 @@ class WallhavenClient:
                         skipped["metadata"] += 1
                         continue
                     item = {**item, **detail}
+                    mode = dest.parent.parent.name
+                    orientation = dest.parent.name
 
                     tag_names = extract_tag_names(item.get("tags", []))
                     if self._rules_enabled:
@@ -503,8 +514,8 @@ class WallhavenClient:
             "fail=%(fail)d) "
             "downloaded=%(downloaded)d",
             {
-                "mode": mode,
-                "orient": orientation,
+                "mode": ",".join(sorted(modes)),
+                "orient": ",".join(sorted(orientations)),
                 "results": len(items),
                 "sampled": sampled,
                 "downloaded": downloaded,

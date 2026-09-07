@@ -109,7 +109,7 @@ class RegressionTest(unittest.TestCase):
             return_value=_FakeResponse(200, {"data": [], "meta": {"last_page": 1}})
         )
         try:
-            asyncio.run(client.search("landscape", "sfw"))
+            asyncio.run(client.search({"landscape"}, {"sfw"}))
         finally:
             asyncio.run(client.close())
 
@@ -129,6 +129,9 @@ class RegressionTest(unittest.TestCase):
                 "id": "original",
                 "path": "https://wallhaven.test/original.jpg",
                 "favorites": 10,
+                "purity": "sfw",
+                "dimension_x": 1080,
+                "dimension_y": 1920,
             }
             detail = {**item, "tags": [], "purity": "sfw", "category": "general"}
             client = WallhavenClient(config)
@@ -142,7 +145,7 @@ class RegressionTest(unittest.TestCase):
 
             client.download_image = AsyncMock(side_effect=download)
             try:
-                asyncio.run(client.download_for("portrait", "sfw"))
+                asyncio.run(client.download_for({"portrait"}, {"sfw"}))
             finally:
                 asyncio.run(client.close())
 
@@ -161,7 +164,7 @@ class RegressionTest(unittest.TestCase):
             return_value=_FakeResponse(200, {"data": [], "meta": {"last_page": 1}})
         )
         try:
-            asyncio.run(client.search("landscape", "sfw"))
+            asyncio.run(client.search({"landscape"}, {"sfw"}))
         finally:
             asyncio.run(client.close())
 
@@ -389,6 +392,9 @@ class RegressionTest(unittest.TestCase):
                 "id": "candidate",
                 "path": "https://wallhaven.test/candidate.jpg",
                 "favorites": 10,
+                "purity": "sfw",
+                "dimension_x": 1920,
+                "dimension_y": 1080,
             }
             detail = {
                 **item,
@@ -407,7 +413,7 @@ class RegressionTest(unittest.TestCase):
 
             client.download_image = AsyncMock(side_effect=download)
             try:
-                asyncio.run(client.download_for("landscape", "sfw"))
+                asyncio.run(client.download_for({"landscape"}, {"sfw"}))
             finally:
                 asyncio.run(client.close())
 
@@ -427,6 +433,9 @@ class RegressionTest(unittest.TestCase):
                 "id": "candidate",
                 "path": "https://wallhaven.test/candidate.jpg",
                 "favorites": 10,
+                "purity": "sfw",
+                "dimension_x": 1920,
+                "dimension_y": 1080,
             }
             detail = {**item, "tags": [{"name": "forest"}], "purity": "sfw"}
             client = WallhavenClient(config)
@@ -449,8 +458,8 @@ class RegressionTest(unittest.TestCase):
                 with patch("wayper.preference_model.auto_filter_prediction", side_effect=score):
                     asyncio.run(
                         client.download_for(
-                            "landscape",
-                            "sfw",
+                            {"landscape"},
+                            {"sfw"},
                             model_filter_context=(object(), True, {}),
                         )
                     )
@@ -460,7 +469,7 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual(len(score_threads), 1)
         self.assertNotEqual(score_threads[0], event_loop_thread)
 
-    def test_background_download_lanes_share_one_model_context(self) -> None:
+    def test_background_download_uses_one_combined_batch_and_model_context(self) -> None:
         from wayper.rotation import _download_pending
 
         shared_context = (object(), True, {"ready": True})
@@ -474,7 +483,9 @@ class RegressionTest(unittest.TestCase):
                 self.context_loads += 1
                 return shared_context
 
-            async def download_for(self, _orientation, _purity, *, model_filter_context):
+            async def download_for(self, orientation, purity, *, model_filter_context):
+                self.orientation = orientation
+                self.purity = purity
                 self.received.append(model_filter_context)
 
         config = WayperConfig(
@@ -484,12 +495,84 @@ class RegressionTest(unittest.TestCase):
             ]
         )
         client = FakeClient()
-        with patch("wayper.rotation.should_download", return_value={"sfw": True}):
+        with patch("wayper.rotation.should_download", return_value=True):
             asyncio.run(_download_pending(client, config, {"sfw"}))
 
         self.assertEqual(client.context_loads, 1)
-        self.assertEqual(len(client.received), 2)
+        self.assertEqual(len(client.received), 1)
+        self.assertEqual(client.orientation, {"landscape", "portrait"})
+        self.assertEqual(client.purity, {"sfw"})
         self.assertTrue(all(context is shared_context for context in client.received))
+
+    def test_wallhaven_combines_search_scope(self) -> None:
+        config = WayperConfig()
+        client = WallhavenClient(config)
+        client.client.get = AsyncMock(
+            return_value=_FakeResponse(200, {"data": [], "meta": {"last_page": 1}})
+        )
+        try:
+            asyncio.run(client.search({"portrait", "landscape"}, {"nsfw", "sfw"}))
+        finally:
+            asyncio.run(client.close())
+
+        params = client.client.get.call_args.kwargs["params"]
+        self.assertEqual(params["ratios"], "landscape,portrait")
+        self.assertEqual(params["purity"], "101")
+
+    def test_combined_download_batch_size_is_global(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(
+                download_dir=Path(td),
+                wallhaven=WallhavenConfig(batch_size=2),
+            )
+            items = [
+                {
+                    "id": f"item-{index}",
+                    "path": f"https://wallhaven.test/item-{index}.jpg",
+                    "favorites": 10,
+                    "purity": purity,
+                    "dimension_x": width,
+                    "dimension_y": height,
+                }
+                for index, (purity, width, height) in enumerate(
+                    [
+                        ("sfw", 1920, 1080),
+                        ("nsfw", 1080, 1920),
+                        ("sfw", 1080, 1920),
+                        ("nsfw", 1920, 1080),
+                    ]
+                )
+            ]
+            client = WallhavenClient(config)
+            client.search = AsyncMock(return_value=items)
+            client.wallpaper_info = AsyncMock(
+                side_effect=lambda item_id: next(item for item in items if item["id"] == item_id)
+            )
+
+            async def download(_url: str, destination: Path) -> bool:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"candidate")
+                return True
+
+            client.download_image = AsyncMock(side_effect=download)
+            try:
+                asyncio.run(
+                    client.download_for(
+                        {"landscape", "portrait"},
+                        {"sfw", "nsfw"},
+                    )
+                )
+            finally:
+                asyncio.run(client.close())
+
+            downloaded = [
+                path for path in config.download_dir.rglob("*.jpg") if "favorites" not in path.parts
+            ]
+
+        self.assertEqual(client.search.await_count, 1)
+        self.assertEqual(client.wallpaper_info.await_count, 2)
+        self.assertEqual(client.download_image.await_count, 2)
+        self.assertEqual(len(downloaded), 2)
 
     def test_remote_favorite_fetches_complete_details_before_saving(self) -> None:
         with tempfile.TemporaryDirectory() as td:
