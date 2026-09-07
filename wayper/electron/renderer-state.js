@@ -384,6 +384,7 @@ function setupEventListeners() {
         });
     }
     els.btnSaveSettings.onclick = saveSettings;
+    document.getElementById('btn-wh-reconnect')?.addEventListener('click', reconnectWallhaven);
     els.btnCancelSettings.onclick = () => {
         // A language dropdown change is previewed immediately.  Cancel must
         // restore the persisted preference so an unsaved choice is not left

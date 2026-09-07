@@ -155,8 +155,16 @@ def run_app():
     except AutostartError as error:
         print(f"Warning: could not install Wayper autostart: {error}")
 
-    # Start API in a separate thread
-    api_thread = threading.Thread(target=run_api, daemon=True)
+    # Keep the source-mode API in this process, but give it an explicit shutdown
+    # signal.  Letting a daemon server thread outlive Electron starts Python's
+    # interpreter shutdown while Uvicorn is still serving requests, leaving a
+    # stale backend whose asyncio executor can no longer run rotation work.
+    api_stop_event = threading.Event()
+    api_thread = threading.Thread(
+        target=run_api,
+        args=(api_stop_event,),
+        name="wayper-api",
+    )
     api_thread.start()
 
     port = _wait_for_api()
@@ -210,6 +218,8 @@ def run_app():
     finally:
         if proc.poll() is None:
             proc.terminate()
+        api_stop_event.set()
+        api_thread.join()
 
 
 if __name__ == "__main__":

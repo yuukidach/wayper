@@ -98,6 +98,12 @@
         Username: '用户名',
         'Wallhaven Password': 'Wallhaven 密码',
         'For favorite sync; optional with browser cookies': '用于同步收藏；也可以改用浏览器 Cookie 登录',
+        'Wallhaven Session': 'Wallhaven 会话',
+        Reconnect: '重新登录',
+        'Save account changes first. Only this action may open a login window.': '请先保存账号改动。只有此操作可能打开登录窗口。',
+        'Connecting…': '正在连接…',
+        Connected: '已连接',
+        'Connection failed:': '连接失败：',
         'Categories (General/Anime/People)': '分类（常规 / 动漫 / 人物）',
         '111 = All, 010 = Anime only': '111 = 全部，010 = 仅动漫',
         'Top Range': '热门时间范围',
@@ -346,6 +352,8 @@
         if (match) return source.endsWith('recommended')
             ? `${match[1]} 张建议检查`
             : `${match[1]} 张已自动拦截`;
+        match = source.match(/^Connection failed: (.+)$/);
+        if (match) return `连接失败：${match[1]}`;
         match = source.match(/^(\d+) banned$/);
         if (match) return `${match[1]} 张已屏蔽`;
         match = source.match(/^(\d+) in pool$/);

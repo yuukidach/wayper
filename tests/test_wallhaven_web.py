@@ -7,8 +7,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+
 from wayper.config import WayperConfig
-from wayper.wallhaven_web import WallhavenWeb, _can_sync_favorites
+from wayper.wallhaven_web import WallhavenWeb, _can_sync_favorites, _SessionStatus
 
 
 class WallhavenWebTest(unittest.TestCase):
@@ -36,7 +38,11 @@ class WallhavenWebTest(unittest.TestCase):
             with (
                 patch.dict(sys.modules, {"nodriver": nodriver}),
                 patch("wayper.wallhaven_web._find_chrome", return_value="/path/to/chrome"),
-                patch.object(client, "_verify_session", return_value=True),
+                patch.object(
+                    client,
+                    "_verify_session",
+                    return_value=_SessionStatus.AUTHENTICATED,
+                ),
                 patch.object(client, "_save_cookies") as save_cookies,
             ):
                 logged_in = asyncio.run(client._nodriver_login_async())
@@ -50,6 +56,115 @@ class WallhavenWebTest(unittest.TestCase):
         self.assertEqual(tab.sleep.await_count, 1)
         save_cookies.assert_called_once_with()
         browser.stop.assert_called_once_with()
+
+    def test_verify_session_treats_server_error_as_unavailable(self) -> None:
+        response = httpx.Response(
+            502,
+            request=httpx.Request("GET", "https://wallhaven.cc/"),
+        )
+        verifier = MagicMock()
+        verifier.get.return_value = response
+        client = WallhavenWeb("user", "pass")
+        try:
+            with patch("wayper.wallhaven_web.httpx.Client", return_value=verifier):
+                status = client._verify_session()
+        finally:
+            client.close()
+
+        self.assertIs(status, _SessionStatus.UNAVAILABLE)
+        verifier.close.assert_called_once_with()
+
+    def test_verify_session_recognizes_explicit_login_page(self) -> None:
+        response = httpx.Response(
+            200,
+            text='<form id="login"><input name="username"></form>',
+            request=httpx.Request("GET", "https://wallhaven.cc/login"),
+        )
+        verifier = MagicMock()
+        verifier.get.return_value = response
+        client = WallhavenWeb("user", "pass")
+        try:
+            with patch("wayper.wallhaven_web.httpx.Client", return_value=verifier):
+                status = client._verify_session()
+        finally:
+            client.close()
+
+        self.assertIs(status, _SessionStatus.UNAUTHENTICATED)
+
+    def test_login_preserves_cached_session_when_verification_is_unavailable(self) -> None:
+        client = WallhavenWeb("user", "pass")
+        try:
+            with (
+                patch.object(client, "_load_cookies", return_value=True),
+                patch.object(
+                    client,
+                    "_verify_session",
+                    return_value=_SessionStatus.UNAVAILABLE,
+                ),
+                patch.object(client, "_clear_cookies") as clear_cookies,
+                patch.object(client, "_load_browser_cookies") as load_browser_cookies,
+                patch.object(client, "_nodriver_login") as nodriver_login,
+            ):
+                logged_in = client._login()
+        finally:
+            client.close()
+
+        self.assertFalse(logged_in)
+        clear_cookies.assert_not_called()
+        load_browser_cookies.assert_not_called()
+        nodriver_login.assert_not_called()
+
+    def test_background_login_never_opens_browser_for_cloudflare(self) -> None:
+        response = httpx.Response(
+            403,
+            text="challenge-platform cloudflare",
+            request=httpx.Request("GET", "https://wallhaven.cc/login"),
+        )
+        client = WallhavenWeb("user", "pass")
+        try:
+            with (
+                patch.object(client, "_load_cookies", return_value=False),
+                patch.object(
+                    client,
+                    "_load_browser_cookies",
+                    return_value=_SessionStatus.UNAUTHENTICATED,
+                ),
+                patch.object(client._client, "get", return_value=response),
+                patch.object(client, "_is_cf_challenge", return_value=True),
+                patch.object(client, "_nodriver_login") as nodriver_login,
+            ):
+                logged_in = client._login()
+        finally:
+            client.close()
+
+        self.assertFalse(logged_in)
+        nodriver_login.assert_not_called()
+
+    def test_explicit_login_allows_browser_for_cloudflare(self) -> None:
+        response = httpx.Response(
+            403,
+            text="challenge-platform cloudflare",
+            request=httpx.Request("GET", "https://wallhaven.cc/login"),
+        )
+        client = WallhavenWeb("user", "pass")
+        try:
+            with (
+                patch.object(client, "_load_cookies", return_value=False),
+                patch.object(
+                    client,
+                    "_load_browser_cookies",
+                    return_value=_SessionStatus.UNAUTHENTICATED,
+                ),
+                patch.object(client._client, "get", return_value=response),
+                patch.object(client, "_is_cf_challenge", return_value=True),
+                patch.object(client, "_nodriver_login", return_value=True) as nodriver_login,
+            ):
+                logged_in = client._login(allow_browser=True, force=True)
+        finally:
+            client.close()
+
+        self.assertTrue(logged_in)
+        nodriver_login.assert_called_once_with()
 
     def test_parse_fav_button_add_state_with_nested_add_link(self) -> None:
         html = """

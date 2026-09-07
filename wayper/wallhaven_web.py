@@ -15,6 +15,7 @@ import shutil
 import sys
 import threading
 import time
+from enum import Enum
 from html import unescape
 from importlib.util import find_spec
 from pathlib import Path
@@ -29,7 +30,14 @@ log = logging.getLogger("wayper.wallhaven")
 
 _COOKIE_FILE = CONFIG_DIR / ".wh_session.json"
 _COOKIE_MAX_AGE = 86400  # 24 hours
+_LOGIN_RETRY_DELAY = 60.0
 _ATTR_RE = re.compile(r"([\w:-]+)\s*=\s*(['\"])(.*?)\2", re.DOTALL)
+
+
+class _SessionStatus(Enum):
+    AUTHENTICATED = "authenticated"
+    UNAUTHENTICATED = "unauthenticated"
+    UNAVAILABLE = "unavailable"
 
 
 def _find_chrome() -> str | None:
@@ -81,6 +89,7 @@ class WallhavenWeb:
             headers={"User-Agent": USER_AGENT},
         )
         self._logged_in = False
+        self._login_retry_after = 0.0
 
     def _csrf(self, html: str) -> str:
         m = re.search(r'csrf-token"\s+content="([^"]+)"', html)
@@ -99,20 +108,38 @@ class WallhavenWeb:
     def _attrs(tag: str) -> dict[str, str]:
         return {name.lower(): unescape(value) for name, _, value in _ATTR_RE.findall(tag)}
 
-    def _login(self) -> bool:
+    def _defer_login(self, reason: str) -> None:
+        self._login_retry_after = time.monotonic() + _LOGIN_RETRY_DELAY
+        log.warning("wallhaven web: %s; deferring login and retrying later", reason)
+
+    def _login(self, *, allow_browser: bool = False, force: bool = False) -> bool:
+        if not force and time.monotonic() < self._login_retry_after:
+            return False
+
         if self._load_cookies():
-            if self._verify_session():
+            status = self._verify_session()
+            if status is _SessionStatus.AUTHENTICATED:
                 self._logged_in = True
+                self._login_retry_after = 0.0
                 log.info("wallhaven web: restored session from cached cookies")
                 return True
-            log.info("wallhaven web: cached cookies expired on server, need fresh login")
-            self._clear_cookies()
+            if status is _SessionStatus.UNAVAILABLE and not allow_browser:
+                self._defer_login("cached session could not be verified")
+                return False
+            if status is _SessionStatus.UNAUTHENTICATED:
+                log.info("wallhaven web: cached cookies expired on server, need fresh login")
+                self._clear_cookies()
 
-        if self._load_browser_cookies():
+        browser_status = self._load_browser_cookies()
+        if browser_status is _SessionStatus.AUTHENTICATED:
             self._logged_in = True
+            self._login_retry_after = 0.0
             self._save_cookies()
             log.info("wallhaven web: logged in via browser cookies")
             return True
+        if browser_status is _SessionStatus.UNAVAILABLE and not allow_browser:
+            self._defer_login("browser session could not be verified")
+            return False
 
         if not self._password:
             log.warning("wallhaven web: no valid browser session found and no password configured")
@@ -122,6 +149,9 @@ class WallhavenWeb:
             resp = self._client.get(f"{self.BASE}/login")
 
             if self._is_cf_challenge(resp):
+                if not allow_browser:
+                    self._defer_login("Cloudflare challenge requires user-initiated login")
+                    return False
                 log.info("wallhaven web: Cloudflare challenge detected, trying nodriver")
                 if self._nodriver_login():
                     return True
@@ -129,6 +159,10 @@ class WallhavenWeb:
                     "wallhaven web: all login methods failed. "
                     "Please log into wallhaven.cc in your browser to enable remote fav sync"
                 )
+                return False
+
+            if resp.status_code == 429 or resp.status_code >= 500:
+                self._defer_login(f"login page returned HTTP {resp.status_code}")
                 return False
 
             csrf = self._csrf(resp.text)
@@ -143,7 +177,10 @@ class WallhavenWeb:
             # 302 redirect (to profile page) means login succeeded
             self._logged_in = resp.status_code == 302
             if self._logged_in:
+                self._login_retry_after = 0.0
                 self._save_cookies()
+            elif resp.status_code == 429 or resp.status_code >= 500:
+                self._defer_login(f"login request returned HTTP {resp.status_code}")
             else:
                 log.warning("wallhaven web: login failed for %s", self._username)
             return self._logged_in
@@ -151,10 +188,10 @@ class WallhavenWeb:
             log.warning("wallhaven web: login error", exc_info=True)
             return False
 
-    def _ensure_login(self) -> bool:
+    def _ensure_login(self, *, allow_browser: bool = False) -> bool:
         if self._logged_in:
             return True
-        return self._login()
+        return self._login(allow_browser=allow_browser)
 
     def _load_cookies(self) -> bool:
         """Load cached cookies from file into httpx client. Returns True if loaded."""
@@ -208,11 +245,15 @@ class WallhavenWeb:
         _COOKIE_FILE.unlink(missing_ok=True)
         self._client.cookies.clear()
 
-    def _verify_session(self) -> bool:
+    def _verify_session(self) -> _SessionStatus:
         """Verify that current cookies represent a valid logged-in Wallhaven session.
 
         Uses a temporary client to avoid polluting the main client's cookie jar
         with server-issued replacement cookies from a failed verification.
+
+        A temporary server or network failure is distinct from a confirmed
+        logged-out response so callers do not destroy a potentially valid
+        session and start an interactive login from background work.
         """
         tmp = httpx.Client(
             timeout=httpx.Timeout(15, connect=10),
@@ -223,25 +264,43 @@ class WallhavenWeb:
             for cookie in self._client.cookies.jar:
                 tmp.cookies.set(cookie.name, cookie.value, domain=cookie.domain, path=cookie.path)
             resp = tmp.get(f"{self.BASE}/")
-            ok = resp.status_code == 200 and "Logout" in resp.text
-            if ok:
+            if self._is_cf_challenge(resp):
+                return _SessionStatus.UNAVAILABLE
+            if resp.status_code == 429 or resp.status_code >= 500:
+                return _SessionStatus.UNAVAILABLE
+            if resp.status_code in (401, 403):
+                return _SessionStatus.UNAUTHENTICATED
+            if resp.status_code != 200:
+                return _SessionStatus.UNAVAILABLE
+
+            if "Logout" in resp.text:
                 self._client.cookies.clear()
                 for cookie in tmp.cookies.jar:
                     self._client.cookies.set(
                         cookie.name, cookie.value, domain=cookie.domain, path=cookie.path
                     )
-            return ok
-        except Exception:
-            return False
+                return _SessionStatus.AUTHENTICATED
+
+            final_url = str(resp.url).rstrip("/")
+            login_form = re.search(
+                r"<form\b[^>]*(?:id=['\"]login['\"]|action=['\"][^'\"]*/auth/login)",
+                resp.text,
+                re.IGNORECASE,
+            )
+            login_link = re.search(r"href=['\"]/login(?:[?'\"])", resp.text, re.IGNORECASE)
+            if final_url.endswith("/login") or login_form or login_link:
+                return _SessionStatus.UNAUTHENTICATED
+            return _SessionStatus.UNAVAILABLE
+        except httpx.HTTPError:
+            return _SessionStatus.UNAVAILABLE
         finally:
             tmp.close()
 
-    def _load_browser_cookies(self) -> bool:
+    def _load_browser_cookies(self) -> _SessionStatus:
         """Extract wallhaven.cc cookies from user's browser via browser_cookie3.
 
         Tries all Chrome/Chromium profiles and Firefox. For each source that
         has cookies, verifies the session is valid before accepting.
-        Returns True only if a valid logged-in session was found.
         """
         try:
             import browser_cookie3
@@ -250,7 +309,7 @@ class WallhavenWeb:
                 "wallhaven web: browser_cookie3 not installed, "
                 "cannot extract browser cookies. Install with: pip install browser-cookie3"
             )
-            return False
+            return _SessionStatus.UNAUTHENTICATED
 
         # Discover all Chrome/Chromium profile cookie files
         cookie_files: list[tuple[str, Path]] = []
@@ -287,9 +346,13 @@ class WallhavenWeb:
                 for c in cj:
                     self._client.cookies.set(c.name, c.value, domain=c.domain, path=c.path)
                     loaded += 1
-                if loaded and self._verify_session():
+                status = self._verify_session() if loaded else _SessionStatus.UNAUTHENTICATED
+                if status is _SessionStatus.AUTHENTICATED:
                     log.info("wallhaven web: extracted %d cookies from %s", loaded, label)
-                    return True
+                    return status
+                if status is _SessionStatus.UNAVAILABLE:
+                    self._client.cookies.clear()
+                    return status
             except Exception:
                 continue
 
@@ -301,15 +364,19 @@ class WallhavenWeb:
             for c in cj:
                 self._client.cookies.set(c.name, c.value, domain=c.domain, path=c.path)
                 loaded += 1
-            if loaded and self._verify_session():
+            status = self._verify_session() if loaded else _SessionStatus.UNAUTHENTICATED
+            if status is _SessionStatus.AUTHENTICATED:
                 log.info("wallhaven web: extracted %d cookies from Firefox", loaded)
-                return True
+                return status
+            if status is _SessionStatus.UNAVAILABLE:
+                self._client.cookies.clear()
+                return status
         except Exception:
             pass
 
         self._client.cookies.clear()
         log.info("wallhaven web: no valid wallhaven session found in any browser")
-        return False
+        return _SessionStatus.UNAUTHENTICATED
 
     @staticmethod
     def _is_cf_challenge(resp: httpx.Response) -> bool:
@@ -415,13 +482,14 @@ class WallhavenWeb:
                         path=cookie.path or "/",
                     )
 
-            if not self._verify_session():
+            if self._verify_session() is not _SessionStatus.AUTHENTICATED:
                 log.warning("wallhaven web: browser login did not create a valid session")
                 self._client.cookies.clear()
                 return False
 
             self._save_cookies()
             self._logged_in = True
+            self._login_retry_after = 0.0
             log.info("wallhaven web: logged in via nodriver (Cloudflare bypass)")
             return True
         except Exception:
@@ -743,6 +811,17 @@ def wallhaven_web_unfav(
 ) -> bool | None:
     """Unfavorite a wallpaper on Wallhaven."""
     return _wallhaven_web_set(config, filename, want_fav=False, wait=wait)
+
+
+def reconnect_wallhaven(config: WayperConfig) -> bool:
+    """Explicitly reconnect Wallhaven, allowing an interactive browser fallback."""
+    if not config.wallhaven_username:
+        return False
+    with _web_lock:
+        session = _ensure_web_session(config)
+        session._logged_in = False
+        session._login_retry_after = 0.0
+        return session._login(allow_browser=True, force=True)
 
 
 PUSH_BATCH_SIZE = 5  # max wallpapers to push per sync cycle

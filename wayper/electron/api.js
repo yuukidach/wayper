@@ -111,6 +111,10 @@
         return request(`/api/update-check${query}`);
     }
 
+    function reconnectWallhaven() {
+        return request('/api/wallhaven/reconnect', { method: 'POST' });
+    }
+
     window.WayperApi = {
         request,
         config,
@@ -126,5 +130,6 @@
         modelReviewAction,
         clearModelReview,
         updateCheck,
+        reconnectWallhaven,
     };
 })();

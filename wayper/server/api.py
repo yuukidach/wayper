@@ -714,6 +714,22 @@ def update_check_route(force: bool = False):
     return check_for_updates(config, force=force)
 
 
+@app.post("/api/wallhaven/reconnect")
+def reconnect_wallhaven_route():
+    config = get_config()
+    if not config.wallhaven_username:
+        raise HTTPException(400, "Configure a Wallhaven username first")
+
+    from ..wallhaven_web import reconnect_wallhaven
+
+    if not reconnect_wallhaven(config):
+        raise HTTPException(
+            503,
+            "Could not log into Wallhaven. Check its availability and your saved credentials.",
+        )
+    return {"status": "ok"}
+
+
 @app.patch("/api/config")
 def update_config_route(updates: dict = Body(...)):
     config = get_config()
@@ -1811,7 +1827,7 @@ def _remove_owned_port_file(path: Path, port: int) -> None:
         pass
 
 
-def run():
+def run(stop_event: threading.Event | None = None):
     import atexit
 
     import uvicorn
@@ -1837,7 +1853,28 @@ def run():
         # Uvicorn's default formatter probes sys.stdout.isatty(), which crashes the
         # backend before it starts listening. Wayper already configured its file
         # logger above, so avoid Uvicorn's console-oriented logging configuration.
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="info", log_config=None)
+        uvicorn_options = {
+            "host": "127.0.0.1",
+            "port": port,
+            "log_level": "info",
+            "log_config": None,
+        }
+        if stop_event is None:
+            uvicorn.run(app, **uvicorn_options)
+        else:
+            server = uvicorn.Server(uvicorn.Config(app, **uvicorn_options))
+
+            def request_stop() -> None:
+                stop_event.wait()
+                server.should_exit = True
+
+            stop_watcher = threading.Thread(
+                target=request_stop,
+                name="wayper-api-stop-watcher",
+                daemon=True,
+            )
+            stop_watcher.start()
+            server.run()
     finally:
         api_lock.__exit__(None, None, None)
 

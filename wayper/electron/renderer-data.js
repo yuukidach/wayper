@@ -1320,6 +1320,25 @@ async function saveSettings() {
     }
 }
 
+async function reconnectWallhaven() {
+    const button = document.getElementById('btn-wh-reconnect');
+    const status = document.getElementById('wh-reconnect-status');
+    if (!button || button.disabled) return;
+
+    const translate = window.WayperI18n?.t || (text => text);
+    button.disabled = true;
+    status.textContent = translate('Connecting…');
+    try {
+        await WayperApi.reconnectWallhaven();
+        status.textContent = translate('Connected');
+    } catch (error) {
+        console.error('Failed to reconnect Wallhaven', error);
+        status.textContent = translate(`Connection failed: ${error.message}`);
+    } finally {
+        button.disabled = false;
+    }
+}
+
 // --- Actions ---
 
 async function controlAction(action) {

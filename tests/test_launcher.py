@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import tomllib
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +13,7 @@ from wayper.server.launcher import (
     _electron_dependencies_ready,
     _icon_path,
     _wait_for_api,
+    run_app,
 )
 
 
@@ -97,3 +99,35 @@ def test_api_readiness_probe_uses_lightweight_config_route(tmp_path: Path) -> No
 
     assert port == 43210
     urlopen.assert_called_once_with("http://127.0.0.1:43210/api/config", timeout=1)
+
+
+def test_source_launcher_stops_api_after_electron_exits(tmp_path: Path) -> None:
+    electron_dir = tmp_path / "electron"
+    electron_dir.mkdir()
+    api_stopped = threading.Event()
+
+    def fake_api(stop_event: threading.Event) -> None:
+        assert stop_event.wait(timeout=1)
+        api_stopped.set()
+
+    process = type(
+        "FakeProcess",
+        (),
+        {"wait": lambda self: 0, "poll": lambda self: 0, "terminate": lambda self: None},
+    )()
+
+    with (
+        patch("wayper.autostart.ensure_default_autostart"),
+        patch("wayper.config.load_config"),
+        patch("wayper.server.launcher.run_api", side_effect=fake_api),
+        patch("wayper.server.launcher._wait_for_api", return_value=43210),
+        patch("wayper.server.launcher._electron_workdir", return_value=electron_dir),
+        patch("wayper.server.launcher._electron_dependencies_ready", return_value=True),
+        patch("wayper.server.launcher._electron_command", return_value=["electron"]),
+        patch("wayper.server.launcher._icon_path", return_value=None),
+        patch("wayper.server.launcher.subprocess.Popen", return_value=process),
+        patch("wayper.server.launcher.signal.signal"),
+    ):
+        run_app()
+
+    assert api_stopped.is_set()
