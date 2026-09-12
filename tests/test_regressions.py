@@ -14,7 +14,7 @@ from fastapi import HTTPException
 
 from wayper.config import MonitorConfig, WallhavenConfig, WayperConfig, load_config
 from wayper.model_review import queue_model_review_item
-from wayper.pool import hydrate_tag_details, load_metadata, pool_dir, save_metadata
+from wayper.pool import favorites_dir, hydrate_tag_details, load_metadata, pool_dir, save_metadata
 from wayper.server.api import (
     ActionRequest,
     ModelReviewActionRequest,
@@ -57,17 +57,6 @@ class _FakeResponse:
 
     def json(self) -> dict:
         return self._payload
-
-
-class _FakeAsyncClient:
-    def __init__(self, pages: dict[int, _FakeResponse]) -> None:
-        self.pages = pages
-
-    async def get(self, _url: str, params: dict) -> _FakeResponse:
-        return self.pages[int(params.get("page", 1))]
-
-    async def aclose(self) -> None:
-        pass
 
 
 class RegressionTest(unittest.TestCase):
@@ -345,27 +334,32 @@ class RegressionTest(unittest.TestCase):
 
         self.assertEqual(config.wallhaven.batch_size, 1)
 
-    def test_wallhaven_max_favorites_treats_failed_deep_pages_as_upper_bound(self) -> None:
-        config = WayperConfig(
-            api_key="test",
-            wallhaven=WallhavenConfig(min_favorites=10),
-        )
-        client = WallhavenClient(config)
-        asyncio.run(client.close())
-        client.client = _FakeAsyncClient(
-            {
-                3: _FakeResponse(200, {"data": [{"favorites": 12}]}),
-                4: _FakeResponse(200, {"data": [{"favorites": 9}]}),
-                5: _FakeResponse(500),
-            }
-        )
+    def test_config_load_ignores_legacy_min_favorites(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "config.toml"
+            path.write_text('[wallhaven]\nsorting = "random"\nmin_favorites = 10\n')
 
+            config = load_config(path)
+
+        self.assertEqual(config.wallhaven.sorting, "random")
+        self.assertFalse(hasattr(config.wallhaven, "min_favorites"))
+
+        client = WallhavenClient(config)
+        client.client.get = AsyncMock(
+            side_effect=[
+                _FakeResponse(200, {"data": [{"id": "page-one"}], "meta": {"last_page": 8}}),
+                _FakeResponse(200, {"data": [{"id": "page-three"}]}),
+            ]
+        )
         try:
-            max_page = asyncio.run(client._max_favorites_page({}, 8, [{"favorites": 20}]))
+            with patch("wayper.wallhaven.random.randint", return_value=3):
+                items = asyncio.run(client.search({"landscape"}, {"sfw"}))
         finally:
             asyncio.run(client.close())
 
-        self.assertEqual(max_page, 3)
+        self.assertEqual(items, [{"id": "page-three"}])
+        self.assertEqual(client.client.get.await_count, 2)
+        self.assertEqual(client.client.get.call_args_list[0].kwargs["params"]["sorting"], "random")
 
     def test_model_filter_fails_open_without_semantic_calibration(self) -> None:
         from wayper.model_review import list_model_review_items
@@ -622,6 +616,62 @@ class RegressionTest(unittest.TestCase):
         self.assertEqual(record["tags"], ["forest"])
         self.assertEqual(record["tag_details"][0]["category"], "Nature")
         self.assertTrue(record["metadata_complete"])
+
+    def test_remote_favorite_sync_scans_past_a_page_that_is_already_local(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            config = WayperConfig(
+                download_dir=Path(td),
+                api_key="test",
+                wallhaven_username="tester",
+                monitors=[],
+            )
+            existing = {
+                "id": "existing",
+                "path": "https://wallhaven.test/wallhaven-existing.jpg",
+                "purity": "sfw",
+                "resolution": "1920x1080",
+            }
+            missing = {
+                "id": "missing",
+                "path": "https://wallhaven.test/wallhaven-missing.jpg",
+                "purity": "sfw",
+                "resolution": "1920x1080",
+            }
+            existing_path = favorites_dir(config, "sfw", "landscape") / "wallhaven-existing.jpg"
+            existing_path.parent.mkdir(parents=True)
+            existing_path.write_bytes(b"existing")
+
+            client = WallhavenClient(config)
+
+            async def get(url: str, params: dict | None = None) -> _FakeResponse:
+                if url.endswith("/collections"):
+                    return _FakeResponse(200, {"data": [{"id": 1}]})
+                page = int((params or {}).get("page", 1))
+                item = existing if page == 1 else missing
+                return _FakeResponse(
+                    200,
+                    {"data": [item], "meta": {"last_page": 2}},
+                )
+
+            async def download(_url: str, destination: Path) -> bool:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"favorite")
+                return True
+
+            client.client.get = AsyncMock(side_effect=get)
+            client.wallpaper_info = AsyncMock(return_value={**missing, "tags": []})
+            client.download_image = AsyncMock(side_effect=download)
+            try:
+                synced, remote_files = asyncio.run(client.sync_remote_favorites())
+            finally:
+                asyncio.run(client.close())
+
+        self.assertEqual(synced, 1)
+        self.assertEqual(
+            remote_files,
+            {"wallhaven-existing.jpg", "wallhaven-missing.jpg"},
+        )
+        client.wallpaper_info.assert_awaited_once_with("missing")
 
     def test_metadata_load_tolerates_trailing_data_and_save_repairs_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:

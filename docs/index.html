@@ -299,7 +299,7 @@ footer .links a { color: var(--subtext); }
     </div>
     <div class="feature">
       <strong>Wallhaven client</strong>
-      <p>Auto-downloads wallpapers with minimum-favorite filtering and rules/model strategy controls. Browse and search Wallhaven directly from the GUI.</p>
+      <p>Auto-downloads wallpapers with rules/model strategy controls. Browse and search Wallhaven directly from the GUI.</p>
     </div>
     <div class="feature">
       <strong>Auto orientation</strong>
@@ -348,7 +348,7 @@ uv pip install -e .</code></pre>
 curl -LO https://github.com/yuukidach/wayper/releases/latest/download/wayper.dmg
 open wayper.dmg
 # Drag wayper.app to Applications, then run from Launchpad or:
-wayper-gui</code></pre>
+wayper</code></pre>
   </div>
   <div id="tab-source" class="tab-content">
     <pre><code>git clone https://github.com/yuukidach/wayper.git
@@ -377,7 +377,7 @@ wayper model status        # inspect local model validation
 wayper metadata status     # inspect cached metadata completeness
 wayper metadata backfill   # resumably fetch complete wallpaper/tag details
 wayper status               # show current state
-wayper-gui                  # GUI app + tray background rotation
+wayper                      # GUI app + tray background rotation
 wayper setup                # install .desktop entry (Linux)
 wayper --json status        # machine-readable output</code></pre>
   <p><code>wayper model train</code> learns from local Wallhaven metadata—not image pixels—to personalize
@@ -393,7 +393,7 @@ wayper --json status        # machine-readable output</code></pre>
     <img src="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png" alt="browse window" loading="lazy">
   </p>
   <p class="gui-desc">
-    <code>wayper-gui</code> lets you browse the pool, favorites, and banned wallpapers. Closing the window keeps rotation running in the system tray.
+    <code>wayper</code> lets you browse the pool, favorites, and banned wallpapers. Closing the window keeps rotation running in the system tray. CLI subcommands remain available; <code>wayper-gui</code> is kept as a compatibility alias.
   </p>
   <p class="gui-screenshot gui-screenshot-separated">
     <span class="gui-screenshot-label">Review</span>
@@ -477,7 +477,7 @@ bind = $mod, F11,      exec, wayper next
 bind = $mod SHIFT, F11,exec, wayper prev
 bind = $mod, F12,      exec, wayper mode
 bind = $mod SHIFT, F12,exec, wayper mode sketchy
-exec-once = wayper-gui --hidden</code></pre>
+exec-once = wayper --hidden</code></pre>
     <p>Hyprland and Sway use a status bar such as Waybar to host tray icons; enable Waybar's <code>tray</code> module.</p>
   </div>
   <div id="tab-aero" class="tab-content">

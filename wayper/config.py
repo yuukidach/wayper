@@ -89,14 +89,13 @@ class WallhavenConfig:
     sorting: str = "toplist"
     ai_art_filter: int = 0
     batch_size: int = 5
-    min_favorites: int = 0
     exclude_tags: list[str] = field(default_factory=list)
     exclude_combos: list[list[str]] = field(default_factory=list)
     exclude_uploaders: list[str] = field(default_factory=list)
     # ``rules`` preserves the original tag/uploader behaviour.  ``model``
     # enables the validated local preference model, and ``rules+model`` runs
     # both gates.  Model hits are quarantined for explicit review. Keep this
-    # field last so older positional constructors retain their meaning.
+    # field last so future additions do not shift existing positional arguments.
     filter_strategy: str = "rules"
 
     def __post_init__(self) -> None:
@@ -260,7 +259,6 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
     lines.append(f"ai_art_filter = {wh.ai_art_filter}")
     lines.append(f'filter_strategy = "{_esc(normalize_filter_strategy(wh.filter_strategy))}"')
     lines.append(f"batch_size = {wh.batch_size}")
-    lines.append(f"min_favorites = {wh.min_favorites}")
     if wh.exclude_tags:
         tags_str = ", ".join(f'"{_esc(t)}"' for t in wh.exclude_tags)
         lines.append(f"exclude_tags = [{tags_str}]")
@@ -320,7 +318,6 @@ def load_config(path: Path | None = None) -> WayperConfig:
             wallhaven_raw.get("filter_mode", "rules"),
         ),
         batch_size=max(1, int(wallhaven_raw.get("batch_size", 5))),
-        min_favorites=max(0, int(wallhaven_raw.get("min_favorites", 0))),
         exclude_tags=wallhaven_raw.get("exclude_tags", []),
         exclude_combos=wallhaven_raw.get("exclude_combos", []),
         exclude_uploaders=wallhaven_raw.get("exclude_uploaders", []),

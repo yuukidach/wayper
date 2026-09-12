@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=Wayper
 Comment=Wallpaper manager with Wallhaven integration
-Exec=wayper-gui
+Exec=wayper
 Icon=wayper
 Terminal=false
 Type=Application

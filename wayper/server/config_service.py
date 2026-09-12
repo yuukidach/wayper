@@ -45,7 +45,6 @@ def config_payload(config: WayperConfig, mode: set[str]) -> dict[str, object]:
             # strategy was given its final name.
             "filter_mode": config.wallhaven.filter_strategy,
             "batch_size": config.wallhaven.batch_size,
-            "min_favorites": config.wallhaven.min_favorites,
             "exclude_tags": config.wallhaven.exclude_tags,
             "exclude_combos": config.wallhaven.exclude_combos,
             "exclude_uploaders": config.wallhaven.exclude_uploaders,
@@ -112,8 +111,6 @@ def apply_config_updates(
             config.wallhaven.filter_strategy = normalize_filter_strategy(strategy_value)
         if "batch_size" in wallhaven:
             config.wallhaven.batch_size = max(1, int(wallhaven["batch_size"]))
-        if "min_favorites" in wallhaven:
-            config.wallhaven.min_favorites = max(0, int(wallhaven["min_favorites"]))
         if "exclude_tags" in wallhaven:
             config.wallhaven.exclude_tags = _deduplicate(
                 wallhaven["exclude_tags"], lambda value: str(value).casefold()

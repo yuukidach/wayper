@@ -93,7 +93,6 @@ class WallhavenConfigModel(BaseModel):
     filter_strategy: str = "rules"
     filter_mode: str | None = None
     batch_size: int = 5
-    min_favorites: int = 0
     exclude_tags: list[str]
     exclude_combos: list[list[str]] = Field(default_factory=list)
     exclude_uploaders: list[str] = Field(default_factory=list)

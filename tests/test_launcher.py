@@ -75,11 +75,12 @@ def test_electron_dependencies_follow_current_package_lock(tmp_path: Path) -> No
     assert not _electron_dependencies_ready(tmp_path)
 
 
-def test_wayper_gui_uses_windowed_entry_point() -> None:
+def test_unified_entry_point_keeps_legacy_alias() -> None:
     project_root = Path(__file__).resolve().parents[1]
     metadata = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert metadata["project"]["scripts"]["wayper-gui"] == ("wayper.server.launcher:run_app")
+    assert metadata["project"]["scripts"]["wayper"] == "wayper.cli:cli"
+    assert metadata["project"]["scripts"]["wayper-gui"] == "wayper.server.launcher:run_app"
     assert "gui-scripts" not in metadata["project"]
 
 
@@ -123,11 +124,12 @@ def test_source_launcher_stops_api_after_electron_exits(tmp_path: Path) -> None:
         patch("wayper.server.launcher._wait_for_api", return_value=43210),
         patch("wayper.server.launcher._electron_workdir", return_value=electron_dir),
         patch("wayper.server.launcher._electron_dependencies_ready", return_value=True),
-        patch("wayper.server.launcher._electron_command", return_value=["electron"]),
+        patch("wayper.server.launcher._electron_command", return_value=["electron"]) as command,
         patch("wayper.server.launcher._icon_path", return_value=None),
         patch("wayper.server.launcher.subprocess.Popen", return_value=process),
         patch("wayper.server.launcher.signal.signal"),
     ):
-        run_app()
+        run_app(arguments=["--hidden"])
 
     assert api_stopped.is_set()
+    command.assert_called_once_with(electron_dir, arguments=["--hidden"])

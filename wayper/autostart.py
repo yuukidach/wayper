@@ -63,20 +63,25 @@ def _registration_path() -> Path | str:
 
 
 def _gui_executable() -> Path:
-    executable = shutil.which("wayper-gui")
-    if executable:
-        return Path(executable).resolve()
-    executable_dir = Path(sys.executable).resolve().parent
+    """Find the unified app entry point in the current installation first."""
+    executable_dir = Path(sys.executable).absolute().parent
     invoked_entry = Path(sys.argv[0]).expanduser()
-    candidates = [executable_dir / "wayper-gui"]
-    if invoked_entry.name.lower() in {"wayper-gui", "wayper-gui.exe"}:
-        candidates.insert(0, invoked_entry.resolve())
+    candidates = [executable_dir / "wayper"]
     if sys.platform == "win32":
-        candidates.insert(0, executable_dir / "wayper-gui.exe")
+        candidates.insert(0, executable_dir / "wayper.exe")
+    if invoked_entry.name.lower() in {"wayper", "wayper.exe"}:
+        candidates.insert(0, invoked_entry.resolve())
+    elif invoked_entry.name.lower() in {"wayper-gui", "wayper-gui.exe"}:
+        # Older login entries can still use the compatibility alias.
+        entry_name = "wayper.exe" if sys.platform == "win32" else "wayper"
+        candidates.insert(0, invoked_entry.resolve().with_name(entry_name))
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    raise AutostartError("Cannot find wayper-gui; install Wayper before enabling autostart")
+    executable = shutil.which("wayper")
+    if executable:
+        return Path(executable).resolve()
+    raise AutostartError("Cannot find wayper; install Wayper before enabling autostart")
 
 
 def _systemd_quote(value: str) -> str:

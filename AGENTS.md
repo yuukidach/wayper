@@ -23,7 +23,7 @@ a FastAPI backend for the Electron GUI, and a stdio MCP server.
 ## Common Commands
 
 - Run CLI commands with `uv run wayper ...` or `wayper ...` after installing the package.
-- Launch the GUI with `wayper-gui`, or use `wayper-gui --hidden` to start in the system tray.
+- Launch the GUI with `wayper`, or use `wayper --hidden` to start in the system tray.
 - Start the MCP stdio server with `wayper-mcp`.
 - Lint Python with `ruff check wayper/` when `ruff` is installed. If not, use
   `uvx ruff check wayper/` or `pre-commit run ruff --all-files`.

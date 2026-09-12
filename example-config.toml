@@ -8,7 +8,7 @@ quota_mb = 4000        # max disk usage
 blacklist_ttl_days = 30
 pause_on_lock = true       # pause rotation when session is locked
 safe_mode = false          # lock purity to SFW only
-autostart = true           # launch wayper-gui --hidden with the graphical session
+autostart = true           # launch wayper --hidden with the graphical session
 language = "auto"         # GUI language: auto, en, or zh
 
 # [greeter]
@@ -32,7 +32,6 @@ ai_art_filter = 0      # 0=off, 1=on
 # for manual Keep/Ban review and never enter the blacklist automatically.
 filter_strategy = "rules"
 batch_size = 5
-min_favorites = 0      # skip downloads with fewer Wallhaven favorites (0 = disabled)
 # exclude_tags = ["MetArt", "watermarked"]  # synced to Wallhaven cloud blacklist if credentials are set
 # exclude_combos = [["blonde", "nude", "standing"], ["pornstar", "nude"]]
 # exclude_uploaders = ["username1", "username2"]  # synced to Wallhaven user blacklist if credentials are set

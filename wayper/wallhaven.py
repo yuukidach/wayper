@@ -34,14 +34,6 @@ def wallhaven_url(img_path: Path) -> str:
     return f"https://wallhaven.cc/w/{wallhaven_id(img_path.name)}"
 
 
-def _item_favorites(item: dict) -> int:
-    """Return Wallhaven favorite count from an API item."""
-    try:
-        return max(0, int(item.get("favorites", 0) or 0))
-    except (TypeError, ValueError):
-        return 0
-
-
 _ModelFilterContext = tuple[object | None, bool, dict[str, object]]
 
 
@@ -135,17 +127,6 @@ class WallhavenClient:
             log.warning("Could not load the model filter; failing open", exc_info=True)
             return None, False, {}
 
-    def _download_sorting(self) -> str:
-        """Return sorting used for automatic downloads.
-
-        Wallhaven has no minimum-favorites search parameter. Sorting by favorites
-        when the threshold is enabled keeps the API URL aligned with the filter
-        and avoids random pages that are mostly below the configured cutoff.
-        """
-        if self.config.wallhaven.min_favorites > 0:
-            return "favorites"
-        return self.config.wallhaven.sorting
-
     def _matches_local_exclude(self, tag_names: list[str]) -> bool:
         """Return True if any tag matches overflow exclude_tags filtered locally."""
         if not self._local_exclude_tags:
@@ -171,7 +152,7 @@ class WallhavenClient:
             "categories": self.config.wallhaven.categories,
             "purity": purity_query,
             "topRange": self.config.wallhaven.top_range,
-            "sorting": self._download_sorting(),
+            "sorting": self.config.wallhaven.sorting,
             "order": "desc",
             "ai_art_filter": self.config.wallhaven.ai_art_filter,
             "ratios": orientation_query,
@@ -188,12 +169,6 @@ class WallhavenClient:
             last_page = data.get("meta", {}).get("last_page", 1)
             if last_page <= 1:
                 return data.get("data", [])
-
-            if self.config.wallhaven.min_favorites > 0:
-                max_page = await self._max_favorites_page(params, last_page, data.get("data", []))
-                if max_page < 1:
-                    return []
-                last_page = max_page
 
             page_one = data.get("data", [])
             pages_tried: set[int] = set()
@@ -236,31 +211,6 @@ class WallhavenClient:
         except Exception:
             log.debug("Wallhaven search page %d failed", page, exc_info=True)
             return None
-
-    async def _max_favorites_page(self, params: dict, last_page: int, page_one: list[dict]) -> int:
-        """Find the last sorted-by-favorites page that may contain eligible items."""
-        min_favorites = self.config.wallhaven.min_favorites
-        if any(_item_favorites(item) >= min_favorites for item in page_one):
-            low = 1
-        else:
-            return 0
-
-        high = last_page
-        page_cache: dict[int, list[dict] | None] = {1: page_one}
-
-        async def page_items(page: int) -> list[dict] | None:
-            if page not in page_cache:
-                page_cache[page] = await self._search_page(params, page)
-            return page_cache[page]
-
-        while low < high:
-            mid = (low + high + 1) // 2
-            items = await page_items(mid)
-            if items is not None and any(_item_favorites(item) >= min_favorites for item in items):
-                low = mid
-            else:
-                high = mid - 1
-        return low
 
     async def wallpaper_info(self, wallpaper_id: str, *, retries: int = 2) -> dict:
         """Fetch complete wallpaper details, retrying transient metadata failures."""
@@ -352,7 +302,6 @@ class WallhavenClient:
             "local_tag": 0,
             "model": 0,
             "metadata": 0,
-            "min_favorites": 0,
             "fail": 0,
         }
         sampled = 0
@@ -387,10 +336,6 @@ class WallhavenClient:
                 if is_blacklisted(config, filename):
                     skipped["blacklist"] += 1
                     continue
-                if _item_favorites(item) < config.wallhaven.min_favorites:
-                    skipped["min_favorites"] += 1
-                    continue
-
                 candidates.append((filename, url, item, dest))
 
             if candidates:
@@ -510,8 +455,7 @@ class WallhavenClient:
             "Download[%(mode)s/%(orient)s] results=%(results)d sampled=%(sampled)d "
             "skipped(dup=%(dup)d,fav=%(fav)d,blacklist=%(blacklist)d,"
             "uploader=%(uploader)d,combo=%(combo)d,local_tag=%(local_tag)d,"
-            "model=%(model)d,metadata=%(metadata)d,min_favorites=%(min_favorites)d,"
-            "fail=%(fail)d) "
+            "model=%(model)d,metadata=%(metadata)d,fail=%(fail)d) "
             "downloaded=%(downloaded)d",
             {
                 "mode": ",".join(sorted(modes)),
@@ -524,10 +468,10 @@ class WallhavenClient:
         )
 
     async def sync_remote_favorites(self) -> tuple[int, set[str]]:
-        """Incrementally sync wallpapers from user's Wallhaven collections.
+        """Sync wallpapers from all pages of the user's Wallhaven collections.
 
-        Collections are scanned newest-first; pagination stops as soon as a
-        page contains only wallpapers that already exist locally.
+        A complete scan is required even when a newer page already exists locally:
+        an older download may have failed or a local favorite may have been removed.
         Returns (newly_synced_count, set_of_remote_filenames_seen).
         """
         config = self.config
@@ -619,10 +563,6 @@ class WallhavenClient:
                     page_new += 1
 
                 synced += page_new
-
-                # All items on this page already existed → no need to check older pages
-                if page_new == 0:
-                    break
 
                 last_page = body.get("meta", {}).get("last_page", 1)
                 if page >= last_page:

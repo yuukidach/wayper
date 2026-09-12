@@ -50,8 +50,8 @@ test -x "$electron_bin" || {
     "$electron_bin" "$electron_dir" >&2
   exit 1
 }
-pgrep -f '[w]ayper-gui' >/dev/null || {
-  printf 'wayper-gui is not running. Start it before requesting an internal capture.\n' >&2
+pgrep -f '(^|/|[[:space:]])[w]ayper(-gui)?([[:space:]]|$)' >/dev/null || {
+  printf 'Wayper is not running. Start it before requesting an internal capture.\n' >&2
   exit 1
 }
 
@@ -88,6 +88,6 @@ for ((attempt = 0; attempt < poll_count; attempt += 1)); do
   sleep 0.1
 done
 
-printf 'Electron did not produce a PNG within %s seconds. Restart wayper-gui so it loads the capture hook, then retry.\n' \
+printf 'Electron did not produce a PNG within %s seconds. Restart Wayper so it loads the capture hook, then retry.\n' \
   "$timeout_seconds" >&2
 exit 1

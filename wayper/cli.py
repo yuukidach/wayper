@@ -38,12 +38,23 @@ def _require_success(result, use_json: bool) -> None:
     raise SystemExit(1)
 
 
-@click.group()
+@click.group(invoke_without_command=True)
+@click.option("--hidden", is_flag=True, help="Start the app in the system tray.")
 @click.option("--json", "use_json", is_flag=True, help="Output in JSON format.")
 @click.option("--config", "config_path", type=click.Path(exists=True), default=None)
 @click.pass_context
-def cli(ctx, use_json, config_path):
-    """Wayper - Wayland wallpaper manager."""
+def cli(ctx, hidden, use_json, config_path):
+    """Wayper wallpaper manager. Run without a command to open the app."""
+    if ctx.invoked_subcommand is None:
+        if use_json or config_path:
+            raise click.UsageError("--json and --config require a CLI subcommand.", ctx)
+        from .server.launcher import run_app
+
+        run_app(arguments=["--hidden"] if hidden else [])
+        return
+    if hidden:
+        raise click.UsageError("--hidden starts the app and cannot be used with a subcommand.", ctx)
+
     from .logging import setup_logging
 
     setup_logging()
@@ -850,7 +861,7 @@ def setup():
     """Install .desktop entry (Linux)."""
     import shutil
 
-    gui_bin = shutil.which("wayper-gui") or str(Path(sys.executable).parent / "wayper-gui")
+    gui_bin = shutil.which("wayper") or str(Path(sys.executable).parent / "wayper")
     desktop = Path.home() / ".local/share/applications/wayper.desktop"
     desktop.parent.mkdir(parents=True, exist_ok=True)
     desktop.write_text(

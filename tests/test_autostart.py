@@ -32,7 +32,7 @@ def _mock_windows_registration(monkeypatch, startup, launcher, registry):
 
 def test_enable_autostart_installs_hidden_graphical_service(tmp_path, monkeypatch):
     unit = tmp_path / "systemd" / "wayper.service"
-    gui = tmp_path / "bin" / "wayper-gui"
+    gui = tmp_path / "bin" / "wayper"
     gui.parent.mkdir()
     gui.touch()
     calls = []
@@ -46,7 +46,7 @@ def test_enable_autostart_installs_hidden_graphical_service(tmp_path, monkeypatc
 
     assert result.enabled is True
     assert calls == [("daemon-reload",), ("enable", "wayper.service")]
-    assert "--hidden" in unit.read_text()
+    assert f'ExecStart="{gui}" --hidden' in unit.read_text()
     assert "WantedBy=graphical-session.target" in unit.read_text()
     assert load_config(config_path).autostart is True
 
@@ -57,7 +57,7 @@ def test_failed_enable_does_not_persist_or_leave_service(tmp_path, monkeypatch):
     config = WayperConfig(autostart=False)
 
     monkeypatch.setattr(autostart, "_service_path", lambda: unit)
-    monkeypatch.setattr(autostart, "_gui_executable", lambda: tmp_path / "wayper-gui")
+    monkeypatch.setattr(autostart, "_gui_executable", lambda: tmp_path / "wayper")
 
     def fail(*_args):
         raise autostart.AutostartError("no user bus")
@@ -90,7 +90,7 @@ def test_explicit_disabled_autostart_is_not_installed(tmp_path, monkeypatch):
 
 def test_macos_autostart_uses_launch_agent(tmp_path, monkeypatch):
     agent = tmp_path / "io.github.yuukidach.wayper.plist"
-    gui = tmp_path / "Wayper.app" / "Contents" / "MacOS" / "wayper-gui"
+    gui = tmp_path / "Wayper.app" / "Contents" / "MacOS" / "wayper"
     config_path = tmp_path / "config.toml"
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(autostart, "_launch_agent_path", lambda: agent)
@@ -109,7 +109,7 @@ def test_windows_autostart_uses_run_registry_and_removes_legacy_script(tmp_path,
     launcher = tmp_path / "config" / "WayperAutostart.vbs"
     startup.parent.mkdir()
     startup.write_text("legacy")
-    gui = tmp_path / "Program Files" / "Wayper" / "wayper-gui.exe"
+    gui = tmp_path / "Program Files" / "Wayper" / "wayper.exe"
     config_path = tmp_path / "config.toml"
     registry = {}
     _mock_windows_registration(monkeypatch, startup, launcher, registry)
@@ -127,7 +127,7 @@ def test_windows_uv_environment_uses_hidden_script_launcher(tmp_path, monkeypatc
     startup = tmp_path / "Startup" / "Wayper.cmd"
     launcher = tmp_path / "config" / "WayperAutostart.vbs"
     python = tmp_path / "venv" / "Scripts" / "python.exe"
-    gui = python.with_name("wayper-gui.exe")
+    gui = python.with_name("wayper.exe")
     registry = {}
     _mock_windows_registration(monkeypatch, startup, launcher, registry)
     monkeypatch.setattr(autostart, "_windows_needs_script_launcher", lambda: True)
@@ -144,7 +144,7 @@ def test_windows_uv_environment_uses_hidden_script_launcher(tmp_path, monkeypatc
 def test_windows_source_autostart_uses_uv_instead_of_venv_python(tmp_path, monkeypatch):
     startup = tmp_path / "Startup" / "Wayper.cmd"
     launcher = tmp_path / "config" / "WayperAutostart.vbs"
-    gui = tmp_path / "venv" / "Scripts" / "wayper-gui.exe"
+    gui = tmp_path / "venv" / "Scripts" / "wayper.exe"
     registry = {}
     uv_arguments = [
         str(tmp_path / "uv.exe"),
@@ -184,3 +184,47 @@ def test_windows_disable_removes_registry_and_legacy_script(tmp_path, monkeypatc
     assert "Wayper" not in registry
     assert not startup.exists()
     assert not launcher.exists()
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin", "win32"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_autostart_prefers_current_installation(tmp_path, monkeypatch, platform, legacy):
+    monkeypatch.setattr(sys, "platform", platform)
+    suffix = ".exe" if platform == "win32" else ""
+    app = tmp_path / "current" / f"wayper{suffix}"
+    app.parent.mkdir()
+    app.touch()
+    invoked = app.with_name(f"wayper-gui{suffix}") if legacy else app
+    invoked.touch(exist_ok=True)
+    monkeypatch.setattr(sys, "argv", [str(invoked)])
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))
+    monkeypatch.setattr(autostart.shutil, "which", lambda _: str(tmp_path / "other" / app.name))
+
+    assert autostart._gui_executable() == app
+
+
+def test_autostart_finds_entry_next_to_virtualenv_python(tmp_path, monkeypatch):
+    python = tmp_path / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    try:
+        python.symlink_to(sys.executable)
+    except OSError:
+        pytest.skip("Creating symlinks is not permitted on this platform")
+    app = python.with_name("wayper")
+    app.touch()
+    monkeypatch.setattr(sys, "argv", ["launcher.py"])
+    monkeypatch.setattr(sys, "executable", str(python))
+    monkeypatch.setattr(autostart.shutil, "which", lambda _: None)
+
+    assert autostart._gui_executable() == app
+
+
+def test_autostart_falls_back_to_unified_entry_on_path(tmp_path, monkeypatch):
+    app = tmp_path / "bin" / "wayper"
+    monkeypatch.setattr(sys, "argv", ["launcher.py"])
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))
+    monkeypatch.setattr(
+        autostart.shutil, "which", lambda name: str(app) if name == "wayper" else None
+    )
+
+    assert autostart._gui_executable() == app

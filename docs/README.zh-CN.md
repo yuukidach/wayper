@@ -33,7 +33,7 @@
 
 **基础能力：**
 
-- **Wallhaven 集成** — 直接在 GUI 中浏览和搜索 Wallhaven，按查询与最低收藏数自动下载，并将收藏和标签黑名单同步到账号。
+- **Wallhaven 集成** — 直接在 GUI 中浏览和搜索 Wallhaven，按查询自动下载，并将收藏和标签黑名单同步到账号。
 - **智能标签过滤** — 排除标签自动同步到 Wallhaven 云端黑名单（服务端过滤）；溢出的标签通过 URL 参数发送；剩余的在元数据获取后本地过滤。零浪费下载。
 - **自动匹配方向** — 竖屏显示器自动用竖屏壁纸，无需分类。
 - **三档纯度** — SFW、Sketchy、NSFW 独立开关，跨会话持久化。
@@ -81,7 +81,7 @@ uv venv && uv pip install -e .
   <img src="../assets/browse.png" alt="GUI 浏览界面" width="720">
 </p>
 
-`wayper-gui` 启动托盘常驻应用，用于浏览、管理和控制壁纸集合。完全支持键盘操作，无需鼠标。
+`wayper` 启动托盘常驻应用，用于浏览、管理和控制壁纸集合。完全支持键盘操作，无需鼠标。原有命令行子命令继续可用，`wayper-gui` 保留为兼容别名。
 
 <p align="center">
   <strong>待确认</strong><br>
@@ -99,7 +99,7 @@ uv venv && uv pip install -e .
 - **设置** — 在 GUI 中配置下载目录、Wallhaven 查询、排除标签/组合、内容级别和显示器；修改会即时生效
 - **全键盘操作** — 每个操作都有快捷键：网格导航、灯箱、收藏、不喜欢、拉黑和撤销
 
-使用 `wayper-gui --hidden` 可直接启动到托盘。Hyprland 或 Sway 的托盘由 Waybar 等状态栏提供，请确保已启用其 `tray` 模块。
+使用 `wayper --hidden` 可直接启动到托盘。Hyprland 或 Sway 的托盘由 Waybar 等状态栏提供，请确保已启用其 `tray` 模块。
 
 **网格浏览：**
 
@@ -163,7 +163,7 @@ wayper model status        # 查看已保存模型和近期验证结果
 wayper metadata status     # 查看本地 Wallhaven 元数据完整度
 wayper metadata backfill   # 可续跑地补齐图片和 tag 完整详情
 wayper status               # 查看当前状态
-wayper-gui                  # GUI 应用 + 托盘后台自动换壁纸
+wayper                      # GUI 应用 + 托盘后台自动换壁纸
 wayper setup                # 安装 .desktop（Linux）
 wayper --json status        # JSON 格式输出
 ```
@@ -206,7 +206,7 @@ bind = $mod, F11,      exec, wayper next
 bind = $mod SHIFT, F11,exec, wayper prev
 bind = $mod, F12,      exec, wayper mode
 bind = $mod SHIFT, F12,exec, wayper mode sketchy
-exec-once = wayper-gui --hidden
+exec-once = wayper --hidden
 ```
 
 **AeroSpace (macOS)：**
@@ -268,7 +268,7 @@ New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
 Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
-壁纸下载目录和登录自启动可在 GUI 设置页修改，也可编辑 [`example-config.toml`](../example-config.toml)。自启动在所有平台上默认开启，还可通过 `wayper autostart enable|disable|status` 或 MCP 的 `configure_autostart` 工具管理。Linux 使用图形会话级用户服务（无需再写 Hyprland `exec-once`），macOS 使用 LaunchAgent，Windows 使用当前用户的 Run 注册项：正常情况下直接启动 GUI；如果 uv 环境缺少可用的 `pythonw.exe`，则自动改用无窗口脚本启动。两种方式都不会出现控制台窗口。详见该文件的所有选项 — API key、代理、轮换间隔、配额、Wallhaven 最低收藏数、`wallhaven.filter_strategy`（`rules` / `model` / `rules+model`）、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
+壁纸下载目录和登录自启动可在 GUI 设置页修改，也可编辑 [`example-config.toml`](../example-config.toml)。自启动在所有平台上默认开启，还可通过 `wayper autostart enable|disable|status` 或 MCP 的 `configure_autostart` 工具管理。Linux 使用图形会话级用户服务（无需再写 Hyprland `exec-once`），macOS 使用 LaunchAgent，Windows 使用当前用户的 Run 注册项：正常情况下直接启动 GUI；如果 uv 环境缺少可用的 `pythonw.exe`，则自动改用无窗口脚本启动。两种方式都不会出现控制台窗口。详见该文件的所有选项 — API key、代理、轮换间隔、配额、筛选策略、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
 
 ## 依赖
 

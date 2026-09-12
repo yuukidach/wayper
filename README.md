@@ -33,7 +33,7 @@ Most wallpaper tools stop at "set image on desktop." wayper is a full **Wallhave
 
 **And the fundamentals:**
 
-- **Wallhaven integration** — browse and search Wallhaven from the GUI, auto-download from your queries with minimum-favorite filtering, and sync favorites and the tag blacklist to your account.
+- **Wallhaven integration** — browse and search Wallhaven from the GUI, auto-download from your queries, and sync favorites and the tag blacklist to your account.
 - **Smart tag filtering** — excluded tags sync to Wallhaven's cloud blacklist for server-side filtering; overflow tags are sent via URL query; the rest are filtered after metadata fetch. Zero wasted downloads.
 - **Auto orientation** — portrait monitors get portrait wallpapers. No sorting needed.
 - **Three-tier purity** — SFW, Sketchy, NSFW — independently toggleable, persistent across sessions.
@@ -82,7 +82,7 @@ included in the standard installation.
   <img src="assets/browse.png" alt="GUI browse view" width="720">
 </p>
 
-`wayper-gui` launches a tray-resident app for browsing, managing, and controlling your wallpaper collection. Fully operable without a mouse.
+`wayper` launches a tray-resident app for browsing, managing, and controlling your wallpaper collection. Fully operable without a mouse. CLI subcommands remain available; `wayper-gui` is kept as a compatibility alias.
 
 <p align="center">
   <strong>Review</strong><br>
@@ -100,7 +100,7 @@ Use Review to inspect auto-held downloads and model recommendations. Keep or Dis
 - **Settings** — configure the download folder, Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI. Changes apply to automatic rotation instantly
 - **Keyboard-driven** — every action has a shortcut: grid navigation, lightbox, favorites, Dislike, Ban, and undo
 
-Use `wayper-gui --hidden` to start directly in the tray. On Hyprland or Sway, the tray is supplied by a status bar such as Waybar; make sure its `tray` module is enabled.
+Use `wayper --hidden` to start directly in the tray. On Hyprland or Sway, the tray is supplied by a status bar such as Waybar; make sure its `tray` module is enabled.
 
 **Grid view:**
 
@@ -164,7 +164,7 @@ wayper model status        # inspect the saved model and recent validation
 wayper metadata status     # inspect cached Wallhaven metadata completeness
 wayper metadata backfill   # resumably fetch missing full wallpaper/tag details
 wayper status               # show current state
-wayper-gui                  # GUI app + tray background rotation
+wayper                      # GUI app + tray background rotation
 wayper setup                # install .desktop entry (Linux)
 wayper --json status        # machine-readable output
 ```
@@ -219,7 +219,7 @@ bind = $mod, F11,      exec, wayper next
 bind = $mod SHIFT, F11,exec, wayper prev
 bind = $mod, F12,      exec, wayper mode
 bind = $mod SHIFT, F12,exec, wayper mode sketchy
-exec-once = wayper-gui --hidden
+exec-once = wayper --hidden
 ```
 
 **AeroSpace (macOS):**
@@ -281,7 +281,7 @@ New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
 Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
-Set the wallpaper download folder and login autostart in the GUI Settings view, or edit the options in [`example-config.toml`](example-config.toml). Autostart defaults on and can also be managed with `wayper autostart enable|disable|status` or the MCP `configure_autostart` tool. Wayper uses a graphical-session user service on Linux (so no Hyprland `exec-once` is needed), a LaunchAgent on macOS, and a per-user Run registration on Windows. Windows launches the GUI executable directly when possible and automatically uses a windowless script fallback for uv environments without a working `pythonw.exe`; neither path opens a console window. See the example file for all options — API key, proxy, intervals, quota, minimum Wallhaven favorites, transitions, etc. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
+Set the wallpaper download folder and login autostart in the GUI Settings view, or edit the options in [`example-config.toml`](example-config.toml). Autostart defaults on and can also be managed with `wayper autostart enable|disable|status` or the MCP `configure_autostart` tool. Wayper uses a graphical-session user service on Linux (so no Hyprland `exec-once` is needed), a LaunchAgent on macOS, and a per-user Run registration on Windows. Windows launches the GUI executable directly when possible and automatically uses a windowless script fallback for uv environments without a working `pythonw.exe`; neither path opens a console window. See the example file for all options — API key, proxy, intervals, quota, filtering, transitions, etc. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
 
 ## Requirements
 

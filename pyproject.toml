@@ -25,6 +25,7 @@ dev = ["pytest>=8.0", "ruff>=0.8"]
 [project.scripts]
 wayper = "wayper.cli:cli"
 wayper-mcp = "wayper.mcp_server:main"
+# Compatibility alias for existing launchers; `wayper` now opens the app directly.
 wayper-gui = "wayper.server.launcher:run_app"
 
 [build-system]

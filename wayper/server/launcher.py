@@ -66,7 +66,7 @@ def _icon_path() -> Path | None:
 
 def _hide_windows_console_for_gui_entry() -> None:
     """Hide the console allocated by the resilient Windows GUI entry point."""
-    if sys.platform != "win32" or Path(sys.argv[0]).stem.lower() != "wayper-gui":
+    if sys.platform != "win32" or Path(sys.argv[0]).stem.lower() not in {"wayper", "wayper-gui"}:
         return
     try:
         import ctypes
@@ -142,7 +142,7 @@ def _wait_for_api(timeout: float = 10) -> int:
     return port
 
 
-def run_app():
+def run_app(arguments: list[str] | None = None) -> None:
     _hide_windows_console_for_gui_entry()
 
     # Autostart defaults on. The first manual launch installs the platform login
@@ -184,7 +184,9 @@ def run_app():
     print(f"Starting Electron in {electron_dir}...")
 
     # Run Electron directly where possible so cleanup tracks the actual app PID.
-    cmd = _electron_command(electron_dir, arguments=sys.argv[1:])
+    cmd = _electron_command(
+        electron_dir, arguments=sys.argv[1:] if arguments is None else arguments
+    )
 
     # Pass API port to Electron so preload.js can pick it up
     env = {**os.environ, "WAYPER_DEV": "1"}

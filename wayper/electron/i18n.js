@@ -124,8 +124,6 @@
         'Block AI': '排除 AI 生成图片',
         'Download Batch Size': '每批下载数量',
         'Maximum wallpapers to download per mode and orientation': '每种内容级别和屏幕方向单次最多下载多少张',
-        'Minimum Favorites': 'Wallhaven 最低收藏数',
-        'Skip Wallhaven downloads below this favorite count': '不下载 Wallhaven 收藏数低于此值的图片',
         'Exclusion Rules': '排除规则',
         'Exclude Tags': '排除标签',
         'Tag name...': '标签名称…',

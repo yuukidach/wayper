@@ -536,7 +536,7 @@ const gotTheLock = app.requestSingleInstanceLock({
 if (!gotTheLock) {
   app.quit()
 } else if (initialCapturePath) {
-  console.error('Internal capture requires an existing wayper-gui instance')
+  console.error('Internal capture requires an existing Wayper app instance')
   app.quit()
 } else {
   app.on('second-instance', (event, commandLine, workingDirectory, additionalData) => {
