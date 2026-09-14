@@ -1935,8 +1935,7 @@ async function fetchBlocklist() {
         return appState.blocklistData;
     } catch (e) {
         console.error("Failed to fetch blocklist", e);
-        appState.blocklistData = { entries: [], total: 0, recoverable_count: 0, images: [] };
-        return appState.blocklistData;
+        throw e;
     }
 }
 
@@ -2451,12 +2450,23 @@ async function refreshImages(preserveFocus = false) {
         // exclusion-rule suggestions.  Automatic model hits have their own
         // inbox and must not be fetched or rendered in this view.
         appState.preferenceSuggestions = null;
+        appState.blocklistLoading = true;
+        appState.blocklistError = null;
+        if (appState.loadedImageMode !== 'trash') {
+            resetImagePaging();
+            appState.imagesComplete = true;
+        }
+        renderBlocklistView();
         els.wallpaperGrid.querySelector('.model-review-panel')?.remove();
         const suggestionsPromise = fetchTagSuggestions({ render: true, requestId });
+        void suggestionsPromise.catch(error => console.debug('Blocklist suggestions unavailable:', error));
         try {
             const [blocklistData, pageData] = await Promise.all([
                 fetchBlocklist(),
-                fetch(imagePageUrl(0)).then(r => r.json()),
+                fetch(imagePageUrl(0)).then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.json();
+                }),
             ]);
             if (
                 imageResponseMatchesContext(requestId, requestedContextKey)
@@ -2469,12 +2479,22 @@ async function refreshImages(preserveFocus = false) {
                 appState.loadedImageContextKey = libraryViewContextKey(appState.mode, orient);
                 if (!appState.status || typeof appState.status !== 'object') appState.status = {};
                 appState.status.recoverable_count = blocklistData.recoverable_count || 0;
+                appState.blocklistLoading = false;
                 updateStatusUI();
                 await applySearchFilter(preserveFocus);
                 renderBlocklistSuggestionsBar();
-                suggestionsPromise.catch(() => {});
             }
-        } catch (e) { console.error(e); }
+        } catch (e) {
+            console.error('Failed to load Blocklist:', e);
+            if (imageResponseMatchesContext(requestId, requestedContextKey)) {
+                appState.blocklistError = e.message;
+            }
+        } finally {
+            if (imageResponseMatchesContext(requestId, requestedContextKey)) {
+                appState.blocklistLoading = false;
+                if (appState.blocklistError) renderBlocklistView();
+            }
+        }
     } else {
         try {
             // The old grid and its observed sentinel remain mounted until the

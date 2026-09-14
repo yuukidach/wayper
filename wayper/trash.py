@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import zlib
 from pathlib import Path
@@ -17,6 +18,7 @@ from .util import atomic_write
 
 _windows_recycle_cache: tuple[float, dict[str, Path]] | None = None
 _WINDOWS_RECYCLE_CACHE_SECONDS = 1.0
+_windows_recycle_lock = threading.Lock()
 
 
 def _system_trash_dirs() -> list[Path]:
@@ -116,12 +118,23 @@ def _windows_recycle_bin_items() -> dict[str, Path]:
     """Return original filenames mapped to their current Recycle Bin paths."""
     global _windows_recycle_cache
 
-    now = time.monotonic()
-    if (
-        _windows_recycle_cache is not None
-        and now - _windows_recycle_cache[0] < _WINDOWS_RECYCLE_CACHE_SECONDS
-    ):
-        return _windows_recycle_cache[1]
+    # Blocklist, image pages and thumbnails can request the same snapshot at
+    # once. Only one caller should launch PowerShell, including after a failure.
+    with _windows_recycle_lock:
+        if (
+            _windows_recycle_cache is not None
+            and time.monotonic() - _windows_recycle_cache[0] < _WINDOWS_RECYCLE_CACHE_SECONDS
+        ):
+            return _windows_recycle_cache[1]
+        found = _scan_windows_recycle_bin()
+        # Start the TTL after enumeration: PowerShell startup alone can take
+        # longer than the TTL. Cache empty/failed scans too to bound retries.
+        _windows_recycle_cache = (time.monotonic(), found)
+        return found
+
+
+def _scan_windows_recycle_bin() -> dict[str, Path]:
+    """Enumerate the Windows shell once; callers own caching and serialization."""
 
     script = r"""
 $ErrorActionPreference = 'Stop'
@@ -166,13 +179,13 @@ ConvertTo-Json -Compress -InputObject @($items)
             # If duplicate names exist, Shell.Application returns newest-first
             # on current Windows versions. Preserve the first usable match.
             found.setdefault(name, Path(path))
-    _windows_recycle_cache = (now, found)
     return found
 
 
 def _invalidate_windows_recycle_cache() -> None:
     global _windows_recycle_cache
-    _windows_recycle_cache = None
+    with _windows_recycle_lock:
+        _windows_recycle_cache = None
 
 
 def find_in_trash(config: WayperConfig, filename: str) -> Path | None:

@@ -3088,6 +3088,26 @@ function renderBlocklistView() {
         els.wallpaperGrid.appendChild(aiPanel);
     }
 
+    if (appState.blocklistLoading || appState.blocklistError) {
+        const message = document.createElement('div');
+        message.className = 'empty-state';
+        message.setAttribute('role', 'status');
+        const text = document.createElement('p');
+        text.textContent = appState.blocklistError
+            ? 'Could not load Blocklist. Please try again.'
+            : 'Loading Blocklist…';
+        message.appendChild(text);
+        if (appState.blocklistError) {
+            const retry = document.createElement('button');
+            retry.textContent = 'Try again';
+            retry.onclick = () => refreshImages();
+            message.appendChild(retry);
+        }
+        els.wallpaperGrid.appendChild(message);
+        // All Blocked can still show cached records while recovery is loading.
+        if (appState.blocklistTab === 'recoverable' || !filteredEntries.length) return;
+    }
+
     if (appState.blocklistTab === 'recoverable') {
         if (appState.images.length === 0) {
             const msg = appState.searchQuery

@@ -61,6 +61,8 @@ let appState = {
     view: 'grid', // grid, settings
     blocklistTab: 'recoverable', // recoverable, blocked
     blocklistData: null, // cached blocklist data
+    blocklistLoading: false,
+    blocklistError: null,
     blocklistPager: WayperBlocklistPager.createState(),
     tagSuggestions: null, // tag exclusion suggestions
     comboSuggestions: null, // auto-discovered combo exclusion suggestions

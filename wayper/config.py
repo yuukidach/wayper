@@ -289,7 +289,7 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
             lines.append(f'sudo_password = "{_esc(gr.sudo_password)}"')
 
     lines.append("")
-    atomic_write(path, "\n".join(lines))
+    atomic_write(path, "\n".join(lines), encoding="utf-8")
 
 
 def load_config(path: Path | None = None) -> WayperConfig:
@@ -297,7 +297,12 @@ def load_config(path: Path | None = None) -> WayperConfig:
     path = path or CONFIG_FILE
     raw: dict = {}
     if path.exists():
-        raw = tomllib.loads(path.read_text())
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            # Older Windows releases wrote TOML using the system code page.
+            content = path.read_text(encoding="locale")
+        raw = tomllib.loads(content)
 
     # Always auto-detect monitors; fall back to config if detection fails
     try:

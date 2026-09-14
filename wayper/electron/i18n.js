@@ -244,6 +244,8 @@
         'No matches for': '没有匹配项：',
         'No recoverable images in trash': '回收站中没有可恢复的图片',
         'No blocked images': '没有已屏蔽的图片',
+        'Loading Blocklist…': '正在加载已屏蔽图片…',
+        'Could not load Blocklist. Please try again.': '无法加载已屏蔽图片，请重试。',
         'No model recommendations waiting': '没有建议检查的图片',
     };
 

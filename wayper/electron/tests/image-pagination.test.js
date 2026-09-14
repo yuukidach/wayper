@@ -194,11 +194,76 @@ function testLibraryViewRestoresSynchronously() {
     assert.equal(renders, 1, 'cached cards should paint before network revalidation');
 }
 
+async function testBlocklistShowsLoadingAndRecoversFromApiFailure() {
+    for (const failingEndpoint of ['/api/blocklist', '/api/images/page']) {
+        const pending = [];
+        const state = makeState();
+        state.mode = 'trash';
+        state.loadedImageMode = 'pool';
+        state.images = [{ path: 'pool-image.jpg' }];
+        state.blocklistPager = {};
+        state.blocklistData = { entries: [{ filename: 'saved.jpg' }], total: 1 };
+        const cached = state.blocklistData;
+        const paints = [];
+        const context = makeContext(state, url => new Promise(resolve => pending.push({ url, resolve })));
+        context.els.wallpaperGrid.querySelector = () => null;
+        context.renderBlocklistView = () => paints.push({
+            loading: state.blocklistLoading,
+            error: state.blocklistError,
+            images: state.images.length,
+        });
+        context.renderBlocklistSuggestionsBar = () => {};
+        const renderer = loadRendererData(context, ['refreshImages']);
+        vm.runInContext(`
+            fetchTagSuggestions = async () => {};
+            fetchStatus = async () => {};
+            applySearchFilter = async () => { appState.images = appState.allImages; };
+        `, context);
+
+        const refresh = renderer.refreshImages();
+        assert.equal(paints[0].loading, true, 'Blocklist should paint before its APIs respond');
+        assert.equal(paints[0].images, 0, 'Pool images must not appear as recoverable files');
+        for (const request of pending.splice(0)) {
+            request.resolve({ ok: false, status: 500 });
+        }
+        await refresh;
+        assert.equal(state.blocklistLoading, false);
+        assert.equal(state.blocklistError, 'HTTP 500');
+        assert.equal(state.blocklistData, cached, 'failed requests must preserve cached records');
+
+        const retry = renderer.refreshImages();
+        assert.equal(state.blocklistError, null);
+        for (const request of pending.splice(0)) {
+            request.resolve({
+                ok: !request.url.includes(failingEndpoint), status: 503,
+                json: async () => request.url.includes('/api/blocklist')
+                    ? { entries: [], total: 0, recoverable_count: 0 }
+                    : { items: [], total: 0, next_offset: null },
+            });
+        }
+        await retry;
+        assert.equal(state.blocklistError, 'HTTP 503', 'either endpoint failing must show retry');
+
+        const success = renderer.refreshImages();
+        for (const request of pending.splice(0)) {
+            request.resolve({ ok: true, json: async () => request.url.includes('/api/blocklist')
+                ? { entries: [], total: 0, recoverable_count: 0 }
+                : { items: [], total: 0, next_offset: null } });
+        }
+        await success;
+        assert.equal(state.blocklistLoading, false);
+        assert.equal(state.blocklistError, null);
+        assert.equal(state.refreshing, false);
+        assert.equal(state.loadedImageMode, 'trash');
+    }
+}
+
 (async () => {
     await testRefreshLocksPageZeroAgainstObserverRace();
     await testRepeatedPageCannotDuplicatePaths();
     await testRefreshPublishesStatusBeforeSlowPage();
     testLibraryViewRestoresSynchronously();
+    await testBlocklistShowsLoadingAndRecoversFromApiFailure();
     console.log('image pagination tests passed');
 })().catch(error => {
     console.error(error);
