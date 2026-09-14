@@ -46,7 +46,8 @@ def test_enable_autostart_installs_hidden_graphical_service(tmp_path, monkeypatc
 
     assert result.enabled is True
     assert calls == [("daemon-reload",), ("enable", "wayper.service")]
-    assert f'ExecStart="{gui}" --hidden' in unit.read_text()
+    escaped_gui = str(gui).replace("\\", "\\\\")
+    assert f'ExecStart="{escaped_gui}" --hidden' in unit.read_text()
     assert "WantedBy=graphical-session.target" in unit.read_text()
     assert load_config(config_path).autostart is True
 
