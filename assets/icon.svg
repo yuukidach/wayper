@@ -1,9 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1024 1024">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1254 1254">
   <title>Wayper</title>
-  <!-- The approved concept artwork is intentionally kept intact. -->
+  <!-- Preserve the approved artwork; clip stray pixels outside the app tile on export. -->
+  <defs>
+    <clipPath id="tile">
+      <path d="M383 60H871C1098 60 1198 160 1198 383V871C1198 1094 1098 1194 871 1194H383C156 1194 56 1094 56 871V383C56 160 156 60 383 60Z"/>
+    </clipPath>
+  </defs>
   <image
-    width="1024"
-    height="1024"
+    width="1254"
+    height="1254"
+    clip-path="url(#tile)"
     href="wayper-source.png"
     xlink:href="wayper-source.png"
   />
