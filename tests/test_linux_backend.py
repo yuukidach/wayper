@@ -143,6 +143,8 @@ def test_notification_uses_cross_process_synchronous_hint() -> None:
         [
             "notify-send",
             "--app-name=wayper",
+            "--icon=wayper",
+            "--hint=string:desktop-entry:wayper",
             "--transient",
             "--hint=string:synchronous:wayper",
             "--expire-time",

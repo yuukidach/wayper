@@ -219,6 +219,8 @@ class LinuxBackend(WallpaperBackend):
         cmd = [
             "notify-send",
             "--app-name=wayper",
+            "--icon=wayper",
+            "--hint=string:desktop-entry:wayper",
             "--transient",
             "--hint=string:synchronous:wayper",
             "--expire-time",
