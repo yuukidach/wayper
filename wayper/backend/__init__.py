@@ -32,12 +32,10 @@ _backend = _create_backend()
 _monitors_cache: list[MonitorConfig] = []
 _monitors_dirty = True
 _monitors_cache_at: float = 0
-_has_display_listener = False
 
 
 def _setup_display_listener() -> None:
     """Register platform-specific display change listener to invalidate monitor cache."""
-    global _has_display_listener
     if sys.platform == "darwin":
         try:
             import Quartz
@@ -48,7 +46,6 @@ def _setup_display_listener() -> None:
                     _invalidate_monitors()
 
             Quartz.CGDisplayRegisterReconfigurationCallback(_on_display_change, None)
-            _has_display_listener = True
         except (ImportError, AttributeError):
             pass
 
@@ -80,9 +77,10 @@ def _invalidate_monitors() -> None:
 def detect_monitors() -> list[MonitorConfig]:
     """Detect current monitor configuration, cached until invalidated."""
     global _monitors_cache, _monitors_dirty, _monitors_cache_at
-    # Event-driven invalidation (macOS) or periodic fallback (Linux/Windows)
+    # Always expire the cache: registering a macOS callback does not guarantee
+    # delivery when the Python service is not pumping a native event loop.
     if not _monitors_dirty and _monitors_cache:
-        if _has_display_listener or time.monotonic() - _monitors_cache_at < 10:
+        if time.monotonic() - _monitors_cache_at < 10:
             return _monitors_cache
     _monitors_dirty = False
     _monitors_cache = _backend.detect_monitors()

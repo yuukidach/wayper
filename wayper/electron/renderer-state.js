@@ -295,9 +295,12 @@ async function init() {
     // SSE for real-time mode changes
     connectSSE();
 
-    // Poll counts and automatic rotation state.
-    setInterval(() => {
-        if (!document.hidden) fetchStatus();
+    // Refresh display IDs/directions before requesting orientation-scoped counts.
+    setInterval(async () => {
+        if (!document.hidden) {
+            await fetchMonitors();
+            await fetchStatus();
+        }
     }, 10000);
     setInterval(fetchDiskUsage, 30000);
     checkForAppUpdates();

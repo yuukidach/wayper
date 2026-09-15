@@ -258,12 +258,52 @@ async function testBlocklistShowsLoadingAndRecoversFromApiFailure() {
     }
 }
 
+async function testMonitorPollingUpdatesOrientationAndHandlesReconnect() {
+    const state = makeState();
+    state.monitors = [{ name: 'DP-2', orientation: 'portrait' }];
+    let monitors = [{ name: 'DP-2', orientation: 'landscape' }];
+    const requests = [];
+    let renders = 0;
+    const context = makeContext(state, async url => {
+        requests.push(url);
+        return { ok: true, json: async () => {
+            if (url.includes('/api/monitors')) return monitors;
+            if (url.includes('/api/status')) return {};
+            return {
+                items: [{ path: `sfw/${state.currentOrient}/current.jpg` }],
+                total: 1,
+                next_offset: null,
+            };
+        } };
+    });
+    context.renderMonitors = () => { renders += 1; };
+    context.markCurrentWallpaper = () => {};
+    const renderer = loadRendererData(context, ['fetchMonitors']);
+
+    await renderer.fetchMonitors();
+    assert.equal(state.currentOrient, 'landscape');
+    assert.equal(state.images[0].path, 'sfw/landscape/current.jpg');
+    assert.ok(requests.some(url => url.includes('/api/images/page') && url.includes('orient=landscape')));
+
+    requests.length = 0;
+    await renderer.fetchMonitors();
+    assert.equal(renders, 1, 'unchanged monitor polls must preserve sidebar focus');
+    assert.equal(requests.length, 1, 'unchanged direction must not reload the gallery');
+
+    monitors = [{ name: 'DP-3', orientation: 'portrait' }];
+    await renderer.fetchMonitors();
+    assert.equal(state.selectedMonitor, 'DP-3');
+    assert.equal(state.currentOrient, 'portrait');
+    assert.equal(state.images[0].path, 'sfw/portrait/current.jpg');
+}
+
 (async () => {
     await testRefreshLocksPageZeroAgainstObserverRace();
     await testRepeatedPageCannotDuplicatePaths();
     await testRefreshPublishesStatusBeforeSlowPage();
     testLibraryViewRestoresSynchronously();
     await testBlocklistShowsLoadingAndRecoversFromApiFailure();
+    await testMonitorPollingUpdatesOrientationAndHandlesReconnect();
     console.log('image pagination tests passed');
 })().catch(error => {
     console.error(error);

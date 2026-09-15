@@ -2408,15 +2408,26 @@ async function fetchDiskUsage() {
 async function fetchMonitors() {
     try {
         const res = await fetch(`${API_URL}/api/monitors`);
-        appState.monitors = await res.json();
+        if (!res.ok) return;
+        const monitors = await res.json();
+        const previousMonitor = appState.selectedMonitor;
+        const previousOrient = appState.currentOrient;
+        const changed = JSON.stringify(appState.monitors) !== JSON.stringify(monitors);
+        appState.monitors = monitors;
 
-        // Select first monitor if none selected
-        if (!appState.selectedMonitor && appState.monitors.length > 0) {
-            appState.selectedMonitor = appState.monitors[0].name;
+        // Display IDs can change after reconnecting. Keep the selected ID only
+        // while it still exists, and reload the library if its direction changed.
+        const selected = monitors.find(m => m.name === previousMonitor) || monitors[0];
+        appState.selectedMonitor = selected?.name || null;
+        if (changed) {
+            renderMonitors();
+            markCurrentWallpaper();
         }
-
-        renderMonitors();
-        markCurrentWallpaper();
+        if (previousMonitor && selected && (
+            previousMonitor !== selected.name || previousOrient !== selected.orientation
+        )) {
+            await refreshImages();
+        }
     } catch (e) { console.error(e); }
 }
 

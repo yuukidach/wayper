@@ -48,6 +48,7 @@ def test_detect_monitors_uses_retina_backing_dimensions() -> None:
 
     with (
         patch("wayper.backend.macos._HAS_APPKIT", True),
+        patch("wayper.backend.macos._HAS_QUARTZ", False),
         patch("wayper.backend.macos.NSScreen", screens_api, create=True),
     ):
         monitors = MacOSBackend().detect_monitors()
@@ -56,6 +57,31 @@ def test_detect_monitors_uses_retina_backing_dimensions() -> None:
         ("10", 5120, 2880, "landscape"),
         ("20", 2880, 5120, "portrait"),
     ]
+
+
+def test_detect_monitors_reads_live_modes_when_appkit_has_stale_screens() -> None:
+    quartz = MagicMock()
+    quartz.CGGetActiveDisplayList.side_effect = [(0, (), 2), (0, (3, 2), 2)]
+    quartz.CGDisplayCopyDisplayMode.side_effect = lambda display: display
+    quartz.CGDisplayModeGetPixelWidth.side_effect = {3: 5120, 2: 2880}.__getitem__
+    quartz.CGDisplayModeGetPixelHeight.side_effect = {3: 2880, 2: 5120}.__getitem__
+    screens_api = MagicMock()
+    screens_api.screens.return_value = [
+        FakeDetectedScreen("2", (2560, 1440), (5120, 2880)),
+        FakeDetectedScreen("3", (1440, 2560), (2880, 5120)),
+    ]
+    with (
+        patch("wayper.backend.macos._HAS_QUARTZ", True),
+        patch("wayper.backend.macos.Quartz", quartz, create=True),
+        patch("wayper.backend.macos.NSScreen", screens_api, create=True),
+    ):
+        monitors = MacOSBackend().detect_monitors()
+
+    assert [(m.name, m.width, m.height, m.orientation) for m in monitors] == [
+        ("3", 5120, 2880, "landscape"),
+        ("2", 2880, 5120, "portrait"),
+    ]
+    screens_api.screens.assert_not_called()
 
 
 def test_set_wallpaper_targets_only_requested_display(tmp_path: Path) -> None:

@@ -62,7 +62,30 @@ class MacOSBackend(WallpaperBackend):
             log.warning("AppKit failed to set wallpaper %s on %s: %s", image, monitor, error)
 
     def detect_monitors(self) -> list[MonitorConfig]:
-        """Detect current monitor configuration using AppKit."""
+        """Read live display modes without relying on AppKit's event-loop cache."""
+        if _HAS_QUARTZ:
+            error, _, count = Quartz.CGGetActiveDisplayList(0, None, None)
+            if error == 0:
+                error, displays, _ = Quartz.CGGetActiveDisplayList(count, None, None)
+                if error == 0:
+                    monitors = []
+                    for display in displays:
+                        mode = Quartz.CGDisplayCopyDisplayMode(display)
+                        if mode is None:
+                            break  # A display changed during detection; use AppKit below.
+                        width = Quartz.CGDisplayModeGetPixelWidth(mode)
+                        height = Quartz.CGDisplayModeGetPixelHeight(mode)
+                        monitors.append(
+                            MonitorConfig(
+                                name=str(display),
+                                width=width,
+                                height=height,
+                                orientation="portrait" if height > width else "landscape",
+                            )
+                        )
+                    else:
+                        return monitors
+
         if not _HAS_APPKIT:
             return []
 
