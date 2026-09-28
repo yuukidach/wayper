@@ -19,8 +19,10 @@ from wayper.preference.model import (
     _semantic_context_profile_similarities,
     _semantic_context_profile_similarity,
     preference_decision_score,
+    preference_neighbor_vote_weight,
 )
 from wayper.preference.semantic import SemanticTagSet, tag_maxsim, tag_maxsim_many
+from wayper.preference.training import DECISION_CALIBRATION_VERSION, _learn_decision_blend
 from wayper.preference_model import (
     MODEL_SCHEMA_VERSION,
     PreferenceExample,
@@ -117,7 +119,7 @@ def _mark_semantic_model_ready(model: PreferenceModel) -> PreferenceModel:
     model.training_summary["decision_threshold"] = 0.5
     model.training_summary["decision_calibration"] = {
         "available": True,
-        "version": 6,
+        "version": DECISION_CALIBRATION_VERSION,
         "threshold": 0.5,
     }
     return model
@@ -400,7 +402,7 @@ class PreferenceModelTest(unittest.TestCase):
         model.semantic_weights = (0.0,)
         model.training_summary["decision_calibration"] = {
             "available": True,
-            "version": 5,
+            "version": 6,
             "threshold": 0.5,
         }
 
@@ -676,7 +678,7 @@ class PreferenceModelTest(unittest.TestCase):
             )
 
         self.assertGreater(max(tag_set_batch_sizes[:cached_call_count]), 2)
-        self.assertEqual(tag_set_batch_sizes[cached_call_count:], [2])
+        self.assertEqual(tag_set_batch_sizes[cached_call_count:], [1, 1])
 
         self.assertEqual(disliked.neighbor_exact_max_similarity, 0.0)
         self.assertGreater(disliked.neighbor_semantic_max_similarity, 0.9)
@@ -734,6 +736,130 @@ class PreferenceModelTest(unittest.TestCase):
         self.assertEqual(items[0][0], "forest")
         self.assertIn("woodland, woods", items[0][1])
         self.assertIn("Nature", items[0][1])
+
+    def test_dense_prediction_uses_the_same_vectors_as_training(self) -> None:
+        import numpy as np
+
+        from wayper.preference.semantic import fit_semantic_head, semantic_tag_items
+
+        metadata = {
+            "category": "general",
+            "tag_details": [{"name": "forest", "alias": "woodland", "category": "Nature"}],
+        }
+        examples = [
+            PreferenceExample(
+                filename=f"sample-{index}.jpg",
+                tags=("common", "forest") if index < 10 else ("common", "ocean"),
+                label=int(index < 10),
+                base_weight=1.0,
+                timestamp=index,
+                is_explicit_ban=index < 10,
+                is_explicit_keep=index >= 10,
+                context_features=("category:general",),
+                semantic_tags=semantic_tag_items(
+                    ("common", "forest") if index < 10 else ("common", "ocean"), metadata
+                ),
+            )
+            for index in range(20)
+        ]
+
+        def fake_embed(texts, *, model_name, batch_size=64):
+            return [
+                (1.0, 0.0, 0.0)
+                if "woodland" in text
+                else (0.0, 1.0, 0.0)
+                if text == "common"
+                else (0.0, 0.0, 1.0)
+                for text in texts
+            ]
+
+        with (
+            patch("wayper.preference.semantic.embed_texts", side_effect=fake_embed),
+            patch(
+                "wayper.preference.semantic._fit_dense_logistic",
+                return_value=(0.2, (0.7, -1.2, 0.3)),
+            ) as fit_dense,
+        ):
+            head = fit_semantic_head(examples, model_name="fake-model")
+            assert head is not None
+            training_vectors = fit_dense.call_args.args[0]
+            model = train_preference_model(examples, semantic_model=None)
+            model.semantic_model = head.model_name
+            model.semantic_bias = head.bias
+            model.semantic_weights = head.weights
+            single = model.predict(examples[0].tags, metadata=metadata)
+            batch = model.predict_many(
+                [
+                    (e.tags, {"_semantic_tag_items": e.semantic_tags}, e.context_features)
+                    for e in examples
+                ]
+            )
+
+        for prediction, vector in zip(batch, training_vectors, strict=True):
+            self.assertTrue(prediction.semantic_available)
+            expected = head.bias + float(np.asarray(head.weights, dtype=np.float32) @ vector)
+            self.assertAlmostEqual(prediction.semantic_score, expected, places=6)
+        self.assertAlmostEqual(single.semantic_score, batch[0].semantic_score, places=6)
+
+    def test_decision_blend_learns_which_head_is_reliable_and_round_trips(self) -> None:
+        examples = [
+            *_examples("ban", 10, ("bad",), 1),
+            *_examples("keep", 10, ("good",), 0),
+        ]
+        model = train_preference_model(examples)
+        for global_is_correct in (True, False):
+            predictions = [
+                PreferencePrediction(
+                    probability=float(e.label if global_is_correct else 1 - e.label),
+                    score=0.0,
+                    contributions=(),
+                    semantic_available=True,
+                    neighbor_probability=float(1 - e.label if global_is_correct else e.label),
+                    neighbor_available=True,
+                )
+                for e in examples
+            ]
+            with patch.object(model, "predict_many", return_value=predictions):
+                blend = _learn_decision_blend(model, examples)
+            self.assertTrue(blend["available"])
+            self.assertEqual(blend["neighbor_weight"], 0.0 if global_is_correct else 1.0)
+            self.assertLess(blend["loss"], blend["default_loss"])
+            model.training_summary["decision_blend"] = blend
+            restored = PreferenceModel.from_dict(model.to_dict())
+            self.assertIsNotNone(restored)
+            self.assertEqual(preference_neighbor_vote_weight(restored), blend["neighbor_weight"])
+            for example, prediction in zip(examples, predictions, strict=True):
+                self.assertEqual(preference_decision_score(restored, prediction), example.label)
+
+    def test_decision_blend_rejects_missing_semantic_predictions(self) -> None:
+        examples = [*_examples("ban", 10, ("bad",), 1), *_examples("keep", 10, ("good",), 0)]
+        model = train_preference_model(examples)
+        predictions = [
+            PreferencePrediction(probability=0.5, score=0.0, contributions=()) for _ in examples
+        ]
+        with patch.object(model, "predict_many", return_value=predictions):
+            blend = _learn_decision_blend(model, examples)
+        self.assertFalse(blend["available"])
+        self.assertEqual(blend["neighbor_weight"], 0.8)
+
+    def test_decision_blend_balances_classes_when_learning_an_interior_weight(self) -> None:
+        examples = [*_examples("ban", 10, ("bad",), 1), *_examples("keep", 30, ("good",), 0)]
+        model = train_preference_model(examples)
+        predictions = [
+            PreferencePrediction(
+                probability=0.9,
+                score=0.0,
+                contributions=(),
+                semantic_available=True,
+                neighbor_probability=0.1,
+                neighbor_available=True,
+            )
+            for _ in examples
+        ]
+        with patch.object(model, "predict_many", return_value=predictions):
+            blend = _learn_decision_blend(model, examples)
+        self.assertAlmostEqual(blend["neighbor_weight"], 0.5)
+        self.assertAlmostEqual(blend["loss"], 0.25)
 
     def test_semantic_tag_items_accept_calibration_text_override(self) -> None:
         from wayper.preference.semantic import semantic_tag_items
@@ -984,6 +1110,8 @@ class PreferenceModelTest(unittest.TestCase):
         self.assertEqual(sum(example.label == 1 for example in holdout), 320)
 
     def test_review_boundary_is_learned_from_recent_explicit_holdout(self) -> None:
+        from wayper.preference import training as training_module
+
         examples = [
             *[
                 PreferenceExample(
@@ -1020,7 +1148,36 @@ class PreferenceModelTest(unittest.TestCase):
                 for text in texts
             ]
 
-        with patch("wayper.preference.semantic.embed_texts", side_effect=fake_embed):
+        blend_partitions: list[tuple[set[str], set[str]]] = []
+        calibration_partitions: list[tuple[set[str], set[str]]] = []
+
+        def record_partition(original, destination):
+            def wrapped(fitted, holdout):
+                destination.append(
+                    (
+                        {prototype.filename for prototype in fitted.neighbor_prototypes},
+                        {example.filename for example in holdout},
+                    )
+                )
+                return original(fitted, holdout)
+
+            return wrapped
+
+        with (
+            patch("wayper.preference.semantic.embed_texts", side_effect=fake_embed),
+            patch(
+                "wayper.preference.training._learn_decision_blend",
+                side_effect=record_partition(
+                    training_module._learn_decision_blend, blend_partitions
+                ),
+            ),
+            patch(
+                "wayper.preference.training._calibrate_decision_boundary",
+                side_effect=record_partition(
+                    training_module._calibrate_decision_boundary, calibration_partitions
+                ),
+            ),
+        ):
             model = train_preference_model(examples, epochs=8, semantic_model="fake-model")
             calibration = model.training_summary["decision_calibration"]
             held, _ = auto_filter_prediction(model, {"tags": ["bad", "detail"]})
@@ -1037,6 +1194,15 @@ class PreferenceModelTest(unittest.TestCase):
         )
         self.assertTrue(held)
         self.assertFalse(kept)
+        self.assertTrue(model.training_summary["decision_blend"]["available"])
+        self.assertEqual(len(blend_partitions), 1)
+        self.assertEqual(len(calibration_partitions), 1)
+        blend_train, blend_holdout = blend_partitions[0]
+        calibration_train, calibration_holdout = calibration_partitions[0]
+        self.assertFalse(blend_train & blend_holdout)
+        self.assertFalse(calibration_train & calibration_holdout)
+        self.assertTrue((blend_train | blend_holdout) <= calibration_train)
+        self.assertFalse((blend_train | blend_holdout) & calibration_holdout)
 
     def test_explicit_keep_uses_feedback_time_and_strong_weight(self) -> None:
         examples = build_training_examples(
@@ -1170,7 +1336,7 @@ class PreferenceModelTest(unittest.TestCase):
         model.training_summary["decision_threshold"] = 0.5
         model.training_summary["decision_calibration"] = {
             "available": True,
-            "version": 6,
+            "version": DECISION_CALIBRATION_VERSION,
             "threshold": 0.5,
         }
 

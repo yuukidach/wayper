@@ -33,9 +33,8 @@ DEFAULT_NEIGHBOR_MIN_SIMILARITY = 0.15
 # New models replace this conservative fallback with a boundary calibrated on
 # unseen Keep/Dislike decisions.
 DEFAULT_DECISION_THRESHOLD = 0.80
-# The class-balanced MaxSim vote remains the primary signal. A small share of
-# the global sparse+dense probability recovers consistent preference evidence
-# that no single local neighbour expresses.
+# Compatibility fallback for models without a learned blend. New fits learn
+# the relative reliability of the global classifier and local neighbour vote.
 DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT = 0.80
 NEIGHBOR_HEAD_SCHEMA_VERSION = 2
 LEGACY_NEIGHBOR_HEAD_SCHEMA_VERSION = 1
@@ -211,13 +210,25 @@ def preference_decision_score(
     model: PreferenceModel,
     prediction: PreferencePrediction,
 ) -> float:
-    """Blend the validated local MaxSim vote with the global preference score."""
+    """Blend local and global evidence using their held-out reliability."""
     if not prediction.neighbor_available or prediction.neighbor_probability is None:
         return 0.0
-    return (
-        DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT * prediction.neighbor_probability
-        + (1.0 - DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT) * prediction.probability
-    )
+    weight = preference_neighbor_vote_weight(model)
+    return weight * prediction.neighbor_probability + (1.0 - weight) * prediction.probability
+
+
+def preference_neighbor_vote_weight(model: PreferenceModel) -> float:
+    """Read a fitted convex blend, retaining compatibility with older models."""
+    blend = model.training_summary.get("decision_blend")
+    value = blend.get("neighbor_weight") if isinstance(blend, dict) else None
+    if (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and 0.0 <= value <= 1.0
+    ):
+        return float(value)
+    return DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT
 
 
 def preference_decision_threshold(model: PreferenceModel) -> float:
@@ -449,16 +460,18 @@ class PreferenceModel:
             runtime = self._semantic_runtime()
             query_items = [semantic_tag_items(tags, metadata) for tags, metadata, _ in records]
             dense_items = [
-                semantic_items_with_context(semantic_tag_items(tags), context)
-                for tags, _, context in records
+                semantic_items_with_context(items, context)
+                for items, (_, _, context) in zip(query_items, records, strict=True)
             ]
-            embedded_sets = embed_tag_sets(
-                [*query_items, *dense_items],
+            query_sets = embed_tag_sets(
+                query_items,
                 model_name=self.semantic_model,
                 idf=runtime.idf,
             )
-            query_sets = embedded_sets[: len(query_items)]
-            dense_sets = embedded_sets[len(query_items) :]
+            # The dense head is trained on unweighted tag means, including
+            # aliases/categories. Retrieval IDF belongs only to the KNN head;
+            # applying it here changes the feature space after fitting.
+            dense_sets = embed_tag_sets(dense_items, model_name=self.semantic_model)
             prototype_rows = runtime.pooled_matrix
             import numpy as np
 

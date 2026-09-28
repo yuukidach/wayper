@@ -18,6 +18,7 @@ from .model import (
     DEFAULT_FEATURE_NORMALIZATION,
     DEFAULT_MAX_COMBO_FEATURES,
     DEFAULT_NEIGHBOR_K,
+    DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT,
     DEFAULT_TRAINING_MAX_EXAMPLES,
     MIN_TRAINING_PER_CLASS,
     MIN_VALIDATION_PER_CLASS,
@@ -42,7 +43,7 @@ from .model import (
 
 DECISION_CALIBRATION_FRACTION = 0.20
 DECISION_TARGET_PRECISION = 0.80
-DECISION_CALIBRATION_VERSION = 6
+DECISION_CALIBRATION_VERSION = 7
 DECISION_CALIBRATION_MAX_PER_CLASS = 320
 DECISION_MINIMUM_BOUNDARY = 0.50
 DECISION_CALIBRATION_OBJECTIVE = "two_stage_precision_at_least_0_80"
@@ -263,6 +264,69 @@ def _calibrate_decision_boundary(
     )[4]
 
 
+def _learn_decision_blend(
+    model: PreferenceModel,
+    holdout: list[PreferenceExample],
+) -> dict[str, object]:
+    """Fit one convex weight by class-balanced Brier loss on unseen labels.
+
+    This inner holdout must come only from calibration's training partition.
+    The outer holdout remains independent for the 80% precision gate.
+    """
+    predictions = model.predict_many(
+        [
+            (example.tags, {"_semantic_tag_items": example.semantic_tags}, example.context_features)
+            for example in holdout
+        ],
+        top_n=0,
+    )
+    rows = [
+        (prediction.probability, prediction.neighbor_probability, example.label)
+        for example, prediction in zip(holdout, predictions, strict=True)
+        if prediction.semantic_available
+        and prediction.neighbor_available
+        and prediction.neighbor_probability is not None
+    ]
+    counts = Counter(label for _, _, label in rows)
+    if any(counts[label] < MIN_VALIDATION_PER_CLASS for label in (0, 1)):
+        return {
+            "available": False,
+            "neighbor_weight": DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT,
+            "reason": "not enough held-out semantic predictions",
+        }
+    numerator = sum(
+        (neighbor - global_score) * (label - global_score) / counts[label]
+        for global_score, neighbor, label in rows
+    )
+    denominator = sum(
+        (neighbor - global_score) ** 2 / counts[label] for global_score, neighbor, label in rows
+    )
+    weight = (
+        min(1.0, max(0.0, numerator / denominator))
+        if denominator > 1e-12
+        else DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT
+    )
+
+    def loss(blend: float) -> float:
+        return (
+            sum(
+                (blend * neighbor + (1.0 - blend) * global_score - label) ** 2 / counts[label]
+                for global_score, neighbor, label in rows
+            )
+            / 2
+        )
+
+    return {
+        "available": True,
+        "source": "nested_recent_holdout",
+        "objective": "balanced_brier_loss",
+        "examples": len(rows),
+        "neighbor_weight": weight,
+        "loss": round(loss(weight), 6),
+        "default_loss": round(loss(DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT), 6),
+    }
+
+
 def _training_example_payload(example: PreferenceExample, *, include_weight: bool) -> str:
     """Serialize one example for stable data or label identity fingerprints."""
     values: list[object] = [
@@ -331,7 +395,24 @@ def train_preference_model(
         "threshold": DEFAULT_DECISION_THRESHOLD,
         "objective": DECISION_CALIBRATION_OBJECTIVE,
     }
+    decision_blend: dict[str, object] = {
+        "available": False,
+        "neighbor_weight": DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT,
+        "reason": "not enough explicit decisions for an inner holdout",
+    }
     if calibration_training and calibration_holdout:
+        blend_training, blend_holdout = _decision_calibration_split(calibration_training)
+        if semantic_model is not None and blend_training and blend_holdout:
+            blend_model = _fit(
+                blend_training,
+                combo_min_support=combo_min_support,
+                max_combo_features=max_combo_features,
+                epochs=epochs,
+            )
+            _attach_neighbor_head(blend_model, blend_training)
+            _attach_semantic_head(blend_model, blend_training, semantic_model)
+            decision_blend = _learn_decision_blend(blend_model, blend_holdout)
+            del blend_model
         calibration_model = _fit(
             calibration_training,
             combo_min_support=combo_min_support,
@@ -340,7 +421,9 @@ def train_preference_model(
         )
         _attach_neighbor_head(calibration_model, calibration_training)
         _attach_semantic_head(calibration_model, calibration_training, semantic_model)
+        calibration_model.training_summary["decision_blend"] = decision_blend
         decision_calibration = _calibrate_decision_boundary(calibration_model, calibration_holdout)
+        del calibration_model
 
     working_examples = list(
         select_preference_examples(examples, limit=DEFAULT_TRAINING_MAX_EXAMPLES)
@@ -387,6 +470,7 @@ def train_preference_model(
             "label_source": label_source,
             "decision_threshold": decision_calibration["threshold"],
             "decision_calibration": decision_calibration,
+            "decision_blend": decision_blend,
         }
     )
     return model

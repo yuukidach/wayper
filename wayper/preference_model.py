@@ -62,6 +62,7 @@ from .preference.model import (
     preference_candidate,
     preference_decision_score,
     preference_decision_threshold,
+    preference_neighbor_vote_weight,
     select_preference_examples,
 )
 from .preference.semantic import (
@@ -979,7 +980,7 @@ def model_report(
         "semantic_dimension": len(model.semantic_weights) or None,
         "semantic_blend": model.semantic_blend if model.semantic_enabled else None,
         "semantic_neighbor_vote_weight": (
-            DEFAULT_SEMANTIC_NEIGHBOR_VOTE_WEIGHT
+            preference_neighbor_vote_weight(model)
             if model.neighbor_head_ready and model.semantic_enabled
             else None
         ),
