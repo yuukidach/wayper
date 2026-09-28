@@ -400,6 +400,7 @@ function prefetchLibraryView(mode, orient) {
             `HTTP ${response.status}`,
         )))
         .then(data => {
+            if (requests.get(key) !== request) return false;
             const items = data.items || [];
             libraryViewCache().set(key, {
                 allImages: items,
@@ -2302,6 +2303,16 @@ function connectSSE() {
                     refreshImages();
                     fetchStatus();
                 }
+            } else if (data.type === 'library') {
+                // System hotkeys run in another process. Invalidate cached
+                // views and reconcile counts immediately, even while hidden.
+                libraryViewCache().clear();
+                libraryPrefetchRequests().clear();
+                invalidateBlocklistSuggestions();
+                invalidateModelReviewCaches();
+                // Counts alone can stay equal after multiple external actions.
+                // Refresh the page too; it independently refreshes the status.
+                refreshImages(true);
             } else if (data.type === 'wallpaper') {
                 fetchMonitors();
             }

@@ -15,6 +15,46 @@ async function flushPromises() {
     await new Promise(resolve => setImmediate(resolve));
 }
 
+function testEmptyBlocklistSuggestionsKeepAnalysisAvailable() {
+    const element = () => ({
+        children: [],
+        classList: { add() {} },
+        setAttribute() {},
+        appendChild(child) { this.children.push(child); },
+    });
+    let analyses = 0;
+    let current = true;
+    const context = {
+        appState: { tagSuggestions: [], comboSuggestions: [] },
+        document: { createElement: element },
+        blocklistSuggestionsAreCurrent: () => current,
+        fetchAISuggestions: () => { analyses++; },
+    };
+    const renderer = loadRendererScript(
+        'renderer-views.js', context, ['createBlocklistSuggestionsBar'],
+    );
+    const bar = renderer.createBlocklistSuggestionsBar();
+    assert.ok(bar, 'a successful empty response should keep the suggestions section visible');
+    const [title, meta] = bar.children[0].children;
+    assert.equal(title.children[1].textContent,
+        'No exclusion suggestions for the selected purity filters');
+    const button = meta.children.find(child => child.className === 'agent-analyze-btn');
+    assert.ok(button, 'Codex analysis must remain available without heuristic suggestions');
+    button.onclick();
+    assert.equal(analyses, 1);
+    context.appState.aiLoading = true;
+    button.onclick();
+    assert.equal(analyses, 1, 'an in-progress analysis must not be started again');
+    for (const key of ['searchQuery', 'tagReview', 'reviewingUploader']) {
+        context.appState[key] = 'active';
+        assert.equal(renderer.createBlocklistSuggestionsBar(), null);
+        context.appState[key] = null;
+    }
+    current = false;
+    assert.equal(renderer.createBlocklistSuggestionsBar(), null,
+        'stale or not-yet-loaded suggestions must not be presented as empty');
+}
+
 function testRecommendationCountPreservesFullCandidateTotal() {
     const context = { console };
     context.window = context;
@@ -2004,6 +2044,7 @@ function testMonitorSwitchRestoresCachedCountsSynchronously() {
 }
 
 (async () => {
+    testEmptyBlocklistSuggestionsKeepAnalysisAvailable();
     testRecommendationCountPreservesFullCandidateTotal();
     testImageOrientationUsesApiFieldAndSupportsLegacyWindowsPaths();
     testRecommendationCarouselUsesTwentyFourItemWindow();

@@ -815,9 +815,23 @@ def set_mode_route(req: SetModeRequest):
     return {"status": "ok", "purities": sorted(purities)}
 
 
+def _library_state_token(config: WayperConfig) -> tuple:
+    """Observe external CLI mutations using stat calls, without scanning images."""
+    paths = [config.blacklist_file]
+    for purity in ALL_PURITIES:
+        for orientation in ("landscape", "portrait"):
+            paths.extend(
+                (
+                    pool_dir(config, purity, orientation),
+                    favorites_dir(config, purity, orientation),
+                )
+            )
+    return (str(config.download_dir), *(_path_state_token(path) for path in paths))
+
+
 @app.get("/api/events")
 async def sse_events():
-    """SSE stream for real-time state changes (mode, wallpaper)."""
+    """SSE stream for real-time state changes, including external CLI actions."""
     from starlette.responses import StreamingResponse
 
     async def event_stream():
@@ -825,6 +839,7 @@ async def sse_events():
         last_mtime = 0.0
         last_mode: set[str] = set()
         last_wallpapers: dict[str, str | None] = {}
+        last_library = _library_state_token(config)
         tick = 0
         try:
             last_mtime = config.state_file.stat().st_mtime
@@ -832,7 +847,7 @@ async def sse_events():
         except OSError:
             pass
         try:
-            wp = query_current()
+            wp = await asyncio.to_thread(query_current)
             last_wallpapers = {k: str(v) if v else None for k, v in wp.items()}
         except OSError:
             pass
@@ -840,6 +855,7 @@ async def sse_events():
         while True:
             await asyncio.sleep(0.3)
             tick += 1
+            config = get_config()
             try:
                 mtime = config.state_file.stat().st_mtime
                 if mtime != last_mtime:
@@ -852,17 +868,25 @@ async def sse_events():
             except OSError:
                 pass
 
-            # Check wallpaper changes every ~1s (every 3rd tick)
-            if tick % 3 == 0:
-                try:
-                    current_wp = query_current()
-                    wp_strs = {k: str(v) if v else None for k, v in current_wp.items()}
-                    if wp_strs != last_wallpapers:
-                        last_wallpapers = wp_strs
-                        payload = json_mod.dumps({"type": "wallpaper"})
-                        yield f"data: {payload}\n\n"
-                except OSError:
-                    pass
+            library = _library_state_token(config)
+            library_changed = library != last_library
+            if library_changed:
+                last_library = library
+                yield 'data: {"type": "library"}\n\n'
+
+            if not library_changed and tick % 3:
+                continue
+            # Backend queries invoke platform processes. Keep them off the event
+            # loop so a slow wallpaper daemon cannot stall every API request.
+            try:
+                current_wp = await asyncio.to_thread(query_current)
+                wp_strs = {k: str(v) if v else None for k, v in current_wp.items()}
+                if wp_strs != last_wallpapers:
+                    last_wallpapers = wp_strs
+                    payload = json_mod.dumps({"type": "wallpaper"})
+                    yield f"data: {payload}\n\n"
+            except OSError:
+                pass
 
     return StreamingResponse(
         event_stream(),
@@ -879,10 +903,19 @@ def get_disk_usage():
     return {"used_mb": round(disk_usage_mb(config), 1), "quota_mb": config.quota_mb}
 
 
+@app.get("/api/control")
+def control_capabilities():
+    return {
+        "protocol": "wayper-control-v1",
+        "download_dir": str(get_config().download_dir.resolve()),
+    }
+
+
 @app.post("/api/control/{action}")
 def control_action(
     action: str,
     monitor_name: str | None = Body(None, embed=True),
+    open_url: bool = Body(False, embed=True),
 ):
     config = get_config()
 
@@ -896,18 +929,26 @@ def control_action(
     handlers = {
         "next": do_next,
         "prev": do_prev,
-        "fav": do_fav,
-        "unfav": do_unfav,
         "unban": do_unban,
     }
     if action == "ban":
-        result = do_ban(config, monitor, clear_thumbnail=lambda p: _remove_thumbnail(config, p))
+        result = do_ban(
+            config,
+            monitor,
+            clear_thumbnail=lambda p: _remove_thumbnail(config, p),
+            wait_remote=False,
+        )
     elif action == "dislike":
         result = do_dislike(
             config,
             monitor,
             clear_thumbnail=lambda p: _remove_thumbnail(config, p),
+            wait_remote=False,
         )
+    elif action == "fav":
+        result = do_fav(config, monitor, open_url=open_url is True, wait_remote=False)
+    elif action == "unfav":
+        result = do_unfav(config, monitor, wait_remote=False)
     elif handler := handlers.get(action):
         result = handler(config, monitor)
     else:
@@ -1238,7 +1279,7 @@ def dislike_image_route(req: ActionRequest):
         "replacement_images": _relative_image_map(
             config, result.extra.get("replacement_images", {})
         ),
-        "learning": _preference_learning_payload(config),
+        "learning": _preference_learning_payload(config, fast=True),
     }
 
 

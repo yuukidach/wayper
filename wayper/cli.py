@@ -38,6 +38,18 @@ def _require_success(result, use_json: bool) -> None:
     raise SystemExit(1)
 
 
+def _desktop_action(ctx, action: str, **kwargs):
+    """Reuse the desktop service for hotkeys; preserve standalone/custom CLI use."""
+    if ctx.obj["config_path"] is None:
+        from .server.client import try_control_action
+
+        result = try_control_action(ctx.obj["config"], action, **kwargs)
+        if result is not None:
+            return result
+    handler = {"fav": do_fav, "unfav": do_unfav, "ban": do_ban, "dislike": do_dislike}[action]
+    return handler(ctx.obj["config"], **kwargs)
+
+
 @click.group(invoke_without_command=True)
 @click.option("--hidden", is_flag=True, help="Start the app in the system tray.")
 @click.option("--json", "use_json", is_flag=True, help="Output in JSON format.")
@@ -159,10 +171,9 @@ def prev_cmd(ctx):
 @click.pass_context
 def fav(ctx, open_url):
     """Favorite the current wallpaper."""
-    config = ctx.obj["config"]
     use_json = ctx.obj["json"]
 
-    result = do_fav(config, open_url=open_url)
+    result = _desktop_action(ctx, "fav", open_url=open_url)
     _require_success(result, use_json)
 
     if result.status == "already_favorite":
@@ -185,10 +196,9 @@ def fav(ctx, open_url):
 @click.pass_context
 def unfav(ctx):
     """Remove current wallpaper from favorites."""
-    config = ctx.obj["config"]
     use_json = ctx.obj["json"]
 
-    result = do_unfav(config)
+    result = _desktop_action(ctx, "unfav")
     _require_success(result, use_json)
 
     if result.status == "not_favorite":
@@ -208,10 +218,9 @@ def unfav(ctx):
 @click.pass_context
 def ban(ctx):
     """Block the current wallpaper without teaching the preference model."""
-    config = ctx.obj["config"]
     use_json = ctx.obj["json"]
 
-    result = do_ban(config)
+    result = _desktop_action(ctx, "ban")
     _require_success(result, use_json)
 
     if result.status == "is_favorite":
@@ -231,10 +240,9 @@ def ban(ctx):
 @click.pass_context
 def dislike(ctx):
     """Mark the current wallpaper as disliked and teach the preference model."""
-    config = ctx.obj["config"]
     use_json = ctx.obj["json"]
 
-    result = do_dislike(config)
+    result = _desktop_action(ctx, "dislike")
     _require_success(result, use_json)
 
     if use_json:

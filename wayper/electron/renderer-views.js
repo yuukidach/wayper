@@ -369,7 +369,6 @@ function createBlocklistSuggestionsBar() {
         || appState.tagReview
         || appState.reviewingUploader
         || !blocklistSuggestionsAreCurrent()
-        || !hasSuggestions
     ) {
         return null;
     }
@@ -386,7 +385,9 @@ function createBlocklistSuggestionsBar() {
     title.appendChild(label);
     const subtitle = document.createElement('span');
     subtitle.className = 'suggestion-bar-subtitle';
-    subtitle.textContent = 'Click a signal to review matching wallpapers';
+    subtitle.textContent = hasSuggestions
+        ? 'Click a signal to review matching wallpapers'
+        : 'No exclusion suggestions for the selected purity filters';
     title.appendChild(subtitle);
     header.appendChild(title);
 
@@ -396,7 +397,7 @@ function createBlocklistSuggestionsBar() {
     legend.className = 'suggestion-evidence-legend';
     legend.textContent = 'B/K/F';
     legend.title = 'Counts are Banned / Kept / Favorites';
-    meta.appendChild(legend);
+    if (hasSuggestions) meta.appendChild(legend);
 
     const aiBtn = document.createElement('button');
     aiBtn.className = 'agent-analyze-btn';

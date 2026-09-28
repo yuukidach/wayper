@@ -144,6 +144,7 @@
         'Banned / kept / favorites': '屏蔽 / 保留 / 收藏',
         'Suggested exclusions': '排除建议',
         'Click a signal to review matching wallpapers': '点击一项依据，查看匹配的壁纸',
+        'No exclusion suggestions for the selected purity filters': '当前内容分级下暂无排除建议',
         Tags: '标签',
         Combos: '组合',
         tag: '标签',
