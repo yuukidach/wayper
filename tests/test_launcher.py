@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import threading
 import tomllib
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from wayper.server.launcher import (
     _electron_command,
@@ -63,6 +66,11 @@ def test_hidden_argument_is_forwarded_through_npm(tmp_path: Path) -> None:
 def test_electron_dependencies_follow_current_package_lock(tmp_path: Path) -> None:
     source_lock = _touch(tmp_path / "package-lock.json")
     installed_lock = _touch(tmp_path / "node_modules" / ".package-lock.json")
+    package = tmp_path / "node_modules" / "electron"
+    _touch(package / "dist" / "electron")
+    (package / "path.txt").write_text("electron")
+    (package / "package.json").write_text('{"version":"41.1.0"}')
+    (package / "dist" / "version").write_text("41.1.0")
 
     os.utime(installed_lock, ns=(1_000_000_000, 1_000_000_000))
     os.utime(source_lock, ns=(2_000_000_000, 2_000_000_000))
@@ -73,6 +81,40 @@ def test_electron_dependencies_follow_current_package_lock(tmp_path: Path) -> No
 
     installed_lock.unlink()
     assert not _electron_dependencies_ready(tmp_path)
+
+
+@pytest.mark.parametrize("missing", ["path.txt", "dist/electron", "dist/version"])
+def test_current_lock_does_not_hide_incomplete_electron(tmp_path: Path, missing: str) -> None:
+    _touch(tmp_path / "package-lock.json")
+    _touch(tmp_path / "node_modules" / ".package-lock.json")
+    package = tmp_path / "node_modules" / "electron"
+    _touch(package / "dist" / "electron")
+    (package / "path.txt").write_text("electron")
+    (package / "package.json").write_text('{"version":"41.1.0"}')
+    (package / "dist" / "version").write_text("41.1.0")
+    assert _electron_dependencies_ready(tmp_path)
+    (package / missing).unlink()
+    assert not _electron_dependencies_ready(tmp_path)
+
+
+@pytest.mark.parametrize("install_error", [False, True])
+def test_failed_electron_install_does_not_start_backend(
+    tmp_path: Path, install_error: bool
+) -> None:
+    with (
+        patch("wayper.autostart.ensure_default_autostart"),
+        patch("wayper.config.load_config"),
+        patch("wayper.server.launcher._electron_workdir", return_value=tmp_path),
+        patch("wayper.server.launcher._electron_dependencies_ready", return_value=False),
+        patch("wayper.server.launcher.subprocess.check_call") as install,
+        patch("wayper.server.launcher.threading.Thread") as thread,
+    ):
+        if install_error:
+            install.side_effect = subprocess.CalledProcessError(1, ["npm", "ci"])
+        expected = subprocess.CalledProcessError if install_error else RuntimeError
+        with pytest.raises(expected):
+            run_app()
+    thread.assert_not_called()
 
 
 def test_unified_entry_point_keeps_legacy_alias() -> None:

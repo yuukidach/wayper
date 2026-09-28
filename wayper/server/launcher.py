@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -101,12 +102,28 @@ def _electron_command(
 
 
 def _electron_dependencies_ready(electron_dir: Path) -> bool:
-    """Check npm's installed lock against the current source lock."""
+    """Require both current dependencies and a complete Electron installation.
+
+    npm can successfully install the JS package while blocking its postinstall
+    script. The lock and .bin shim then exist, but the actual runtime does not.
+    """
     try:
         installed = electron_dir / "node_modules" / ".package-lock.json"
         source = electron_dir / "package-lock.json"
-        return installed.stat().st_mtime_ns >= source.stat().st_mtime_ns
-    except OSError:
+        if installed.stat().st_mtime_ns < source.stat().st_mtime_ns:
+            return False
+        package = electron_dir / "node_modules" / "electron"
+        relative_binary = (package / "path.txt").read_text(encoding="utf-8").strip()
+        binary = package / "dist" / relative_binary
+        version = json.loads((package / "package.json").read_text(encoding="utf-8"))["version"]
+        installed_version = (package / "dist" / "version").read_text(encoding="utf-8").strip()
+        return (
+            bool(relative_binary)
+            and binary.resolve().is_relative_to((package / "dist").resolve())
+            and binary.is_file()
+            and installed_version.removeprefix("v") == version
+        )
+    except (OSError, ValueError, KeyError, TypeError):
         return False
 
 
@@ -155,6 +172,22 @@ def run_app(arguments: list[str] | None = None) -> None:
     except AutostartError as error:
         print(f"Warning: could not install Wayper autostart: {error}")
 
+    # Validate the desktop runtime before starting a non-daemon API thread.
+    # Installation errors must not leave an invisible backend running forever.
+    electron_dir = _electron_workdir(Path(__file__).parent.parent / "electron")
+    if not _electron_dependencies_ready(electron_dir):
+        print("Installing dependencies...")
+        subprocess.check_call(
+            [_npm_executable(), "ci"],
+            cwd=electron_dir,
+            **windows_no_window_kwargs(),
+        )
+        if not _electron_dependencies_ready(electron_dir):
+            raise RuntimeError(
+                "Electron installation is incomplete. Its install script may have been blocked. "
+                f"Run 'npm rebuild electron' in {electron_dir} and try again."
+            )
+
     # Keep the source-mode API in this process, but give it an explicit shutdown
     # signal.  Letting a daemon server thread outlive Electron starts Python's
     # interpreter shutdown while Uvicorn is still serving requests, leaving a
@@ -168,18 +201,6 @@ def run_app(arguments: list[str] | None = None) -> None:
     api_thread.start()
 
     port = _wait_for_api()
-
-    # Electron directory (mirrored to a writable cache dir for system installs)
-    electron_dir = _electron_workdir(Path(__file__).parent.parent / "electron")
-
-    # Check dependencies first
-    if not _electron_dependencies_ready(electron_dir):
-        print("Installing dependencies...")
-        subprocess.check_call(
-            [_npm_executable(), "ci"],
-            cwd=electron_dir,
-            **windows_no_window_kwargs(),
-        )
 
     print(f"Starting Electron in {electron_dir}...")
 

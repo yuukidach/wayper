@@ -1312,6 +1312,7 @@ class RegressionTest(unittest.TestCase):
         image = Path("/tmp/missed.jpg")
         with (
             patch("wayper.cli.load_config", return_value=config),
+            patch("wayper.server.client.try_control_action", return_value=None),
             patch(
                 "wayper.cli.do_dislike",
                 return_value=CoreResult(action="dislike", image=image),
