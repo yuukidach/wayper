@@ -9,11 +9,11 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .backend import find_monitor, get_context, get_focused_monitor, query_current, set_wallpaper
-from .config import NO_TRANSITION, WayperConfig
+from .config import NO_TRANSITION, TransitionConfig, WayperConfig
 from .history import go_prev, pick_next
 from .history import push as push_history
 from .lock import FileLock
@@ -104,6 +104,11 @@ def _resolve_monitor(
     return monitor, mon_cfg, current.get(monitor)
 
 
+def _instant_transition(config: WayperConfig) -> TransitionConfig:
+    """No animation, but keep the user's configured resize mode."""
+    return replace(NO_TRANSITION, resize=config.transition.resize)
+
+
 def _update_monitors_for_moved_image(config: WayperConfig, old_path: Path, new_path: Path) -> None:
     """If any monitor is showing old_path, update it to new_path (no transition)."""
     try:
@@ -112,7 +117,7 @@ def _update_monitors_for_moved_image(config: WayperConfig, old_path: Path, new_p
         return
     for mon_name, cur in current.items():
         if cur and cur.resolve() == old_path.resolve():
-            set_wallpaper(mon_name, new_path, NO_TRANSITION)
+            set_wallpaper(mon_name, new_path, _instant_transition(config))
 
 
 def _replace_on_all_monitors(
@@ -237,7 +242,7 @@ def do_fav(
         if image is not None:
             _update_monitors_for_moved_image(config, img, dest)
         else:
-            set_wallpaper(monitor, dest, NO_TRANSITION)
+            set_wallpaper(monitor, dest, _instant_transition(config))
 
         _record_preference_feedback(config, "favorite", dest.name, already_locked=True)
 
@@ -295,7 +300,7 @@ def do_unfav(
         if image is not None:
             _update_monitors_for_moved_image(config, img, dest)
         else:
-            set_wallpaper(monitor, dest, NO_TRANSITION)
+            set_wallpaper(monitor, dest, _instant_transition(config))
 
         _record_preference_feedback(config, "unfavorite", dest.name, already_locked=True)
 

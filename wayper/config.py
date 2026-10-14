@@ -116,6 +116,20 @@ class TransitionConfig:
     type: str = "grow"
     duration: float = 0.5
     fps: int = 60
+    # Passed to ``awww img --resize`` on Linux: crop (default), fit, stretch, or no.
+    resize: str = "crop"
+
+    def __post_init__(self) -> None:
+        self.resize = normalize_resize(self.resize)
+
+
+RESIZE_MODES = ("crop", "fit", "stretch", "no")
+
+
+def normalize_resize(value: object) -> str:
+    """Return a valid ``awww img --resize`` value, falling back to ``crop``."""
+    mode = str(value).strip().lower() if value is not None else ""
+    return mode if mode in RESIZE_MODES else "crop"
 
 
 NO_TRANSITION = TransitionConfig(type="none", duration=0, fps=60)
@@ -278,6 +292,7 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
     lines.append(f'type = "{tr.type}"')
     lines.append(f"duration = {tr.duration}")
     lines.append(f"fps = {tr.fps}")
+    lines.append(f'resize = "{tr.resize}"')
 
     gr = config.greeter
     if gr.image:
@@ -333,6 +348,7 @@ def load_config(path: Path | None = None) -> WayperConfig:
         type=transition_raw.get("type", "grow"),
         duration=transition_raw.get("duration", 0.5),
         fps=transition_raw.get("fps", 60),
+        resize=transition_raw.get("resize", "crop"),
     )
 
     greeter_raw = raw.get("greeter", {})

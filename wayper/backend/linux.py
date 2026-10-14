@@ -148,7 +148,7 @@ class LinuxBackend(WallpaperBackend):
                     "--outputs",
                     monitor,
                     "--resize",
-                    "crop",
+                    transition.resize,
                     "--filter",
                     "Lanczos3",
                     "--transition-type",

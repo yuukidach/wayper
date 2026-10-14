@@ -104,3 +104,30 @@ def test_wallpaper_is_scaled_only_at_display_time_with_high_quality_filter() -> 
         "--filter",
     ]
     assert command[8] == "Lanczos3"
+
+
+def test_configured_resize_mode_is_passed_to_awww() -> None:
+    image = Path("/wallpapers/original.jpg")
+    with patch("wayper.backend.linux.subprocess.run", return_value=_result({})) as run:
+        LinuxBackend().set_wallpaper("DP-2", image, TransitionConfig(resize="fit"))
+
+    command = run.call_args.args[0]
+    assert command[command.index("--resize") + 1] == "fit"
+
+
+def test_resize_config_round_trip_and_validation(tmp_path: Path) -> None:
+    from wayper.config import WayperConfig, load_config, save_config
+
+    path = tmp_path / "config.toml"
+    path.write_text('[transition]\nresize = "Stretch"\n')
+    assert load_config(path).transition.resize == "stretch"
+
+    path.write_text('[transition]\nresize = "bogus"\n')
+    assert load_config(path).transition.resize == "crop"
+
+    path.write_text("")
+    assert load_config(path).transition.resize == "crop"
+
+    config = WayperConfig(transition=TransitionConfig(resize="no"))
+    save_config(config, path)
+    assert load_config(path).transition.resize == "no"

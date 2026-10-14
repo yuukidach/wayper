@@ -40,3 +40,9 @@ batch_size = 5
 type = "grow"
 duration = 0.5
 fps = 60
+# How awww scales images (passed to `awww img --resize`, Linux only):
+#   "crop" (default) fill the screen, cropping overflow
+#   "fit"            fit inside the screen, keep aspect ratio (letterbox)
+#   "stretch"        fill the screen, ignore aspect ratio
+#   "no"             no scaling, centered
+resize = "crop"
