@@ -92,6 +92,7 @@ included in the standard installation.
 Use Review to inspect auto-held downloads and model recommendations. Keep or Dislike each image to refine local filtering, or clear auto-held items without teaching the model.
 
 - **Browse & preview** — grid view with thumbnail caching, lightbox preview, set wallpaper with Enter
+- **Fixed login background (Linux)** — with `[greeter].image` configured, open a wallpaper preview and click **Greeter**. Wayper copies that image to the greeter target and stops random greeter updates; desktop rotation is unchanged
 - **Tag search** — search by Wallhaven tags, category, or filename with autocomplete
 - **Smart suggestions** — analyzes ban patterns to recommend tags to exclude; co-occurrence mining finds common descriptors across excluded individuals; drill into combo exclusions (e.g., "tattoo + nude") for precise filtering
 - **AI analysis** — Codex-powered deep analysis of ban patterns with iterative feedback. Identifies uploader patterns and suggests Wallhaven user blacklist candidates. Click suggested tags to preview matching images
@@ -291,6 +292,8 @@ Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
 Set the wallpaper download folder and login autostart in the GUI Settings view, or edit the options in [`example-config.toml`](example-config.toml). Autostart defaults on and can also be managed with `wayper autostart enable|disable|status` or the MCP `configure_autostart` tool. Wayper uses a graphical-session user service on Linux (so no Hyprland `exec-once` is needed), a LaunchAgent on macOS, and a per-user Run registration on Windows. Windows launches the GUI executable directly when possible and automatically uses a windowless script fallback for uv environments without a working `pythonw.exe`; neither path opens a console window. See the example file for all options — API key, proxy, intervals, quota, filtering, transitions, etc. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
+
+For Linux login backgrounds, configure `[greeter].image` to the background file already used by your login screen. The target must be writable, or the existing greeter sudo configuration must permit the copy. **Greeter** saves an independent copy, so favoriting, moving, or removing the original does not break the login background. The login screen shows the new image when it next loads the background. Remove the automatically saved `[greeter].fixed_image` entry to resume random greeter updates.
 
 ## Requirements
 

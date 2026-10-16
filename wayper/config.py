@@ -126,6 +126,8 @@ class GreeterConfig:
     image: Path | None = Path("/usr/share/backgrounds/greeter.jpg")
     interval: int = 12
     sudo_password: str | None = None
+    # The target contains a copy; this name disables random updates even if the source moves.
+    fixed_image: str | None = None
 
 
 @dataclass
@@ -285,6 +287,8 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
         lines.append("[greeter]")
         lines.append(f'image = "{_esc(str(gr.image))}"')
         lines.append(f"interval = {gr.interval}")
+        if gr.fixed_image:
+            lines.append(f'fixed_image = "{_esc(gr.fixed_image)}"')
         if gr.sudo_password:
             lines.append(f'sudo_password = "{_esc(gr.sudo_password)}"')
 
@@ -340,6 +344,7 @@ def load_config(path: Path | None = None) -> WayperConfig:
         image=Path(greeter_raw["image"]) if "image" in greeter_raw else None,
         interval=greeter_raw.get("interval", 12),
         sudo_password=greeter_raw.get("sudo_password"),
+        fixed_image=greeter_raw.get("fixed_image"),
     )
 
     download_dir = (

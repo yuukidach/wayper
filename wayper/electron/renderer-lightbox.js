@@ -475,6 +475,11 @@ function showLightbox(img) {
                 <button class="lb-btn" data-action="set" title="Set Wallpaper (Enter)">
                     ${ICONS.setWallpaper(18)}<span>Set</span><kbd>Enter</kbd>
                 </button>
+                ${appState.config?.greeter?.available ? `
+                    <button class="lb-btn" data-action="greeter" title="Set as Login Background" aria-label="Set as Login Background">
+                        ${ICONS.greeter(18)}<span>Greeter</span>
+                    </button>
+                ` : ''}
                 <button class="lb-btn" data-action="fav" title="Favorite (F)">
                     ${ICONS.favorite(18)}<span>Fav</span><kbd>F</kbd>
                 </button>
@@ -550,10 +555,25 @@ function showLightbox(img) {
             btn.setAttribute?.('aria-label', 'Ban this exact image only (X)');
             btn.setAttribute?.('aria-keyshortcuts', 'X Delete');
         }
-        btn.onclick = (e) => {
+        btn.onclick = async (e) => {
             e.stopPropagation();
             if (!lightboxImg) return;
             if (action === 'set') { setWallpaper(lightboxImg.path); closeLightbox(); }
+            else if (action === 'greeter') {
+                if (btn.disabled) return;
+                const selectedPath = lightboxImg.path;
+                btn.disabled = true;
+                btn.setAttribute?.('aria-busy', 'true');
+                try {
+                    const applied = await setGreeter(selectedPath);
+                    if (applied && lightboxEl === createdLightbox && lightboxImg?.path === selectedPath) {
+                        closeLightbox();
+                    }
+                } finally {
+                    btn.disabled = false;
+                    btn.removeAttribute?.('aria-busy');
+                }
+            }
             else if (action === 'fav') { toggleFavoriteImage(lightboxImg.path); closeLightbox(); }
             else if (action === 'keep' && lightboxImg.reviewOnly) {
                 void keepLightboxReviewSuggestion();

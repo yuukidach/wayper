@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,10 @@ def config_payload(config: WayperConfig, mode: set[str]) -> dict[str, object]:
         "pause_on_lock": config.pause_on_lock,
         "safe_mode": config.safe_mode,
         "autostart": config.autostart,
+        "greeter": {
+            "available": sys.platform == "linux" and config.greeter.image is not None,
+            "fixed_image": config.greeter.fixed_image,
+        },
         # ``auto`` is intentionally retained here; the renderer resolves it
         # against the host locale and can therefore switch languages without
         # requiring a backend restart.

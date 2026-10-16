@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
 
 from .backend import ensure_ready, is_locked, set_wallpaper
+from .backend.greeter import GreeterError, install_greeter_image
 from .config import CONFIG_FILE, WayperConfig, load_config
 from .history import push_many
 from .lock import FileLock
@@ -65,38 +65,25 @@ def set_all_wallpapers(config: WayperConfig, purities: set[str]) -> None:
 
 def update_greeter(config: WayperConfig) -> None:
     """Update the configured greeter wallpaper from the SFW landscape pool."""
-    if not config.greeter.image:
+    if not config.greeter.image or config.greeter.fixed_image:
         return
 
     import random
 
     from .pool import list_images
 
-    images = list_images(pool_dir(config, "sfw", "landscape"))
-    if not images:
-        return
-
-    image = random.choice(images)
-    try:
-        command = ["sudo", "-S", "cp", str(image), str(config.greeter.image)]
-        password = config.greeter.sudo_password
-        if password:
-            subprocess.run(
-                command,
-                input=password.encode(),
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        else:
-            subprocess.run(
-                command,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-    except Exception:
-        log.debug("Could not update greeter wallpaper", exc_info=True)
+    with FileLock():
+        # A queued rotation must not overwrite a manual selection made while it waited.
+        config = load_config()
+        if not config.greeter.image or config.greeter.fixed_image:
+            return
+        images = list_images(pool_dir(config, "sfw", "landscape"))
+        if not images:
+            return
+        try:
+            install_greeter_image(config.greeter, random.choice(images))
+        except GreeterError as error:
+            log.warning("Could not update greeter wallpaper: %s", error)
 
 
 async def _download_pending(
@@ -377,7 +364,11 @@ class AutoRotationService:
                     favorites_sync_count = 0
 
                 greeter_count += 1
-                if greeter_count >= config.greeter.interval:
+                if (
+                    config.greeter.image
+                    and not config.greeter.fixed_image
+                    and greeter_count >= config.greeter.interval
+                ):
                     if greeter_task is None or greeter_task.done():
                         greeter_task = asyncio.create_task(_update_greeter(config))
                     else:

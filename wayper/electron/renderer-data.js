@@ -1513,6 +1513,18 @@ async function setWallpaper(path) {
     }
 }
 
+async function setGreeter(path) {
+    try {
+        const data = await WayperApi.setGreeter(path);
+        if (appState.config) appState.config.greeter = data.greeter;
+        return true;
+    } catch (error) {
+        const translate = window.WayperI18n?.t || (text => text);
+        alert(`${translate('Could not set login background')}: ${translate(error.message)}`);
+        return false;
+    }
+}
+
 async function toggleFavoriteImage(path) {
     invalidateBlocklistSuggestions();
     removeImageFromState(path);

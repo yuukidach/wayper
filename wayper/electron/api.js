@@ -24,6 +24,14 @@
         return request('/api/config');
     }
 
+    function setGreeter(imagePath) {
+        return request('/api/greeter/set', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_path: imagePath }),
+        });
+    }
+
     async function tagSuggestions(contextTags = null) {
         const query = contextTags && contextTags.length
             ? `?context=${encodeURIComponent(contextTags.join(','))}`
@@ -119,6 +127,7 @@
         request,
         config,
         patchConfig,
+        setGreeter,
         searchImages,
         tagSuggestions,
         aiSuggestionFeedback,

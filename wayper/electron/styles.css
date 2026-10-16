@@ -2611,6 +2611,8 @@ footer {
   font-size: var(--font-size-ui);
   font-weight: 500;
   display: flex;
+  flex-shrink: 0;
+  white-space: nowrap;
   align-items: center;
   gap: 6px;
   transition: background var(--duration) var(--ease),
@@ -2629,9 +2631,15 @@ footer {
   transform: scale(0.95);
 }
 
-.lb-btn[data-action="set"]:hover {
+.lb-btn[data-action="set"]:hover,
+.lb-btn[data-action="greeter"]:hover {
   background: rgba(137, 180, 250, 0.12);
   color: var(--blue);
+}
+
+.lb-btn[data-action="greeter"]:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 .lb-btn[data-action="fav"]:hover,

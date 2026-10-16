@@ -97,6 +97,7 @@ uv venv && uv pip install -e .
 - **偏好筛选** — 可通过侧边栏选择仅用规则、仅用偏好模型或两者结合。**待确认** 页面分别展示模型自动拦截的下载和建议检查的图库图片；清空 Auto-held 会过滤整条队列，但不会增加偏好标签
 - **后台自动换壁纸** — 关闭窗口后 Wayper 仍驻留系统托盘，可切换壁纸、暂停自动更换、重新打开窗口或完全退出
 - **设置** — 在 GUI 中配置下载目录、Wallhaven 查询、排除标签/组合、内容级别和显示器；修改会即时生效
+- **固定登录背景（Linux）** — 配置 `[greeter].image` 后，打开壁纸预览并点击「登录背景」。Wayper 会将所选图片复制到登录背景文件，并停止随机更换登录背景；桌面壁纸仍按原设置轮换
 - **全键盘操作** — 每个操作都有快捷键：网格导航、灯箱、收藏、不喜欢、拉黑和撤销
 
 使用 `wayper --hidden` 可直接启动到托盘。Hyprland 或 Sway 的托盘由 Waybar 等状态栏提供，请确保已启用其 `tray` 模块。
@@ -274,6 +275,8 @@ Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
 壁纸下载目录和登录自启动可在 GUI 设置页修改，也可编辑 [`example-config.toml`](../example-config.toml)。自启动在所有平台上默认开启，还可通过 `wayper autostart enable|disable|status` 或 MCP 的 `configure_autostart` 工具管理。Linux 使用图形会话级用户服务（无需再写 Hyprland `exec-once`），macOS 使用 LaunchAgent，Windows 使用当前用户的 Run 注册项：正常情况下直接启动 GUI；如果 uv 环境缺少可用的 `pythonw.exe`，则自动改用无窗口脚本启动。两种方式都不会出现控制台窗口。详见该文件的所有选项 — API key、代理、轮换间隔、配额、筛选策略、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
+
+Linux 登录背景的 `[greeter].image` 应指向登录界面已经使用的背景文件。目标须可写，或现有 greeter sudo 配置允许复制。「登录背景」会保存独立副本，收藏、移动或删除原图都不会影响登录背景；登录界面下次加载背景时显示新图片。删除自动保存的 `[greeter].fixed_image` 配置项即可恢复随机更换登录背景。
 
 ## 依赖
 

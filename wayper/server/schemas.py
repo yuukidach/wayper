@@ -109,6 +109,11 @@ class UpdateCheckResponse(BaseModel):
     error: str | None = None
 
 
+class GreeterConfigModel(BaseModel):
+    available: bool = False
+    fixed_image: str | None = None
+
+
 class ConfigResponse(BaseModel):
     download_dir: str
     interval_min: int
@@ -119,6 +124,7 @@ class ConfigResponse(BaseModel):
     safe_mode: bool
     autostart: bool = False
     language: str = "auto"
+    greeter: GreeterConfigModel = Field(default_factory=GreeterConfigModel)
     has_api_key: bool
     has_wh_password: bool
     wallhaven_username: str

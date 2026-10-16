@@ -29,6 +29,7 @@ from wayper.core import (
     do_fav,
     do_next,
     do_prev,
+    do_set_greeter,
     do_set_wallpaper,
     do_unban,
     do_unfav,
@@ -117,6 +118,7 @@ __all__ = [
     "get_blocklist",
     "remove_blocklist_entry",
     "set_wallpaper_route",
+    "set_greeter_route",
     "favorite_image",
     "ban_image_route",
     "dislike_image_route",
@@ -1211,6 +1213,17 @@ def set_wallpaper_route(req: SetWallpaperRequest):
         "monitor": req.monitor,
         "current_image": _relative_image(config, img_full),
     }
+
+
+@app.post("/api/greeter/set")
+def set_greeter_route(req: ActionRequest):
+    config = get_config()
+    image = _resolve_image(config, req.image_path)
+    result = do_set_greeter(config, image)
+    if not result.ok:
+        raise HTTPException(400, result.error)
+    rotation_service.request_reload()
+    return {"status": "ok", "greeter": config_payload(config, set())["greeter"]}
 
 
 @app.post("/api/image/favorite")

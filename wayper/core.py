@@ -6,6 +6,7 @@ All state-modifying operations live here. CLI, API, and MCP are thin wrappers.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import time
 from collections.abc import Callable
@@ -13,7 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .backend import find_monitor, get_context, get_focused_monitor, query_current, set_wallpaper
-from .config import NO_TRANSITION, WayperConfig
+from .backend.greeter import GreeterError, install_greeter_image
+from .config import NO_TRANSITION, WayperConfig, save_config
 from .history import go_prev, pick_next
 from .history import push as push_history
 from .lock import FileLock
@@ -150,6 +152,27 @@ def do_set_wallpaper(config: WayperConfig, monitor: str, image: Path) -> CoreRes
         record_wallpaper_change(config)
 
     return CoreResult(action="set", monitor=monitor, image=image)
+
+
+def do_set_greeter(config: WayperConfig, image: Path) -> CoreResult:
+    """Install a standalone copy and stop random greeter updates."""
+    with FileLock():
+        updated = copy.deepcopy(config)
+        try:
+            install_greeter_image(updated.greeter, image)
+        except GreeterError as error:
+            return CoreResult(action="greeter", ok=False, error=str(error))
+        updated.greeter.fixed_image = image.name
+        try:
+            save_config(updated)
+        except OSError:
+            return CoreResult(
+                action="greeter",
+                ok=False,
+                error="Login background copied, but fixed mode could not be saved",
+            )
+        config.greeter = updated.greeter
+    return CoreResult(action="greeter", image=image)
 
 
 def do_next(config: WayperConfig, monitor: str | None = None) -> CoreResult:

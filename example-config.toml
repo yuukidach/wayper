@@ -15,6 +15,8 @@ language = "auto"         # GUI language: auto, en, or zh
 # image = "/usr/share/backgrounds/greeter.jpg"
 # interval = 12
 # sudo_password = ""
+# The GUI's "Greeter" copies the selected image to this target
+# and saves fixed_image automatically. Remove fixed_image to resume random updates.
 
 # Monitors are auto-detected. Use [[monitors]] only if detection fails.
 # [[monitors]]
