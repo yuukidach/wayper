@@ -6,6 +6,7 @@ import json as json_mod
 import logging
 import os
 import threading
+import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -198,6 +199,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Electron main process that adopted this backend after a takeover, as
+# ``(pid, start_time)``. The launcher watches it in keep-serving mode.
+_adopted_client: tuple[int, int | None] | None = None
+
+
+def adopted_client() -> tuple[int, int | None] | None:
+    return _adopted_client
+
+
+def adopted_client_alive(client: tuple[int, int | None]) -> bool:
+    """True while the registered client pid is alive with the same start time."""
+    pid, start = client
+    if not _pid_is_alive(pid):
+        return False
+    return start is None or _pid_start_time(pid) in (None, start)
+
+
+@app.post("/api/client")
+async def register_client(payload: dict):
+    """Register the Electron main process that is using this backend."""
+    global _adopted_client
+    try:
+        pid = int(payload["pid"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="pid required")
+    start = payload.get("start")
+    start = int(start) if isinstance(start, int | str) and str(start).isdigit() else None
+    if pid <= 0 or not _pid_is_alive(pid):
+        raise HTTPException(status_code=400, detail="pid is not alive")
+    actual = _pid_start_time(pid)
+    if start is not None and actual is not None and actual != start:
+        raise HTTPException(status_code=400, detail="start time mismatch")
+    _adopted_client = (pid, start if start is not None else actual)
+    log.info("Registered Wayper window process pid %d", pid)
+    return {"ok": True}
 
 
 _cached_config: WayperConfig | None = None
@@ -1863,14 +1901,292 @@ def port_file() -> Path:
     return CONFIG_DIR / "api.port"
 
 
-def _acquire_api_lock() -> FileLock | None:
-    """Own the API/rotation lifecycle, or return ``None`` for a second launch."""
-    lock = FileLock(blocking=False, path=port_file().with_suffix(".lock"))
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
     try:
-        lock.__enter__()
-    except SystemExit:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[-1].split()[0]
+    except (OSError, IndexError):
+        return True
+    return state not in ("Z", "X")  # zombies have exited and released their locks
+
+
+def _pid_is_wayper(pid: int) -> bool:
+    """Best-effort check that ``pid`` is a live wayper process."""
+    if not _pid_is_alive(pid):
+        return False
+    cmdline = Path(f"/proc/{pid}/cmdline")
+    try:
+        args = cmdline.read_bytes().replace(b"\0", b" ").decode(errors="replace")
+    except FileNotFoundError:
+        # No procfs (macOS/Windows): trust the liveness check alone.
+        return not Path("/proc/self").exists()
+    except OSError:
+        return True
+    return "wayper" in args.lower()
+
+
+API_STARTUP_TIMEOUT = 10.0  # matches launcher._wait_for_api's default
+# Health check window: ~12s total (1s timeout + 1s pause per attempt).
+API_PROBE_ATTEMPTS = 6
+API_PROBE_INTERVAL = 1.0
+OWNER_TERM_TIMEOUT = 3.0
+
+
+def _pid_start_time(pid: int) -> int | None:
+    """Process start time (field 22 of /proc/<pid>/stat), or None."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
         return None
-    return lock
+    # comm (field 2) may contain spaces; fields after it start at index 3.
+    rest = stat.rsplit(")", 1)[-1].split()
+    try:
+        return int(rest[19])
+    except (IndexError, ValueError):
+        return None
+
+
+def _read_lock_fields(path: Path) -> dict[str, int]:
+    """Parse ``pid=.. port=.. start=..`` (or legacy ``<pid> [<port>]``)."""
+    try:
+        parts = path.read_text().split()
+    except OSError:
+        return {}
+    fields: dict[str, int] = {}
+    for index, part in enumerate(parts):
+        key, sep, value = part.partition("=")
+        if not sep:
+            key, value = ("pid", "port")[index] if index < 2 else "", part
+        try:
+            if key:
+                fields[key] = int(value)
+        except ValueError:
+            pass
+    return fields
+
+
+def _read_lock_record(path: Path) -> tuple[int | None, int | None]:
+    """Return ``(pid, port)`` recorded in the API lock file."""
+    fields = _read_lock_fields(path)
+    return fields.get("pid"), fields.get("port")
+
+
+def _read_lock_owner(path: Path) -> int | None:
+    """Return the PID recorded in the API lock file, if any."""
+    return _read_lock_record(path)[0]
+
+
+def _pid_verified_wayper(pid: int, start_time: int | None = None) -> bool:
+    """Strict /proc check (cmdline is wayper and, when given, start time matches)."""
+    if start_time is not None and _pid_start_time(pid) != start_time:
+        return False
+    if pid <= 0 or pid == os.getpid() or not _pid_is_alive(pid):
+        return False
+    try:
+        args = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return False
+    return b"wayper" in args.lower()
+
+
+def _api_responds(port: int) -> bool:
+    """Probe the API with a few retries; any HTTP response counts as alive."""
+    from urllib.error import HTTPError, URLError
+    from urllib.request import urlopen
+
+    url = f"http://127.0.0.1:{port}/api/config"
+    for attempt in range(API_PROBE_ATTEMPTS):
+        try:
+            urlopen(url, timeout=1).close()
+            return True
+        except HTTPError:
+            return True
+        except (URLError, OSError):
+            if attempt + 1 < API_PROBE_ATTEMPTS:
+                time.sleep(API_PROBE_INTERVAL)
+    return False
+
+
+def _terminate_hung_owner(pid: int, start_time: int | None) -> bool:
+    """SIGTERM then SIGKILL a verified wayper PID. Returns True once it is gone.
+
+    The PID is only signalled when its cmdline is wayper and its start time
+    matches the one recorded in the lock, guarding against PID reuse.
+    """
+    import signal
+
+    if start_time is None or not _pid_verified_wayper(pid, start_time):
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    deadline = time.monotonic() + OWNER_TERM_TIMEOUT
+    while time.monotonic() < deadline:
+        if not _pid_is_alive(pid):
+            return True
+        time.sleep(0.1)
+    if not _pid_is_alive(pid):
+        return True
+    if _pid_verified_wayper(pid, start_time):
+        log.warning("Hung wayper backend pid %d ignored SIGTERM; sending SIGKILL", pid)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+    for _ in range(20):
+        if not _pid_is_alive(pid):
+            return True
+        time.sleep(0.05)
+    return not _pid_is_alive(pid)
+
+
+def _owner_is_hung(lock_path: Path, pid: int, port: int | None) -> bool:
+    """A live wayper owner is hung if its API never answers (or never started)."""
+    if not _pid_verified_wayper(pid):
+        return False
+    if port:
+        return not _api_responds(port)
+    try:
+        age = time.time() - lock_path.stat().st_mtime
+    except OSError:
+        return False
+    return age > API_STARTUP_TIMEOUT
+
+
+def _write_lock_owner(path: Path, port: int | None = None) -> None:
+    """Record this process (and optionally its port) in the API lock file."""
+    try:
+        pid = os.getpid()
+        content = f"pid={pid}"
+        if port:
+            content += f" port={port}"
+        start = _pid_start_time(pid)
+        if start is not None:
+            content += f" start={start}"
+        content += "\n"
+        path.write_text(content)
+    except OSError:
+        pass
+
+
+TAKEOVER_MAX_AGE = 60.0
+
+
+def takeover_file() -> Path:
+    """Marker telling launchers a hung-backend takeover is in progress."""
+    return port_file().with_name("api.takeover")
+
+
+def _write_takeover_marker() -> None:
+    pid = os.getpid()
+    content = f"pid={pid} start={_pid_start_time(pid)} ts={int(time.time())}\n"
+    try:
+        takeover_file().write_text(content)
+    except OSError:
+        pass
+
+
+def _clear_takeover_marker() -> None:
+    """Remove the marker only if it belongs to this process."""
+    path = takeover_file()
+    if _read_lock_fields(path).get("pid") == os.getpid():
+        path.unlink(missing_ok=True)
+
+
+def takeover_in_progress(path: Path | None = None) -> bool:
+    """True if a fresh marker exists whose pid is alive with a matching start time."""
+    path = path or takeover_file()
+    fields = _read_lock_fields(path)
+    pid, start, ts = fields.get("pid"), fields.get("start"), fields.get("ts")
+    if not pid or start is None:
+        return False
+    if ts is None:
+        try:
+            ts = int(path.stat().st_mtime)
+        except OSError:
+            return False
+    if time.time() - ts > TAKEOVER_MAX_AGE:
+        return False
+    return _pid_is_alive(pid) and _pid_start_time(pid) == start
+
+
+def _remove_stale_takeover_marker() -> None:
+    """Delete api.takeover if its pid is dead/reused or it is older than 60s."""
+    path = takeover_file()
+    if path.exists() and not takeover_in_progress(path):
+        path.unlink(missing_ok=True)
+
+
+def _acquire_api_lock() -> FileLock | None:
+    """Own the API/rotation lifecycle, or return ``None`` for a second launch.
+
+    Recovery cases (one retry):
+    * recorded owner is dead or not wayper -> stale lock is removed;
+    * owner is a verified live wayper whose API never answers (or which has
+      not published a port within the startup timeout) -> it is terminated.
+    A responsive or still-starting wayper owner is reused.
+    """
+    lock_path = port_file().with_suffix(".lock")
+    _remove_stale_takeover_marker()
+    for attempt in range(2):
+        lock = FileLock(blocking=False, path=lock_path)
+        try:
+            lock.__enter__()
+        except SystemExit:
+            if attempt > 0:
+                return None
+            fields = _read_lock_fields(lock_path)
+            owner, port = fields.get("pid"), fields.get("port")
+            if owner is None or owner == os.getpid():
+                return None
+            if not _pid_is_wayper(owner):
+                log.warning("Removing stale API lock %s (owner pid %s)", lock_path, owner)
+            else:
+                # Probing (and possibly killing) the owner can outlast the GUI's
+                # normal API wait; the marker lets launchers wait longer.
+                _write_takeover_marker()
+                try:
+                    if not _owner_is_hung(lock_path, owner, port):
+                        return None
+                    log.warning(
+                        "wayper backend pid %d is not answering (port %s); terminating it",
+                        owner,
+                        port,
+                    )
+                    if not _terminate_hung_owner(owner, fields.get("start")):
+                        log.warning("Could not terminate hung wayper pid %d", owner)
+                        return None
+                    lock_path.unlink(missing_ok=True)
+                    port_file().unlink(missing_ok=True)
+                    lock = FileLock(blocking=False, path=lock_path)
+                    try:
+                        lock.__enter__()
+                    except SystemExit:
+                        return None
+                    _write_lock_owner(lock_path)
+                    return lock
+                finally:
+                    _clear_takeover_marker()
+            lock_path.unlink(missing_ok=True)
+            port_file().unlink(missing_ok=True)
+            continue
+        _write_lock_owner(lock_path)
+        return lock
+    return None
 
 
 def _remove_owned_port_file(path: Path, port: int) -> None:
@@ -1901,6 +2217,7 @@ def run(stop_event: threading.Event | None = None):
         pf = port_file()
         pf.parent.mkdir(parents=True, exist_ok=True)
         pf.write_text(str(port))
+        _write_lock_owner(port_file().with_suffix(".lock"), port)
         atexit.register(_remove_owned_port_file, pf, port)
 
         log.info("API server starting on port %d", port)

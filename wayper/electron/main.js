@@ -2,7 +2,12 @@ const { app, BrowserWindow, Menu, Tray, shell, ipcMain, dialog, screen, nativeIm
 const path = require('path')
 const { spawn } = require('child_process')
 const fs = require('fs')
-const { waitForApi } = require('./backend-readiness')
+const {
+  findReplacementPort,
+  probeApi,
+  registerClient,
+  waitForApi,
+} = require('./backend-readiness')
 const { createStartupWindowController } = require('./startup-window')
 
 let backendProcess = null
@@ -21,6 +26,8 @@ const CAPTURE_SWITCH = '--wayper-capture'
 const HIDDEN_SWITCH = '--hidden'
 const APP_ID = 'com.wayper.app'
 const BACKEND_START_TIMEOUT = 60000
+const SECOND_INSTANCE_EXIT_CODE = 75
+const BACKEND_WATCH_INTERVAL = 3000
 
 if (process.platform === 'win32') {
   // Keep development launches grouped under Wayper instead of electron.exe.
@@ -129,6 +136,7 @@ async function waitForBackend(timeout = 10000) {
   const port = await waitForApi(getPortFilePath(), {
     timeout,
     preferredPort: configuredApiPort(),
+    takeoverFile: path.join(path.dirname(getPortFilePath()), 'api.takeover'),
   })
   if (port > 0) {
     console.log(`API ready on port: ${port}`)
@@ -137,6 +145,54 @@ async function waitForBackend(timeout = 10000) {
     console.warn('API did not become ready within timeout')
   }
   return port
+}
+
+// If the backend we are connected to stops answering (e.g. it hung and a new
+// launch took over the API lock), follow api.lock/api.port to the replacement
+// backend and reload windows against it instead of staying on "Failed to fetch".
+function watchBackend() {
+  const configDir = path.dirname(getPortFilePath())
+  let failures = 0
+  let checking = false
+  let pendingRegistration = 0
+  const timer = setInterval(async () => {
+    if (checking || isQuitting) return
+    checking = true
+    try {
+      const current = configuredApiPort()
+      if (current > 0 && await probeApi(current, 1500, '/api/config')) {
+        failures = 0
+        // Register with an adopted backend (retried until it succeeds).
+        if (pendingRegistration === current && await registerClient(current)) {
+          pendingRegistration = 0
+        }
+        return
+      }
+      failures += 1
+      if (failures < 2) return
+      const port = await findReplacementPort({
+        portFile: getPortFilePath(),
+        lockFile: path.join(configDir, 'api.lock'),
+        currentPort: current,
+      })
+      if (port > 0) {
+        console.log(`Backend moved to port ${port}; reconnecting windows`)
+        failures = 0
+        process.env.WAYPER_API_PORT = String(port)
+        pendingRegistration = (await registerClient(port)) ? 0 : port
+        backendReadyPromise = Promise.resolve(port)
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.reload()
+        }
+        void refreshTrayMenu()
+      }
+    } catch (error) {
+      console.warn('Backend watch failed:', error)
+    } finally {
+      checking = false
+    }
+  }, BACKEND_WATCH_INTERVAL)
+  timer.unref?.()
 }
 
 function killBackend() {
@@ -534,7 +590,9 @@ const gotTheLock = app.requestSingleInstanceLock({
 })
 
 if (!gotTheLock) {
-  app.quit()
+  // Distinct exit code: the Python launcher keeps its API server running for
+  // the existing window instead of shutting down (see launcher.py).
+  app.exit(SECOND_INSTANCE_EXIT_CODE)
 } else if (initialCapturePath) {
   console.error('Internal capture requires an existing Wayper app instance')
   app.quit()
@@ -564,7 +622,10 @@ if (!gotTheLock) {
     startupWindowController.finishStartup()
 
     void backendReadyPromise.then(port => {
-      if (port > 0) void refreshTrayMenu()
+      if (port > 0) {
+        void refreshTrayMenu()
+        watchBackend()
+      }
     })
 
     app.on('activate', () => {
