@@ -306,6 +306,8 @@ h1 {
 
 .controls {
   display: flex;
+  flex-shrink: 0;
+  margin-left: auto;
   gap: 6px;
   align-items: center;
   -webkit-app-region: no-drag;
@@ -396,7 +398,7 @@ body[data-view='settings'] .header-content > .controls {
 }
 
 .model-review-header-action {
-  display: flex;
+  display: none;
   align-items: center;
   gap: 7px;
   min-height: 30px;
@@ -411,8 +413,8 @@ body[data-view='settings'] .header-content > .controls {
   -webkit-app-region: no-drag;
 }
 
-.model-review-header-action[hidden] {
-  display: none;
+body[data-mode='model-review'][data-view='grid'] .model-review-header-action:not([hidden]) {
+  display: flex;
 }
 
 .model-review-header-action svg {

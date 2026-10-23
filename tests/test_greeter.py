@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import subprocess
+import sys
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -19,7 +21,10 @@ from wayper.server.schemas import ActionRequest, ConfigResponse
 
 @pytest.fixture
 def greeter_setup(tmp_path, monkeypatch):
-    monkeypatch.setattr("wayper.backend.greeter.sys.platform", "linux")
+    # Simulate greeter support without switching the host's file-lock backend.
+    greeter_platform = SimpleNamespace(platform="linux")
+    monkeypatch.setattr("wayper.backend.greeter.sys", greeter_platform)
+    monkeypatch.setattr("wayper.server.config_service.sys", greeter_platform)
     monkeypatch.setattr("wayper.config.CONFIG_FILE", tmp_path / "config.toml")
     monkeypatch.setattr("wayper.backend.detect_monitors", lambda: [])
     monkeypatch.setattr("wayper.lock.LOCK_PATH", tmp_path / "state.lock")
@@ -48,7 +53,8 @@ def test_selection_copies_and_persists_without_changing_desktop(greeter_setup, m
     assert saved.greeter.image == config.greeter.image
     assert saved.interval == config.interval
     assert config.greeter.image.read_bytes() == image.read_bytes()
-    assert config.greeter.image.stat().st_mode & 0o777 == 0o644
+    if sys.platform != "win32":
+        assert config.greeter.image.stat().st_mode & 0o777 == 0o644
     image.unlink()
     assert config.greeter.image.is_file()
     desktop.assert_not_called()
