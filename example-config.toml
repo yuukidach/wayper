@@ -47,4 +47,6 @@ fps = 60
 #   "fit"            fit inside the screen, keep aspect ratio (letterbox)
 #   "stretch"        fill the screen, ignore aspect ratio
 #   "no"             no scaling, centered
+# Also available in Settings > General > Wallpaper Display Mode.
+# After saving, applies the next time a wallpaper is set.
 resize = "crop"

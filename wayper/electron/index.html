@@ -185,6 +185,19 @@
                             <input type="number" id="input-interval" min="0" value="5">
                         </div>
                         <div class="field">
+                            <label for="input-wallpaper-resize">Wallpaper Display Mode</label>
+                            <select id="input-wallpaper-resize" aria-describedby="wallpaper-resize-hint" disabled>
+                                <option value="crop">Crop to fill</option>
+                                <option value="fit">Fit entire image</option>
+                                <option value="stretch">Stretch to fill</option>
+                                <option value="no">Original size</option>
+                            </select>
+                            <small class="hint" id="wallpaper-resize-hint">
+                                <span id="wallpaper-resize-description">Available on Linux only</span>
+                                <span id="wallpaper-resize-apply-note" hidden>After saving, applies the next time a wallpaper is set.</span>
+                            </small>
+                        </div>
+                        <div class="field">
                             <label for="input-language">Language</label>
                             <select id="input-language">
                                 <option value="auto">System default</option>

@@ -122,6 +122,28 @@ async function setFilterStrategy(strategy) {
 
 // --- Settings Logic ---
 
+const WALLPAPER_RESIZE_HINTS = {
+    crop: 'Fill the screen while keeping proportions; edges may be cropped.',
+    fit: 'Show the whole image while keeping proportions; borders may appear.',
+    stretch: 'Fill the screen without keeping proportions; the image may look distorted.',
+    no: 'Center the image at its original size without scaling.',
+};
+
+function updateWallpaperResizeHint() {
+    const input = document.getElementById('input-wallpaper-resize');
+    const hint = document.getElementById('wallpaper-resize-description');
+    const note = document.getElementById('wallpaper-resize-apply-note');
+    if (!input || !hint || !note) return;
+    const translate = window.WayperI18n?.t || (text => text);
+    note.hidden = input.disabled;
+    if (input.disabled) {
+        hint.textContent = translate('Available on Linux only');
+        return;
+    }
+    const description = WALLPAPER_RESIZE_HINTS[input.value] || WALLPAPER_RESIZE_HINTS.crop;
+    hint.textContent = translate(description);
+}
+
 function populateSettingsForm() {
     if (!appState.config) return;
     const c = appState.config;
@@ -129,6 +151,14 @@ function populateSettingsForm() {
 
     // General
     document.getElementById('input-interval').value = c.interval_min ?? 5;
+    const resizeInput = document.getElementById('input-wallpaper-resize');
+    if (resizeInput) {
+        const resize = c.transition?.resize;
+        resizeInput.value = Object.hasOwn(WALLPAPER_RESIZE_HINTS, resize) ? resize : 'crop';
+        resizeInput.disabled = c.transition?.resize_available !== true;
+        resizeInput.onchange = updateWallpaperResizeHint;
+        updateWallpaperResizeHint();
+    }
     const languageInput = document.getElementById('input-language');
     if (languageInput) {
         languageInput.value = window.WayperI18n?.normalizePreference?.(c.language) || c.language || 'auto';
@@ -1284,6 +1314,11 @@ async function saveSettings() {
         updates.language = window.WayperI18n?.normalizePreference?.(languageInput.value)
             || languageInput.value
             || 'auto';
+    }
+
+    const resizeInput = document.getElementById('input-wallpaper-resize');
+    if (resizeInput && !resizeInput.disabled) {
+        updates.transition = { resize: resizeInput.value };
     }
 
     // Only send credentials if user entered a new value

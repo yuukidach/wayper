@@ -276,6 +276,8 @@ Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 
 壁纸下载目录和登录自启动可在 GUI 设置页修改，也可编辑 [`example-config.toml`](../example-config.toml)。自启动在所有平台上默认开启，还可通过 `wayper autostart enable|disable|status` 或 MCP 的 `configure_autostart` 工具管理。Linux 使用图形会话级用户服务（无需再写 Hyprland `exec-once`），macOS 使用 LaunchAgent，Windows 使用当前用户的 Run 注册项：正常情况下直接启动 GUI；如果 uv 环境缺少可用的 `pythonw.exe`，则自动改用无窗口脚本启动。两种方式都不会出现控制台窗口。详见该文件的所有选项 — API key、代理、轮换间隔、配额、筛选策略、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
 
+Linux 下可在 **设置 → 基本设置 → 壁纸显示方式** 中选择 **裁剪铺满**（`crop`，默认）、**完整显示**（`fit`）、**拉伸铺满**（`stretch`）或 **原始尺寸**（`no`）。点击 **保存更改** 后，下次设置壁纸时生效；收藏或取消收藏时也会保留所选模式。也可在 `config.toml` 中设置 `[transition] resize`；缺失或无效的值会回退到 `crop`。Windows 和 macOS 上此控件不可用。
+
 Linux 登录背景的 `[greeter].image` 应指向登录界面已经使用的背景文件。目标须可写，或现有 greeter sudo 配置允许复制。「登录背景」会保存独立副本，收藏、移动或删除原图都不会影响登录背景；登录界面下次加载背景时显示新图片。删除自动保存的 `[greeter].fixed_image` 配置项即可恢复随机更换登录背景。
 
 ## 依赖

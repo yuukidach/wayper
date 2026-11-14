@@ -7,7 +7,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from wayper.config import WayperConfig, normalize_filter_strategy, normalize_language
+from wayper.config import (
+    WayperConfig,
+    normalize_filter_strategy,
+    normalize_language,
+    normalize_resize,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +33,10 @@ def config_payload(config: WayperConfig, mode: set[str]) -> dict[str, object]:
         "pause_on_lock": config.pause_on_lock,
         "safe_mode": config.safe_mode,
         "autostart": config.autostart,
+        "transition": {
+            "resize": config.transition.resize,
+            "resize_available": sys.platform == "linux",
+        },
         "greeter": {
             "available": sys.platform == "linux" and config.greeter.image is not None,
             "fixed_image": config.greeter.fixed_image,
@@ -105,6 +114,10 @@ def apply_config_updates(
 
     if "download_dir" in updates:
         config.download_dir = resolve_download_dir(updates["download_dir"])
+
+    transition = updates.get("transition")
+    if isinstance(transition, dict) and "resize" in transition:
+        config.transition.resize = normalize_resize(transition["resize"])
 
     wallhaven = updates.get("wallhaven")
     if isinstance(wallhaven, dict):
