@@ -118,7 +118,12 @@ let appState = {
     loadingMoreImages: false,
     initialImagePageRequestId: null,
     imageRequestId: 0,
-    currentOrient: 'landscape',
+    currentOrient: '', // Browse both orientations until a display is available.
+    libraryLoadContextKey: null,
+    libraryLoading: false,
+    libraryError: null,
+    libraryLoadFailures: 0,
+    libraryRetryAt: 0,
     loadedImageMode: null,          // Library mode represented by images/allImages
     loadedImageContextKey: null,    // Purity/orientation represented by the cached library
     // Pool/Favorites snapshots let monitor and nav switches paint the last
@@ -281,12 +286,31 @@ async function init() {
         setupBlocklistInfiniteScroll();
 
         setupResponsiveLayoutTracking();
+        // The gallery owns its loading/error state. Keep navigation usable even
+        // when an initial read is waiting for its deadline.
+        hideLoader();
 
-        // Phase 1: config and monitors are independent. The backend owns rotation startup.
-        await Promise.all([fetchConfig(), fetchMonitors()]);
-        // Phase 2: all depend on config/monitors being ready. refreshImages
-        // starts the independent status request itself, so do not duplicate it.
-        await Promise.all([fetchDiskUsage(), refreshImages()]);
+        // Recovery must already be running while the first gallery request is
+        // pending. Desktop queries and statistics never gate local browsing.
+        connectSSE();
+        setInterval(() => {
+            if (!document.hidden) {
+                void fetchMonitors();
+                void fetchStatus();
+                void retryLibraryLoad();
+                if (!appState.config) {
+                    void fetchConfig().then(loaded => {
+                        if (loaded) void refreshImages();
+                    });
+                }
+            }
+        }, 10000);
+        setInterval(fetchDiskUsage, 30000);
+
+        await fetchConfig();
+        void fetchMonitors();
+        void fetchDiskUsage();
+        await refreshImages();
     } finally {
         hideLoader();
     }
@@ -298,17 +322,6 @@ async function init() {
     // monitor switch for browser/network work.
     void prefetchLibraryViews().then(() => prefetchModelReviewRecommendations());
 
-    // SSE for real-time mode changes
-    connectSSE();
-
-    // Refresh display IDs/directions before requesting orientation-scoped counts.
-    setInterval(async () => {
-        if (!document.hidden) {
-            await fetchMonitors();
-            await fetchStatus();
-        }
-    }, 10000);
-    setInterval(fetchDiskUsage, 30000);
     checkForAppUpdates();
     setInterval(() => {
         if (!document.hidden) checkForAppUpdates();

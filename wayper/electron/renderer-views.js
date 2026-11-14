@@ -270,6 +270,34 @@ function renderMonitors() {
     });
 }
 
+function renderLibraryLoadState() {
+    const grid = els.wallpaperGrid;
+    grid.querySelector('.library-load-notice')?.remove();
+    if (
+        !['pool', 'favorites'].includes(appState.mode)
+        || appState.libraryLoadContextKey !== libraryViewContextKey()
+        || (!appState.libraryError && (!appState.libraryLoading || appState.images.length))
+    ) return;
+
+    // Keep the existing cards mounted while a refresh fails or is retried.
+    if (!appState.images.length) grid.querySelector('.empty-state')?.remove();
+    const notice = document.createElement('div');
+    notice.className = 'library-load-notice';
+    notice.setAttribute('role', 'status');
+    const text = document.createElement('span');
+    text.textContent = appState.libraryError
+        ? 'Could not load wallpapers. Retrying automatically.'
+        : 'Loading wallpapers...';
+    notice.appendChild(text);
+    if (appState.libraryError) {
+        const retry = document.createElement('button');
+        retry.textContent = 'Try again';
+        retry.onclick = () => refreshImages(true);
+        notice.appendChild(retry);
+    }
+    grid.prepend(notice);
+}
+
 function renderImages() {
     console.log('[render]', appState.mode, 'images:', appState.images.length, 'search:', appState.searchQuery || '(none)');
 
@@ -289,6 +317,13 @@ function renderImages() {
     _trashBannerShown = false;
 
     if (appState.images.length === 0) {
+        if (
+            appState.libraryError
+            && appState.libraryLoadContextKey === libraryViewContextKey()
+        ) {
+            renderLibraryLoadState();
+            return;
+        }
         const msg = appState.searchQuery
             ? `No matches for "${esc(appState.searchQuery)}"`
             : `No wallpapers in ${esc(appState.mode)} / ${esc(appState.purity)}`;
@@ -302,6 +337,7 @@ function renderImages() {
     }
 
     renderNextBatch();
+    renderLibraryLoadState();
     scheduleResponsiveLayout();
 }
 

@@ -59,6 +59,7 @@
         Deleted: '已删除',
         Unblock: '解除屏蔽',
         'Loading wallpapers...': '正在加载壁纸…',
+        'Could not load wallpapers. Retrying automatically.': '暂时无法加载壁纸，正在自动重试。',
         'Wayper update available': 'Wayper 有可用更新',
         Settings: '设置',
         'Settings navigation': '设置导航',

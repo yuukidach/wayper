@@ -441,10 +441,7 @@ function prefetchLibraryView(mode, orient) {
     if (libraryViewCache().has(key)) return Promise.resolve(true);
     const requests = libraryPrefetchRequests();
     if (requests.has(key)) return requests.get(key);
-    const request = fetch(imagePageUrl(0, { mode, purities, orient }))
-        .then(response => response.ok ? response.json() : Promise.reject(new Error(
-            `HTTP ${response.status}`,
-        )))
+    const request = fetchImagePage(0, { mode, purities, orient })
         .then(data => {
             if (requests.get(key) !== request) return false;
             const items = data.items || [];
@@ -2208,7 +2205,7 @@ async function checkForAppUpdates(force = false) {
 
 async function fetchConfig() {
     try {
-        const data = await WayperApi.config();
+        const data = await withReadDeadline(signal => WayperApi.config({ signal }));
         appState.config = data;
         // Resolve ``auto`` against the host locale in the renderer.  Keeping
         // the preference in the backend config makes the choice persistent,
@@ -2233,7 +2230,57 @@ async function fetchConfig() {
 
         syncAISuggestionAppliedState();
         updateUI();
-    } catch (e) { console.error(e); }
+        return true;
+    } catch (e) {
+        console.error(e);
+        return false;
+    }
+}
+
+// Read requests have a deadline covering both response headers and the body.
+// Keep this separate from mutations, whose completion must not be retried blindly.
+async function withReadDeadline(read, { timeoutMs = 10000 } = {}) {
+    const controller = new AbortController();
+    let timer;
+    try {
+        return await Promise.race([
+            read(controller.signal),
+            new Promise((_, reject) => {
+                timer = setTimeout(() => {
+                    reject(new Error('Request timed out'));
+                    controller.abort();
+                }, timeoutMs);
+            }),
+        ]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+function readLibraryJson(url, options) {
+    return withReadDeadline(async signal => {
+        const response = await fetch(url, { signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.json();
+    }, options);
+}
+
+async function fetchImagePage(offset = 0, options = {}) {
+    const page = await readLibraryJson(imagePageUrl(offset, options));
+    if (!page || !Array.isArray(page.items)) throw new Error('Invalid image page');
+    return page;
+}
+
+async function retryLibraryLoad(now = Date.now()) {
+    if (
+        !['pool', 'favorites'].includes(appState.mode)
+        || appState.refreshing
+        || !appState.libraryError
+        || appState.libraryLoadContextKey !== libraryViewContextKey()
+        || now < appState.libraryRetryAt
+    ) return false;
+    await refreshImages(true);
+    return true;
 }
 
 function activePurityParam(purities = appState.purity) {
@@ -2315,9 +2362,8 @@ async function loadMoreImages({ render = true } = {}) {
     const orient = appState.currentOrient;
 
     try {
-        const res = await fetch(imagePageUrl(offset, { mode, purities, orient }));
-        if (!res.ok || requestId !== appState.imageRequestId) return false;
-        const data = await res.json();
+        const data = await fetchImagePage(offset, { mode, purities, orient });
+        if (requestId !== appState.imageRequestId) return false;
         const items = data.items || [];
         appState.totalImages = data.total ?? (offset + items.length);
         appState.nextOffset = data.next_offset;
@@ -2396,17 +2442,15 @@ async function fetchStatus({ refreshGridOnChange = true } = {}) {
     const requestedMonitorInfo = appState.monitors?.find(
         item => item.name === requestedMonitor,
     );
-    const requestedOrient = requestedMonitorInfo?.orientation || '';
+    const requestedOrient = requestedMonitorInfo?.orientation || appState.currentOrient || '';
     const requestId = Number(appState.statusRequestId || 0) + 1;
     appState.statusRequestId = requestId;
     try {
-        const res = await fetch(statusUrl({
+        const data = await readLibraryJson(statusUrl({
             monitor: requestedMonitor,
             orient: requestedOrient,
             includeRecoverable: false,
         }));
-        if (!res.ok) return;
-        const data = await res.json();
 
         // A monitor switch can leave the old request in flight.  Its counts
         // must never overwrite the newly selected monitor's status.
@@ -2475,8 +2519,7 @@ async function fetchStatus({ refreshGridOnChange = true } = {}) {
 
 async function fetchDiskUsage() {
     try {
-        const res = await fetch(`${API_URL}/api/disk`);
-        const data = await res.json();
+        const data = await readLibraryJson(`${API_URL}/api/disk`);
         const text = `${data.used_mb} / ${data.quota_mb} MB`;
         if (els.diskUsage.innerText !== text) {
             els.diskUsage.innerText = text;
@@ -2486,9 +2529,8 @@ async function fetchDiskUsage() {
 
 async function fetchMonitors() {
     try {
-        const res = await fetch(`${API_URL}/api/monitors`);
-        if (!res.ok) return;
-        const monitors = await res.json();
+        const monitors = await readLibraryJson(`${API_URL}/api/monitors`);
+        if (!Array.isArray(monitors)) throw new Error('Invalid monitor list');
         const previousMonitor = appState.selectedMonitor;
         const previousOrient = appState.currentOrient;
         const changed = JSON.stringify(appState.monitors) !== JSON.stringify(monitors);
@@ -2502,7 +2544,7 @@ async function fetchMonitors() {
             renderMonitors();
             markCurrentWallpaper();
         }
-        if (previousMonitor && selected && (
+        if (selected && (
             previousMonitor !== selected.name || previousOrient !== selected.orientation
         )) {
             await refreshImages();
@@ -2511,14 +2553,11 @@ async function fetchMonitors() {
 }
 
 async function refreshImages(preserveFocus = false) {
-    if (!appState.selectedMonitor) return;
-
     appState.refreshing = true;
     const requestId = ++appState.imageRequestId;
     const renderedTarget = preserveFocus ? appState.currentBatchIndex : 0;
     const monitor = appState.monitors.find(m => m.name === appState.selectedMonitor);
-    const requestedMonitor = appState.selectedMonitor;
-    const orient = monitor ? monitor.orientation : 'landscape';
+    const orient = monitor?.orientation || appState.currentOrient || '';
     const requestedContextKey = libraryViewContextKey(appState.mode, orient);
     appState.currentOrient = orient;
     console.log('[refresh] start', appState.mode, orient);
@@ -2591,7 +2630,14 @@ async function refreshImages(preserveFocus = false) {
             // replacement page is ready. Lock pagination across that gap so a
             // queued observer callback cannot request page zero alongside us.
             appState.initialImagePageRequestId = requestId;
-            const pageData = await fetch(imagePageUrl(0)).then(r => r.json());
+            if (appState.libraryLoadContextKey !== requestedContextKey) {
+                appState.libraryLoadFailures = 0;
+            }
+            appState.libraryLoadContextKey = requestedContextKey;
+            appState.libraryLoading = true;
+            appState.libraryError = null;
+            if (typeof renderLibraryLoadState === 'function') renderLibraryLoadState();
+            const pageData = await fetchImagePage();
             if (
                 imageResponseMatchesContext(requestId, requestedContextKey)
             ) {
@@ -2607,6 +2653,8 @@ async function refreshImages(preserveFocus = false) {
                 appState.loadedImageMode = appState.mode;
                 appState.loadedImageContextKey = libraryViewContextKey(appState.mode, orient);
                 appState.initialImagePageRequestId = null;
+                appState.libraryLoadFailures = 0;
+                appState.libraryRetryAt = 0;
                 while (
                     preserveFocus
                     && appState.allImages.length < renderedTarget
@@ -2621,7 +2669,21 @@ async function refreshImages(preserveFocus = false) {
                 await applySearchFilter(preserveFocus);
                 cacheCurrentLibraryView(appState.mode, orient);
             }
-        } catch (e) { console.error(e); }
+        } catch (e) {
+            console.error('Failed to load library:', e);
+            if (imageResponseMatchesContext(requestId, requestedContextKey)) {
+                appState.libraryError = e.message;
+                appState.libraryLoadFailures = Number(appState.libraryLoadFailures || 0) + 1;
+                appState.libraryRetryAt = Date.now() + Math.min(
+                    30000, 5000 * 2 ** Math.min(appState.libraryLoadFailures - 1, 3),
+                );
+            }
+        } finally {
+            if (imageResponseMatchesContext(requestId, requestedContextKey)) {
+                appState.libraryLoading = false;
+                if (typeof renderLibraryLoadState === 'function') renderLibraryLoadState();
+            }
+        }
     }
     if (requestId === appState.imageRequestId) {
         if (appState.initialImagePageRequestId === requestId) {

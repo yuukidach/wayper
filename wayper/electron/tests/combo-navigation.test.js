@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const test = require('node:test');
 
 function loadRendererData(context, exportedNames) {
+    Object.assign(context, { AbortController, setTimeout, clearTimeout });
     const source = fs.readFileSync(path.join(__dirname, '..', 'renderer-data.js'), 'utf8');
     const exportsSource = `\nglobalThis.__testExports = { ${exportedNames.join(', ')} };`;
     vm.createContext(context);

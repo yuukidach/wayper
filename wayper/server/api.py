@@ -154,7 +154,7 @@ async def _warm_review_suggestions() -> None:
     """Populate the expensive recommendation cache after startup, off-loop."""
     await asyncio.sleep(0.2)
     try:
-        config = get_config()
+        config = await asyncio.to_thread(get_config)
         purities = ",".join(sorted(read_mode(config)))
         orientations = sorted(
             {monitor.orientation for monitor in config.monitors} & {"landscape", "portrait"}
@@ -210,8 +210,8 @@ _cached_config: WayperConfig | None = None
 _cached_mtime: float = 0
 
 
-def get_config() -> WayperConfig:
-    """Return cached config, reloading when file changes. Monitors are auto-detected."""
+def get_config(*, detect_displays: bool = True) -> WayperConfig:
+    """Read configuration; desktop operations can also refresh monitor information."""
     global _cached_config, _cached_mtime
     from wayper.config import CONFIG_FILE
 
@@ -220,9 +220,9 @@ def get_config() -> WayperConfig:
     except OSError:
         mtime = 0
     if _cached_config is None or mtime != _cached_mtime:
-        _cached_config = load_config()
+        _cached_config = load_config(detect_displays=False)
         _cached_mtime = mtime
-    else:
+    if detect_displays:
         # Refresh monitors (backend caches until display change event)
         try:
             from wayper.backend import detect_monitors
@@ -245,7 +245,7 @@ _preference_suggestion_inflight: dict[tuple[object, ...], threading.Event] = {}
 def _get_metadata() -> dict:
     """Return cached metadata, reloading only when the file changes on disk."""
     global _cached_metadata, _cached_meta_token
-    config = get_config()
+    config = get_config(detect_displays=False)
     mf = config.metadata_file
     try:
         stat = mf.stat()
@@ -711,7 +711,7 @@ def _preference_learning_payload(
 
 @app.get("/api/config", response_model=ConfigResponse)
 def get_config_route():
-    config = get_config()
+    config = get_config(detect_displays=False)
     return config_payload(config, read_mode(config))
 
 
@@ -842,7 +842,7 @@ async def sse_events():
     from starlette.responses import StreamingResponse
 
     async def event_stream():
-        config = get_config()
+        config = get_config(detect_displays=False)
         last_mtime = 0.0
         last_mode: set[str] = set()
         last_wallpapers: dict[str, str | None] = {}
@@ -862,7 +862,7 @@ async def sse_events():
         while True:
             await asyncio.sleep(0.3)
             tick += 1
-            config = get_config()
+            config = get_config(detect_displays=False)
             try:
                 mtime = config.state_file.stat().st_mtime
                 if mtime != last_mtime:
@@ -906,7 +906,7 @@ async def sse_events():
 def get_disk_usage():
     from wayper.pool import disk_usage_mb
 
-    config = get_config()
+    config = get_config(detect_displays=False)
     return {"used_mb": round(disk_usage_mb(config), 1), "quota_mb": config.quota_mb}
 
 
@@ -1073,14 +1073,16 @@ def _image_records_for_mode(
     orient: str,
 ) -> list[tuple[int, Path, bool]]:
     records: list[tuple[int, Path, bool]] = []
+    orientations = [orient] if orient else ["landscape", "portrait"]
     for purity in purities:
-        if mode == "pool":
-            path = pool_dir(config, purity, orient)
-            is_fav = False
-        else:
-            path = favorites_dir(config, purity, orient)
-            is_fav = True
-        records.extend((mtime, p, is_fav) for mtime, p in _cached_dir_images(path))
+        for orientation in orientations:
+            if mode == "pool":
+                path = pool_dir(config, purity, orientation)
+                is_fav = False
+            else:
+                path = favorites_dir(config, purity, orientation)
+                is_fav = True
+            records.extend((mtime, p, is_fav) for mtime, p in _cached_dir_images(path))
 
     records.sort(key=lambda item: item[0], reverse=True)
     return records
@@ -1103,7 +1105,7 @@ def _image_items_from_records(
 
 @app.get("/api/images", response_model=list[ImageItem])
 def get_images(mode: str = "pool", purity: str = "sfw", orient: str = "landscape"):
-    config = get_config()
+    config = get_config(detect_displays=False)
 
     if mode == "trash":
         return _blocklist_payload(config, include_images=True)["images"]
@@ -1120,7 +1122,7 @@ def get_images_page(
     offset: int = 0,
     limit: int = 120,
 ):
-    config = get_config()
+    config = get_config(detect_displays=False)
     offset = max(0, offset)
     limit = min(MAX_IMAGE_PAGE_LIMIT, max(1, limit))
 
@@ -1766,7 +1768,7 @@ def _readable_trash_image(config: WayperConfig, filename: str) -> Path:
 @app.get("/trash/{filename}")
 def serve_trash_image(filename: str):
     """Serve an image from system trash (not under download_dir)."""
-    trashed = _readable_trash_image(get_config(), filename)
+    trashed = _readable_trash_image(get_config(detect_displays=False), filename)
     return FileResponse(trashed)
 
 
@@ -1776,7 +1778,7 @@ def serve_trash_thumbnail(filename: str):
     """Serve a cached thumbnail for an image in system trash."""
     from wayper.image import generate_thumbnail
 
-    config = get_config()
+    config = get_config(detect_displays=False)
     trashed = _readable_trash_image(config, filename)
 
     cache_dir = config.download_dir / ".thumbnails" / "__trash"
@@ -1816,7 +1818,7 @@ def _thumbnail_response(config: WayperConfig, image_path: str) -> FileResponse:
 @app.get("/thumbnails")
 def serve_thumbnail(path: str):
     """Serve a cached thumbnail from either a path segment or query parameter."""
-    config = get_config()
+    config = get_config(detect_displays=False)
     return _thumbnail_response(config, path)
 
 
@@ -1826,7 +1828,7 @@ def serve_preview(path: str):
     """Serve a cached screen-sized image for the Review carousel."""
     from wayper.image import generate_thumbnail
 
-    config = get_config()
+    config = get_config(detect_displays=False)
     img_full = _resolve_image(config, path)
     rel = img_full.relative_to(config.download_dir)
     cache_dir = config.download_dir / ".previews" / rel.parent
@@ -1844,7 +1846,7 @@ def serve_preview(path: str):
 @app.get("/images")
 def serve_image(path: str):
     """Serve an image from either a path segment or query parameter."""
-    config = get_config()
+    config = get_config(detect_displays=False)
     img_full = _resolve_image(config, path)
     return FileResponse(img_full, headers={"Cache-Control": "public, max-age=86400"})
 
