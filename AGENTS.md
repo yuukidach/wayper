@@ -58,6 +58,9 @@ and a FastAPI backend for the Electron GUI.
 
 ## Change Guidelines
 
+- All changes to `main`, including version bumps, must be merged through a pull request.
+  Do not push commits directly to `main` or bypass its repository rules. Create release
+  tags only from the corresponding merged commit on `main` after its checks pass.
 - Keep behavior cross-platform for macOS and Linux. Do not assume X11 on Linux; support
   Wayland-oriented Hyprland/Sway paths.
 - Disliked images go to system trash. Do not introduce a project-managed `.trash/` directory.
