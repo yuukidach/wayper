@@ -1410,6 +1410,11 @@ body[data-view='settings'] main {
   color: var(--overlay0);
 }
 
+.field select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .field input:focus,
 .field select:focus {
   border-color: var(--blue);

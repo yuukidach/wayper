@@ -114,6 +114,11 @@ class GreeterConfigModel(BaseModel):
     fixed_image: str | None = None
 
 
+class TransitionConfigModel(BaseModel):
+    resize: str = "crop"
+    resize_available: bool = False
+
+
 class ConfigResponse(BaseModel):
     download_dir: str
     interval_min: int
@@ -125,6 +130,7 @@ class ConfigResponse(BaseModel):
     autostart: bool = False
     language: str = "auto"
     greeter: GreeterConfigModel = Field(default_factory=GreeterConfigModel)
+    transition: TransitionConfigModel = Field(default_factory=TransitionConfigModel)
     has_api_key: bool
     has_wh_password: bool
     wallhaven_username: str
