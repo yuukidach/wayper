@@ -103,6 +103,8 @@ Use Review to inspect auto-held downloads and model recommendations. Keep or Dis
 
 Use `wayper --hidden` to start directly in the tray. On Hyprland or Sway, the tray is supplied by a status bar such as Waybar; make sure its `tray` module is enabled.
 
+If the window loses its backend connection, launch Wayper again. The existing app checks the connection and restarts its own backend if needed, then reloads the window. The startup dialog's **Retry** button also restarts the backend. A backend started separately must be stopped from its original terminal before retrying.
+
 **Grid view:**
 
 | Key | Action | Key | Action |
