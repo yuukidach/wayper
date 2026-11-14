@@ -182,31 +182,25 @@ class SuggestionDataTest(unittest.TestCase):
         self.touch_image("filtered.jpg", favorite=True)
         self.assertTrue(load_suggestion_catalog(self.config).get("filtered.jpg").favorite)
 
-    def test_api_mcp_and_cli_share_durable_evidence(self) -> None:
-        from wayper.mcp_server import tag_stats_lookup, uploader_stats_lookup
+    def test_api_and_cli_share_durable_evidence(self) -> None:
         from wayper.server.api import tag_stats, tag_suggestions, uploader_suggestions
 
         metadata = self.make_suggestion_library()
         with (
             patch("wayper.server.api.get_config", return_value=self.config),
             patch("wayper.server.api._get_metadata", return_value=metadata),
-            patch("wayper.mcp_server._config", return_value=self.config),
             patch("wayper.cli.load_config", return_value=self.config),
         ):
             tags = tag_suggestions()
             api_stats = tag_stats(tags="specific", purity="nsfw")
-            mcp_stats = tag_stats_lookup(tags="specific", purity="nsfw")
             api_uploaders = uploader_suggestions()
-            mcp_uploaders = uploader_stats_lookup(uploaders="Artist", purity="nsfw")
             cli_result = CliRunner().invoke(cli, ["--json", "suggest"])
 
-        self.assertEqual(api_stats, mcp_stats)
         self.assertEqual(api_stats["tags"][0]["banned"], 12)
         self.assertEqual(api_stats["tags"][0]["kept"], 0)
         self.assertEqual(tags["suggestions"][0]["banned"], 12)
         self.assertTrue(tags["combo_suggestions"])
         self.assertEqual(api_uploaders["suggestions"][0]["ban_count"], 12)
-        self.assertEqual(mcp_uploaders["uploaders"][0]["banned"], 12)
         self.assertEqual(cli_result.exit_code, 0, cli_result.output)
         self.assertEqual(json.loads(cli_result.output)["suggestions"], tags["suggestions"])
 
@@ -225,11 +219,15 @@ class SuggestionDataTest(unittest.TestCase):
             "remove_suggestions": [],
         }
         with patch(
-            "wayper.ai_suggestions._invoke_codex", new=AsyncMock(return_value=(result, True))
+            "wayper.ai_suggestions._invoke_codex", new=AsyncMock(return_value=result)
         ) as invoke:
             actual = asyncio.run(_generate_ai_suggestions_impl(self.config))
 
         invoke.assert_awaited_once()
+        prompt = invoke.await_args.args[0]
+        statistics = json.loads(prompt.split("## Local Statistics\n")[1].splitlines()[0])
+        tag = next(item for item in statistics["tags"] if item["tag"] == "specific")
+        self.assertEqual((tag["banned"], tag["kept"]), (12, 0))
         self.assertEqual(len(actual["add_suggestions"]), 1)
         stats = actual["add_suggestions"][0]["stats"]
         self.assertEqual((stats["banned"], stats["kept"]), (12, 0))

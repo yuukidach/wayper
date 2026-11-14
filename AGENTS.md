@@ -3,7 +3,7 @@
 ## Project Overview
 
 wayper is a Python 3.12+ wallpaper manager with Wallhaven integration, a Click CLI,
-a FastAPI backend for the Electron GUI, and a stdio MCP server.
+and a FastAPI backend for the Electron GUI.
 
 ## Agent Guidance Layout
 
@@ -17,14 +17,11 @@ a FastAPI backend for the Electron GUI, and a stdio MCP server.
 - Install for development with `uv venv && uv pip install -e .`.
 - Browser cookie extraction and the Cloudflare-capable login fallback are included by default.
 - Electron dependencies live in `wayper/electron`; run `npm ci` there before Electron work.
-- The MCP server entry point is `wayper-mcp`; after source install it is usually
-  available at `.venv/bin/wayper-mcp`.
 
 ## Common Commands
 
 - Run CLI commands with `uv run wayper ...` or `wayper ...` after installing the package.
 - Launch the GUI with `wayper`, or use `wayper --hidden` to start in the system tray.
-- Start the MCP stdio server with `wayper-mcp`.
 - Lint Python with `ruff check wayper/` when `ruff` is installed. If not, use
   `uvx ruff check wayper/` or `pre-commit run ruff --all-files`.
 - Check Python formatting with `ruff format --check wayper/` when `ruff` is installed. If not,
@@ -33,7 +30,7 @@ a FastAPI backend for the Electron GUI, and a stdio MCP server.
 
 ## Architecture
 
-- `wayper/core.py` owns state-modifying operations. CLI, API, and MCP layers should remain
+- `wayper/core.py` owns state-modifying operations. CLI and API layers should remain
   thin wrappers around core behavior.
 - Platform-specific wallpaper behavior belongs in `wayper/backend/`; keep shared logic in
   top-level modules.
@@ -67,7 +64,6 @@ a FastAPI backend for the Electron GUI, and a stdio MCP server.
 - All CLI commands should preserve `--json` machine-readable output behavior.
 - When changing user-facing docs, keep `README.md` and `docs/README.zh-CN.md` in sync. Update
   `docs/index.html` when the public site content changes.
-- When changing MCP docs, include Codex TOML config and Claude Code JSON config where relevant.
 - AI tag suggestions depend on the local `codex` CLI. Keep implementation, errors, and docs
   aligned when changing the AI provider.
 - For version bumps, keep `pyproject.toml`, `wayper/__init__.py`, and

@@ -1666,7 +1666,7 @@ def _auto_retrain_worker_command(config: WayperConfig, token: str) -> list[str]:
 
 
 def _spawn_auto_retrain_worker(config: WayperConfig, token: str) -> None:
-    """Launch a background worker detached from a CLI/MCP/API caller."""
+    """Launch a background worker detached from a CLI/API caller."""
     popen_kwargs: dict[str, object] = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
@@ -1699,7 +1699,7 @@ def _has_pending_preference_feedback_refresh(config: WayperConfig) -> bool:
 def schedule_preference_model_retrain(config: WayperConfig, *, force: bool = False) -> None:
     """Request a detached, debounced full refresh without blocking the caller.
 
-    A ``threading.Timer`` dies with a short-lived CLI or stdio MCP process.
+    A ``threading.Timer`` dies with a short-lived CLI process.
     The on-disk lease is therefore the hand-off point: a detached process owns
     it, coalesces feedback for a few seconds, and refreshes from the complete
     local snapshot only after the normal safety threshold is reached. Ordinary

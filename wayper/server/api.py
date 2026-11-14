@@ -1343,7 +1343,7 @@ def _cached_preference_suggestions(
             limit=bounded_limit,
             # Building a complete training snapshot walks and normalizes every
             # labelled library item. The Review page only needs the durable ledger
-            # revision here; full diagnostics remain available through CLI/MCP.
+            # revision here; full diagnostics remain available through CLI.
             include_learning=False,
             # The API already maintains an mtime-validated metadata snapshot. Reuse
             # it instead of reparsing a potentially large history file for every
@@ -1359,7 +1359,7 @@ def _cached_preference_suggestions(
         )
         result["learning"] = learning
         if isinstance(learning, dict) and learning.get("due"):
-            # A CLI/MCP action may have recorded feedback in another process. Queue
+            # A CLI action may have recorded feedback in another process. Queue
             # the non-blocking refresh when the long-lived API process next observes it.
             schedule_preference_model_retrain(config, force=True)
         with _preference_suggestion_cache_lock:
