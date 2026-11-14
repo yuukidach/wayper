@@ -3,7 +3,7 @@ const http = require('http')
 
 function readPortFile(portFile) {
   try {
-    const port = Number.parseInt(fs.readFileSync(portFile, 'utf-8').trim(), 10)
+    const port = Number(fs.readFileSync(portFile, 'utf-8').trim())
     return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 0
   } catch (_) {
     return 0
@@ -16,24 +16,36 @@ function probeApi(port, timeout = 1000) {
     const finish = (ready) => {
       if (settled) return
       settled = true
+      clearTimeout(timer)
       resolve(ready)
     }
     const request = http.get(
       {
         hostname: '127.0.0.1',
         port,
-        path: '/api/status',
-        timeout,
+        path: '/api/health',
       },
       (response) => {
-        response.resume()
-        finish(response.statusCode >= 200 && response.statusCode < 300)
+        let body = ''
+        response.setEncoding('utf8')
+        response.on('data', chunk => {
+          body += chunk
+          if (body.length > 1024) request.destroy()
+        })
+        response.on('end', () => {
+          try {
+            finish(response.statusCode === 200 && JSON.parse(body).service === 'wayper')
+          } catch (_) {
+            finish(false)
+          }
+        })
+        response.on('error', () => finish(false))
       }
     )
-    request.on('timeout', () => {
+    const timer = setTimeout(() => {
       request.destroy()
       finish(false)
-    })
+    }, timeout)
     request.on('error', () => finish(false))
   })
 }
@@ -59,7 +71,9 @@ async function waitForApi(portFile, options = {}) {
       && ports.indexOf(port) === index
     ))
     for (const port of candidates) {
-      if (await probe(port, requestTimeout)) return port
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) return 0
+      if (await probe(port, Math.min(requestTimeout, remaining))) return port
     }
 
     const remaining = deadline - Date.now()

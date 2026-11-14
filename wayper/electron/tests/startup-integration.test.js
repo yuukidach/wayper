@@ -16,9 +16,11 @@ const readiness = new Promise(resolve => {
 
 class FakeWebContents extends EventEmitter {
   setWindowOpenHandler() {}
+  reload() {}
 }
 
 class FakeBrowserWindow extends EventEmitter {
+  static getAllWindows() { return windows }
   constructor(options) {
     super()
     this.options = options
@@ -105,6 +107,8 @@ function spawn() {
   child.killed = false
   child.kill = () => {
     child.killed = true
+    child.exitCode = 0
+    setImmediate(() => child.emit('exit', 0))
   }
   spawnedProcesses.push(child)
   return child
@@ -142,7 +146,7 @@ async function run() {
       if (request === './backend-readiness' && parent?.filename === mainPath) {
         return {
           waitForApi: (_portFile, options) => {
-            assert.equal(options.timeout, 60000)
+            assert.ok([10000, 60000].includes(options.timeout))
             assert.equal(options.preferredPort, 45123)
             return readiness
           },
@@ -208,7 +212,8 @@ async function run() {
       assert.equal(trayIcons[0], nativeImages[0])
     }
   } finally {
-    app.emit('before-quit')
+    app.emit('before-quit', { preventDefault() {} })
+    await flushEvents()
     app.emit('will-quit')
     Module._load = originalLoad
     process.argv = originalArgv

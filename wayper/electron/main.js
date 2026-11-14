@@ -3,6 +3,7 @@ const path = require('path')
 const { spawn } = require('child_process')
 const fs = require('fs')
 const { waitForApi } = require('./backend-readiness')
+const { stopBackendProcess } = require('./backend-process')
 const { createStartupWindowController } = require('./startup-window')
 
 let backendProcess = null
@@ -14,6 +15,8 @@ let backendPath = null
 let captureInProgress = false
 let isQuitting = false
 let backendReadyPromise = null
+let backendRecoveryPromise = null
+let backendStopPromise = null
 let trayRotationState = { auto_rotation: false, rotation_paused: false }
 let trayLanguage = 'auto'
 
@@ -96,14 +99,16 @@ function getTrayIcon() {
 }
 
 function startBackend() {
-  const binaryPath = getBackendPath()
+  if (isQuitting || backendProcess) return false
+  const python = process.env.WAYPER_PYTHON
+  const binaryPath = python || getBackendPath()
   if (!binaryPath) {
     console.log('Development mode: Assuming backend is running externally.')
     return false
   }
 
   console.log(`Starting backend from: ${binaryPath}`)
-  const launchedProcess = spawn(binaryPath, [], {
+  const launchedProcess = spawn(binaryPath, python ? ['-m', 'wayper.server.api'] : [], {
     stdio: ['ignore', 'inherit', 'inherit'], // Pipe logs to main process stdout
     env: { ...process.env, WAYPER_GUI: 'electron' },
     windowsHide: true
@@ -112,7 +117,8 @@ function startBackend() {
 
   launchedProcess.on('error', (err) => {
     console.error('Failed to start backend:', err)
-    if (backendProcess === launchedProcess) backendProcess = null
+    // A failed kill can also emit 'error'. Retain a running child until exit.
+    if (!launchedProcess.pid && backendProcess === launchedProcess) backendProcess = null
   })
 
   launchedProcess.on('exit', (code, signal) => {
@@ -123,9 +129,7 @@ function startBackend() {
 }
 
 async function waitForBackend(timeout = 10000) {
-  // The Python launcher can pass the selected port before Uvicorn has finished
-  // its lifespan startup. A port number identifies the backend, but does not
-  // prove that it is accepting requests yet.
+  // Always probe readiness, including when api.port survived a killed backend.
   const port = await waitForApi(getPortFilePath(), {
     timeout,
     preferredPort: configuredApiPort(),
@@ -139,12 +143,58 @@ async function waitForBackend(timeout = 10000) {
   return port
 }
 
-function killBackend() {
-  if (backendProcess) {
-    console.log('Killing backend process...')
-    if (!backendProcess.killed) backendProcess.kill()
-    backendProcess = null
+function stopBackend() {
+  if (!backendStopPromise) {
+    backendStopPromise = stopBackendProcess(backendProcess).finally(() => {
+      backendStopPromise = null
+    })
   }
+  return backendStopPromise
+}
+
+async function restartBackend() {
+  try {
+    await stopBackend()
+    if (!isQuitting) startBackend()
+  } catch (error) {
+    // Keep the old child tracked if termination failed; never start a rival.
+    console.error('Could not restart backend:', error)
+  }
+}
+
+function recoverBackend() {
+  if (isQuitting || backendRecoveryPromise || !backendReadyPromise) return
+  const previousReady = backendReadyPromise
+  backendRecoveryPromise = (async () => {
+    // A second launch during cold startup must not interrupt initialization.
+    await previousReady
+    if (isQuitting) return 0
+    const oldPort = configuredApiPort()
+    let port = await waitForBackend()
+    const wasUnavailable = !port
+    if (!port && !isQuitting) {
+      await restartBackend()
+      port = await waitForBackendUntilReady()
+    }
+    if (port && !isQuitting) {
+      // Also reload after recovery on the same port: failed renderer requests
+      // still need to be retried.
+      if (wasUnavailable || port !== oldPort) {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.reload()
+        }
+      }
+      console.log(`Backend available on port ${port} (previously ${oldPort})`)
+      void refreshTrayMenu()
+    }
+    return port
+  })().catch(error => {
+    console.error('Backend recovery failed:', error)
+    return 0
+  }).finally(() => {
+    backendRecoveryPromise = null
+  })
+  backendReadyPromise = backendRecoveryPromise
 }
 
 function configuredApiPort() {
@@ -203,9 +253,8 @@ async function waitForBackendUntilReady() {
       break
     }
 
-    // A failed child can be restarted. If it is merely slow, keep waiting for
-    // the existing process instead of interrupting a security scan.
-    if (!backendProcess) startBackend()
+    // The user explicitly requested a retry after the startup deadline.
+    await restartBackend()
   }
   return 0
 }
@@ -549,6 +598,7 @@ if (!gotTheLock) {
     // payload because macOS may preserve the first instance's --hidden flag.
     if (additionalData?.showWindow === true || !commandLine.includes(HIDDEN_SWITCH)) {
       showMainWindow()
+      recoverBackend()
     }
   })
 
@@ -573,14 +623,20 @@ if (!gotTheLock) {
   })
 }
 
-app.on('before-quit', () => {
+app.on('before-quit', event => {
   isQuitting = true
+  if (backendProcess) {
+    event.preventDefault()
+    void stopBackend().then(() => app.quit()).catch(error => {
+      console.error('Could not stop backend:', error)
+      app.exit(1)
+    })
+  }
 })
 
 app.on('will-quit', () => {
   if (trayRefreshTimer) clearInterval(trayRefreshTimer)
   if (tray && !tray.isDestroyed()) tray.destroy()
-  killBackend()
 })
 
 app.on('window-all-closed', () => {

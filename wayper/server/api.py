@@ -200,6 +200,12 @@ app.add_middleware(
 )
 
 
+@app.get("/api/health")
+async def health() -> dict[str, str]:
+    """Check the server without loading configuration, images, or model state."""
+    return {"service": "wayper"}
+
+
 _cached_config: WayperConfig | None = None
 _cached_mtime: float = 0
 
@@ -1864,7 +1870,11 @@ def port_file() -> Path:
 
 
 def _acquire_api_lock() -> FileLock | None:
-    """Own the API/rotation lifecycle, or return ``None`` for a second launch."""
+    """Own the API/rotation lifecycle, or return ``None`` for a second launch.
+
+    Keep the lock file in place: the OS releases the lock when its owner exits.
+    Unlinking it would let concurrent launches lock different files at one path.
+    """
     lock = FileLock(blocking=False, path=port_file().with_suffix(".lock"))
     try:
         lock.__enter__()
@@ -1882,9 +1892,7 @@ def _remove_owned_port_file(path: Path, port: int) -> None:
         pass
 
 
-def run(stop_event: threading.Event | None = None):
-    import atexit
-
+def run():
     import uvicorn
 
     from wayper.logging import setup_logging
@@ -1896,41 +1904,22 @@ def run(stop_event: threading.Event | None = None):
         log.info("API server already running; reusing the existing instance")
         return
 
+    pf = port_file()
+    port = 0
     try:
         port = _find_free_port()
-        pf = port_file()
         pf.parent.mkdir(parents=True, exist_ok=True)
         pf.write_text(str(port))
-        atexit.register(_remove_owned_port_file, pf, port)
 
         log.info("API server starting on port %d", port)
         # PyInstaller's windowed Windows executable has no stdout/stderr streams.
         # Uvicorn's default formatter probes sys.stdout.isatty(), which crashes the
         # backend before it starts listening. Wayper already configured its file
         # logger above, so avoid Uvicorn's console-oriented logging configuration.
-        uvicorn_options = {
-            "host": "127.0.0.1",
-            "port": port,
-            "log_level": "info",
-            "log_config": None,
-        }
-        if stop_event is None:
-            uvicorn.run(app, **uvicorn_options)
-        else:
-            server = uvicorn.Server(uvicorn.Config(app, **uvicorn_options))
-
-            def request_stop() -> None:
-                stop_event.wait()
-                server.should_exit = True
-
-            stop_watcher = threading.Thread(
-                target=request_stop,
-                name="wayper-api-stop-watcher",
-                daemon=True,
-            )
-            stop_watcher.start()
-            server.run()
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="info", log_config=None)
     finally:
+        # Clean up before releasing the lock so a successor cannot race cleanup.
+        _remove_owned_port_file(pf, port)
         api_lock.__exit__(None, None, None)
 
 

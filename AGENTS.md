@@ -42,7 +42,9 @@ a FastAPI backend for the Electron GUI, and a stdio MCP server.
 - The API server auto-selects a free port and writes it to `~/.config/wayper/api.port`.
   Electron reads that port through IPC.
 - `wayper/rotation.py` owns automatic rotation inside the FastAPI process. FastAPI owns the
-  service lifecycle, while Electron owns the tray and application lifecycle.
+  service lifecycle, while Electron owns the tray, application, and backend child lifecycle
+  in both source and packaged launches. The Python GUI launcher only prepares and starts
+  Electron. Restart only an owned child, wait for its exit, and keep the API lock file in place.
 - File-based state is intentional: TOML config, plain-text blacklist/undo files, JSON history,
   and per-download-dir state files.
 - File locks prevent concurrent state modifications.

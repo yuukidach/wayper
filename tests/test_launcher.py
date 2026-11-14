@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
-import threading
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -72,25 +73,19 @@ def test_failed_electron_install_does_not_start_backend(
         patch("wayper.server.launcher._electron_workdir", return_value=tmp_path),
         patch("wayper.server.launcher._electron_dependencies_ready", return_value=False),
         patch("wayper.server.launcher.subprocess.check_call") as install,
-        patch("wayper.server.launcher.threading.Thread") as thread,
+        patch("wayper.server.launcher.subprocess.Popen") as launch,
     ):
         if install_error:
             install.side_effect = subprocess.CalledProcessError(1, ["npm", "ci"])
         expected = subprocess.CalledProcessError if install_error else RuntimeError
         with pytest.raises(expected):
             run_app()
-    thread.assert_not_called()
+    launch.assert_not_called()
 
 
-def test_source_launcher_stops_api_after_electron_exits(tmp_path: Path) -> None:
+def test_source_launcher_delegates_backend_to_electron(tmp_path: Path) -> None:
     electron_dir = tmp_path / "electron"
     electron_dir.mkdir()
-    api_stopped = threading.Event()
-
-    def fake_api(stop_event: threading.Event) -> None:
-        assert stop_event.wait(timeout=1)
-        api_stopped.set()
-
     process = type(
         "FakeProcess",
         (),
@@ -100,16 +95,18 @@ def test_source_launcher_stops_api_after_electron_exits(tmp_path: Path) -> None:
     with (
         patch("wayper.autostart.ensure_default_autostart"),
         patch("wayper.config.load_config"),
-        patch("wayper.server.launcher.run_api", side_effect=fake_api),
-        patch("wayper.server.launcher._wait_for_api", return_value=43210),
         patch("wayper.server.launcher._electron_workdir", return_value=electron_dir),
         patch("wayper.server.launcher._electron_dependencies_ready", return_value=True),
         patch("wayper.server.launcher._electron_command", return_value=["electron"]) as command,
         patch("wayper.server.launcher._icon_path", return_value=None),
-        patch("wayper.server.launcher.subprocess.Popen", return_value=process),
+        patch("wayper.server.launcher.subprocess.Popen", return_value=process) as launch,
         patch("wayper.server.launcher.signal.signal"),
     ):
         run_app(arguments=["--hidden"])
 
-    assert api_stopped.is_set()
     command.assert_called_once_with(electron_dir, arguments=["--hidden"])
+    launch.assert_called_once()
+    assert launch.call_args.args[0] == ["electron"]
+    env = launch.call_args.kwargs["env"]
+    assert env["WAYPER_PYTHON"] == sys.executable
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(Path(__file__).resolve().parents[1])

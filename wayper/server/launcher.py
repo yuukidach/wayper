@@ -6,15 +6,9 @@ import shutil
 import signal
 import subprocess
 import sys
-import threading
-import time
 from pathlib import Path
-from urllib.error import URLError
-from urllib.request import urlopen
 
 from wayper.process import windows_no_window_kwargs
-from wayper.server.api import port_file
-from wayper.server.api import run as run_api
 
 
 def _electron_workdir(src: Path) -> Path:
@@ -127,38 +121,6 @@ def _electron_dependencies_ready(electron_dir: Path) -> bool:
         return False
 
 
-def _wait_for_api(timeout: float = 10) -> int:
-    """Poll API port file and then the API until it responds. Returns the port."""
-    pf = port_file()
-    deadline = time.monotonic() + timeout
-    port = 0
-    while time.monotonic() < deadline:
-        try:
-            port = int(pf.read_text().strip())
-            if port > 0:
-                break
-        except (FileNotFoundError, ValueError):
-            pass
-        time.sleep(0.2)
-
-    if port <= 0:
-        print("Warning: API port file not found within timeout, launching Electron anyway")
-        return 0
-
-    # Readiness must stay cheap.  ``/api/status`` inspects the wallpaper
-    # library and model-review state, so retrying it while startup is still
-    # busy can stack several expensive requests in the server thread pool.
-    url = f"http://127.0.0.1:{port}/api/config"
-    while time.monotonic() < deadline:
-        try:
-            urlopen(url, timeout=1)
-            return port
-        except (URLError, OSError):
-            time.sleep(0.2)
-    print("Warning: API did not respond within timeout, launching Electron anyway")
-    return port
-
-
 def run_app(arguments: list[str] | None = None) -> None:
     _hide_windows_console_for_gui_entry()
 
@@ -172,8 +134,7 @@ def run_app(arguments: list[str] | None = None) -> None:
     except AutostartError as error:
         print(f"Warning: could not install Wayper autostart: {error}")
 
-    # Validate the desktop runtime before starting a non-daemon API thread.
-    # Installation errors must not leave an invisible backend running forever.
+    # Validate the desktop runtime before launching Electron.
     electron_dir = _electron_workdir(Path(__file__).parent.parent / "electron")
     if not _electron_dependencies_ready(electron_dir):
         print("Installing dependencies...")
@@ -188,20 +149,6 @@ def run_app(arguments: list[str] | None = None) -> None:
                 f"Run 'npm rebuild electron' in {electron_dir} and try again."
             )
 
-    # Keep the source-mode API in this process, but give it an explicit shutdown
-    # signal.  Letting a daemon server thread outlive Electron starts Python's
-    # interpreter shutdown while Uvicorn is still serving requests, leaving a
-    # stale backend whose asyncio executor can no longer run rotation work.
-    api_stop_event = threading.Event()
-    api_thread = threading.Thread(
-        target=run_api,
-        args=(api_stop_event,),
-        name="wayper-api",
-    )
-    api_thread.start()
-
-    port = _wait_for_api()
-
     print(f"Starting Electron in {electron_dir}...")
 
     # Run Electron directly where possible so cleanup tracks the actual app PID.
@@ -209,10 +156,11 @@ def run_app(arguments: list[str] | None = None) -> None:
         electron_dir, arguments=sys.argv[1:] if arguments is None else arguments
     )
 
-    # Pass API port to Electron so preload.js can pick it up
-    env = {**os.environ, "WAYPER_DEV": "1"}
-    if port > 0:
-        env["WAYPER_API_PORT"] = str(port)
+    # Electron owns the backend child in both source and packaged launches.
+    # Use this interpreter and import root even when launched from another cwd.
+    import_root = str(Path(__file__).resolve().parents[2])
+    env = {**os.environ, "WAYPER_DEV": "1", "WAYPER_PYTHON": sys.executable}
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [import_root, env.get("PYTHONPATH")]))
     if icon_path := _icon_path():
         env["WAYPER_ICON_PATH"] = str(icon_path)
 
@@ -241,8 +189,6 @@ def run_app(arguments: list[str] | None = None) -> None:
     finally:
         if proc.poll() is None:
             proc.terminate()
-        api_stop_event.set()
-        api_thread.join()
 
 
 if __name__ == "__main__":
