@@ -311,7 +311,7 @@ def save_config(config: WayperConfig, path: Path | None = None) -> None:
     atomic_write(path, "\n".join(lines), encoding="utf-8")
 
 
-def load_config(path: Path | None = None) -> WayperConfig:
+def load_config(path: Path | None = None, *, detect_displays: bool = True) -> WayperConfig:
     """Load config from TOML file, falling back to defaults."""
     path = path or CONFIG_FILE
     raw: dict = {}
@@ -323,13 +323,15 @@ def load_config(path: Path | None = None) -> WayperConfig:
             content = path.read_text(encoding="locale")
         raw = tomllib.loads(content)
 
-    # Always auto-detect monitors; fall back to config if detection fails
-    try:
-        from .backend import detect_monitors
+    # Reading a local library needs configuration, not access to the desktop.
+    monitors = [MonitorConfig(**m) for m in raw.get("monitors", [])]
+    if detect_displays:
+        try:
+            from .backend import detect_monitors
 
-        monitors = detect_monitors()
-    except Exception:
-        monitors = [MonitorConfig(**m) for m in raw.get("monitors", [])]
+            monitors = detect_monitors()
+        except Exception:
+            pass
 
     wallhaven_raw = raw.get("wallhaven", {})
     wallhaven = WallhavenConfig(

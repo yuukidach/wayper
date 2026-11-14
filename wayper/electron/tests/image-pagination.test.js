@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const test = require('node:test');
 
 function loadRendererData(context, exportedNames) {
+    Object.assign(context, { AbortController, setTimeout, clearTimeout });
     const source = fs.readFileSync(path.join(__dirname, '..', 'renderer-data.js'), 'utf8');
     const exportsSource = `\nglobalThis.__testExports = { ${exportedNames.join(', ')} };`;
     vm.createContext(context);
@@ -224,3 +225,119 @@ test('refresh coalesces page-zero requests', testRefreshLocksPageZeroAgainstObse
 test('repeated pages do not duplicate images', testRepeatedPageCannotDuplicatePaths);
 test('blocklist preserves data and recovers after failure', testBlocklistShowsLoadingAndRecoversFromApiFailure);
 test('monitor changes reload the matching orientation', testMonitorPollingUpdatesOrientationAndHandlesReconnect);
+
+test('the library loads without monitors and follows the first recovered display', async () => {
+    const state = makeState();
+    state.selectedMonitor = null;
+    state.monitors = [];
+    state.currentOrient = '';
+    let monitors = [];
+    const pages = [];
+    const context = makeContext(state, async url => {
+        if (url.includes('/api/monitors')) return { ok: true, json: async () => monitors };
+        if (url.includes('/api/status')) return { ok: true, json: async () => ({}) };
+        pages.push(url);
+        return { ok: true, json: async () => ({
+            items: [{ path: 'sfw/portrait/local.jpg' }], total: 1, next_offset: null,
+        }) };
+    });
+    context.renderMonitors = () => {};
+    context.markCurrentWallpaper = () => {};
+    const renderer = loadRendererData(context, ['refreshImages', 'fetchMonitors']);
+
+    await renderer.fetchMonitors();
+    await renderer.refreshImages();
+    assert.equal(state.images.length, 1);
+    assert.match(pages[0], /orient=&/);
+
+    monitors = [{ name: 'DISPLAY1', orientation: 'portrait' }];
+    await renderer.fetchMonitors();
+    assert.equal(state.selectedMonitor, 'DISPLAY1');
+    assert.equal(state.currentOrient, 'portrait');
+    assert.equal(pages.length, 2);
+    assert.match(pages[1], /orient=portrait/);
+
+    await renderer.fetchMonitors();
+    assert.equal(pages.length, 2, 'an unchanged display must not reload the library');
+});
+
+for (const failure of ['network', 'http', 'invalid-page']) {
+    test(`library preserves cards and recovers from ${failure} without count changes`, async () => {
+        const state = makeState();
+        const cached = [{ path: 'sfw/portrait/cached.jpg' }];
+        state.allImages = [...cached];
+        state.images = [...cached];
+        let healthy = false;
+        let pageRequests = 0;
+        const context = makeContext(state, async url => {
+            if (url.includes('/api/status')) {
+                return { ok: true, json: async () => ({ pool_count: 1 }) };
+            }
+            pageRequests++;
+            if (!healthy) {
+                if (failure === 'network') throw new TypeError('Failed to fetch');
+                return { ok: failure !== 'http', status: 503, json: async () => ({ detail: 'Failed' }) };
+            }
+            return { ok: true, json: async () => ({ items: cached, total: 1, next_offset: null }) };
+        });
+        context.console = { ...console, error() {} };
+        const renderer = loadRendererData(context, ['refreshImages', 'retryLibraryLoad']);
+
+        await renderer.refreshImages();
+        assert.ok(state.libraryError);
+        assert.equal(state.images[0].path, cached[0].path);
+        assert.equal(state.allImages[0].path, cached[0].path);
+        assert.equal(state.refreshing, false);
+        assert.equal(state.libraryLoading, false);
+        assert.equal(await renderer.retryLibraryLoad(state.libraryRetryAt - 1), false);
+        assert.equal(pageRequests, 1);
+
+        healthy = true;
+        assert.equal(await renderer.retryLibraryLoad(state.libraryRetryAt), true);
+        assert.equal(pageRequests, 2);
+        assert.equal(state.libraryError, null);
+        assert.equal(state.images.length, 1);
+        assert.equal(await renderer.retryLibraryLoad(Infinity), false);
+    });
+}
+
+test('a stale library failure cannot replace a newer successful view', async () => {
+    const state = makeState();
+    let rejectOld;
+    const context = makeContext(state, async url => {
+        if (url.includes('/api/status')) return { ok: true, json: async () => ({}) };
+        if (url.includes('mode=pool')) return new Promise((_, reject) => { rejectOld = reject; });
+        return { ok: true, json: async () => ({
+            items: [{ path: 'favorites/portrait/current.jpg' }], total: 1, next_offset: null,
+        }) };
+    });
+    context.console = { ...console, error() {} };
+    const renderer = loadRendererData(context, ['refreshImages', 'retryLibraryLoad']);
+    const old = renderer.refreshImages();
+    state.mode = 'favorites';
+    await renderer.refreshImages();
+    rejectOld(new Error('Old pool request failed'));
+    await old;
+    assert.equal(state.images[0].path, 'favorites/portrait/current.jpg');
+    assert.equal(state.libraryError, null);
+    assert.equal(await renderer.retryLibraryLoad(Infinity), false);
+});
+
+for (const stalledPart of ['headers', 'body']) {
+    test(`library reads time out on stalled ${stalledPart} and can be retried`, async () => {
+        let signal;
+        let healthy = false;
+        const context = makeContext(makeState(), async (_url, options) => {
+            signal = options.signal;
+            if (healthy) return { ok: true, json: async () => ({ items: [] }) };
+            const pending = new Promise(() => {});
+            return stalledPart === 'headers' ? pending : { ok: true, json: () => pending };
+        });
+        const renderer = loadRendererData(context, ['readLibraryJson']);
+        await assert.rejects(renderer.readLibraryJson('/images', { timeoutMs: 10 }), /timed out/);
+        assert.equal(signal.aborted, true);
+        healthy = true;
+        const page = await renderer.readLibraryJson('/images');
+        assert.equal(page.items.length, 0);
+    });
+}

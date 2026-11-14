@@ -2234,6 +2234,18 @@ footer {
 
 /* ---------- Empty State ---------- */
 
+.library-load-notice {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  color: var(--text);
+  background: var(--surface0);
+  border-radius: 8px;
+}
+
 .empty-state {
   display: flex;
   flex-direction: column;

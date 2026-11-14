@@ -20,8 +20,8 @@
         });
     }
 
-    function config() {
-        return request('/api/config');
+    function config(options = {}) {
+        return request('/api/config', options);
     }
 
     function setGreeter(imagePath) {

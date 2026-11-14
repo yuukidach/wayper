@@ -10,6 +10,7 @@ async function run() {
     const cache = new Map([['old', {}]]);
     const requests = new Map();
     const context = {
+        AbortController, setTimeout, clearTimeout,
         API_URL: 'http://127.0.0.1:45123',
         appState: { purity: ['sfw'] },
         document: { hidden: true },
