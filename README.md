@@ -3,10 +3,10 @@
   <h1 align="center">wayper</h1>
   <p align="center">
     The wallpaper manager that learns what you like.<br>
-    Wallhaven integration · AI-native · keyboard-driven.
+    Wallhaven integration · AI-assisted filtering · keyboard-driven.
   </p>
   <p align="center">
-    <a href="https://yuukidach.github.io/wayper/">Home</a> · <a href="#install">Install</a> · <a href="#gui">GUI</a> · <a href="#cli">CLI</a> · <a href="#mcp">MCP</a> · <a href="#config">Config</a> · <a href="docs/README.zh-CN.md">中文</a>
+    <a href="https://yuukidach.github.io/wayper/">Home</a> · <a href="#install">Install</a> · <a href="#gui">GUI</a> · <a href="#cli">CLI</a> · <a href="#config">Config</a> · <a href="docs/README.zh-CN.md">中文</a>
   </p>
 </p>
 
@@ -28,7 +28,7 @@ Most wallpaper tools stop at "set image on desktop." wayper is a full **Wallhave
 **What makes it different:**
 
 - **Learns from you** — mark a wallpaper **Dislike** when the model misses it and wayper adds an explicit training label. **Ban** remains a separate exact-image block for wallpapers you are simply tired of.
-- **AI-native (MCP)** — built-in [MCP](https://modelcontextprotocol.io/) server. Tell Codex or Claude *"switch to something with mountains"* or *"favorite this one"* — it just works. First wallpaper manager with native AI assistant integration.
+- **AI-assisted filtering** — the local Codex CLI analyzes a snapshot of tag, combination, and uploader statistics to suggest exclusion rules. Suggestions are checked against your local evidence before being shown.
 - **Keyboard-driven GUI** — every single action has a shortcut. Grid navigation, lightbox, favorites, settings — fully operable without a mouse. Built for power users.
 
 **And the fundamentals:**
@@ -37,7 +37,7 @@ Most wallpaper tools stop at "set image on desktop." wayper is a full **Wallhave
 - **Smart tag filtering** — excluded tags sync to Wallhaven's cloud blacklist for server-side filtering; overflow tags are sent via URL query; the rest are filtered after metadata fetch. Zero wasted downloads.
 - **Auto orientation** — portrait monitors get portrait wallpapers. No sorting needed.
 - **Three-tier purity** — SFW, Sketchy, NSFW — independently toggleable, persistent across sessions.
-- **Cross-platform** — Windows, macOS, and Linux (Hyprland/Sway). CLI + GUI + MCP.
+- **Cross-platform** — Windows, macOS, and Linux (Hyprland/Sway). CLI + GUI.
 - **Pool management** — preserves and validates original downloads, then rotates them with favorites, blocklist, and history navigation built in.
 - **`--json` everywhere** — every command supports machine-readable output.
 
@@ -242,41 +242,6 @@ cmd-shift-b = 'exec-and-forget wayper ban'
 cmd-shift-f = 'exec-and-forget wayper fav'
 ```
 
-## MCP
-
-wayper ships an [MCP](https://modelcontextprotocol.io/) server so AI assistants can control your wallpapers natively.
-
-Use the absolute path to `wayper-mcp`. After installing from source, that is usually `.venv/bin/wayper-mcp`.
-
-**Codex:**
-
-```bash
-codex mcp add wayper -- /path/to/wayper/.venv/bin/wayper-mcp
-```
-
-Or edit `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.wayper]
-command = "/path/to/wayper/.venv/bin/wayper-mcp"
-```
-
-**Claude Code:**
-
-Add to `~/.claude/.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "wayper": {
-      "command": "/path/to/wayper/.venv/bin/wayper-mcp"
-    }
-  }
-}
-```
-
-Available tools: `status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `unfav` · `dislike` · `ban` · `unban` · `set_mode` · `delete_wallpaper` · `wallpaper_info` · `tag_stats_top` · `tag_stats_lookup` · `tag_stats_combo` · `uploader_stats_lookup`
-
 ## Config
 
 Linux/macOS:
@@ -293,7 +258,7 @@ New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
 Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
-Set the wallpaper download folder and login autostart in the GUI Settings view, or edit the options in [`example-config.toml`](example-config.toml). Autostart defaults on and can also be managed with `wayper autostart enable|disable|status` or the MCP `configure_autostart` tool. Wayper uses a graphical-session user service on Linux (so no Hyprland `exec-once` is needed), a LaunchAgent on macOS, and a per-user Run registration on Windows. Windows launches the GUI executable directly when possible and automatically uses a windowless script fallback for uv environments without a working `pythonw.exe`; neither path opens a console window. See the example file for all options — API key, proxy, intervals, quota, filtering, transitions, etc. On Linux, `[transition] resize` controls how `awww img --resize` scales wallpapers: `crop` (default), `fit`, `stretch`, or `no`. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
+Set the wallpaper download folder and login autostart in the GUI Settings view, or edit the options in [`example-config.toml`](example-config.toml). Autostart defaults on and can also be managed with `wayper autostart enable|disable|status`. Wayper uses a graphical-session user service on Linux (so no Hyprland `exec-once` is needed), a LaunchAgent on macOS, and a per-user Run registration on Windows. Windows launches the GUI executable directly when possible and automatically uses a windowless script fallback for uv environments without a working `pythonw.exe`; neither path opens a console window. See the example file for all options — API key, proxy, intervals, quota, filtering, transitions, etc. On Linux, `[transition] resize` controls how `awww img --resize` scales wallpapers: `crop` (default), `fit`, `stretch`, or `no`. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
 
 On Linux, choose **Settings → General → Wallpaper Display Mode**: **Crop to fill** (`crop`, default), **Fit entire image** (`fit`), **Stretch to fill** (`stretch`), or **Original size** (`no`). Click **Save Changes**; the selected mode applies the next time a wallpaper is set and is preserved when favoriting or unfavoriting. The same setting is available as `[transition] resize` in `config.toml`; missing or invalid values fall back to `crop`. This control is disabled on Windows and macOS.
 

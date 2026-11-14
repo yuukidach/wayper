@@ -795,40 +795,6 @@ class RegressionTest(unittest.TestCase):
 
         self.assertEqual(error.exception.status_code, 500)
 
-    def test_mcp_delete_records_ban_feedback_only_when_blacklisted(self) -> None:
-        from wayper.core import CoreResult
-        from wayper.mcp_server import delete_wallpaper
-
-        with tempfile.TemporaryDirectory() as td:
-            config = WayperConfig(download_dir=Path(td))
-            ordinary = config.download_dir / "sfw" / "landscape" / "ordinary.jpg"
-            blacklisted = config.download_dir / "sfw" / "landscape" / "blacklisted.jpg"
-            ordinary.parent.mkdir(parents=True)
-            ordinary.touch()
-            blacklisted.touch()
-
-            with (
-                patch("wayper.mcp_server._config", return_value=config),
-                patch(
-                    "wayper.mcp_server.do_ban",
-                    return_value=CoreResult(action="ban", image=blacklisted),
-                ) as do_ban,
-            ):
-                ordinary_result = delete_wallpaper(str(ordinary))
-                blacklisted_result = delete_wallpaper(str(blacklisted), add_to_blacklist_flag=True)
-                directory_result = delete_wallpaper(
-                    str(ordinary.parent), add_to_blacklist_flag=True
-                )
-                ordinary_deleted = not ordinary.exists()
-                blacklisted_still_present = blacklisted.exists()
-
-        self.assertFalse(ordinary_result["blacklisted"])
-        self.assertTrue(blacklisted_result["blacklisted"])
-        self.assertTrue(ordinary_deleted)
-        self.assertTrue(blacklisted_still_present)
-        self.assertIn("error", directory_result)
-        do_ban.assert_called_once_with(config, image=blacklisted.resolve(), wait_remote=False)
-
 
 if __name__ == "__main__":
     unittest.main()

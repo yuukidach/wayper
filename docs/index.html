@@ -4,17 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>wayper — Wallhaven Client & AI Wallpaper Manager for Windows, Linux & macOS</title>
-<meta name="description" content="The wallpaper manager that learns what you like. Wallhaven integration, AI-native control, keyboard-driven GUI. Windows, macOS, and Linux.">
-<meta name="keywords" content="wallhaven, wallhaven app, wallhaven desktop, wallhaven client, wallpaper manager, wallpaper changer, wallpaper rotation, system tray wallpaper, desktop wallpaper, auto wallpaper, ai wallpaper, mcp server wallpaper, windows wallpaper, macos wallpaper, linux wallpaper, hyprland wallpaper, sway wallpaper, wayland wallpaper, swww alternative, variety alternative, nitrogen alternative">
+<meta name="description" content="The wallpaper manager that learns what you like. Wallhaven integration, AI-assisted filtering, keyboard-driven GUI. Windows, macOS, and Linux.">
+<meta name="keywords" content="wallhaven, wallhaven app, wallhaven desktop, wallhaven client, wallpaper manager, wallpaper changer, wallpaper rotation, system tray wallpaper, desktop wallpaper, auto wallpaper, ai wallpaper, windows wallpaper, macos wallpaper, linux wallpaper, hyprland wallpaper, sway wallpaper, wayland wallpaper, swww alternative, variety alternative, nitrogen alternative">
 <link rel="canonical" href="https://yuukidach.github.io/wayper/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://yuukidach.github.io/wayper/">
 <meta property="og:title" content="wayper — Wallhaven Client & AI Wallpaper Manager for Windows, Linux & macOS">
-<meta property="og:description" content="The wallpaper manager that learns what you like. Wallhaven integration, AI-native control, keyboard-driven GUI. Windows, macOS, and Linux.">
+<meta property="og:description" content="The wallpaper manager that learns what you like. Wallhaven integration, AI-assisted filtering, keyboard-driven GUI. Windows, macOS, and Linux.">
 <meta property="og:image" content="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="wayper — Wallhaven Client & AI Wallpaper Manager for Windows, Linux & macOS">
-<meta name="twitter:description" content="The wallpaper manager that learns what you like. Wallhaven integration, AI-native control, keyboard-driven GUI. Windows, macOS, and Linux.">
+<meta name="twitter:description" content="The wallpaper manager that learns what you like. Wallhaven integration, AI-assisted filtering, keyboard-driven GUI. Windows, macOS, and Linux.">
 <meta name="twitter:image" content="https://raw.githubusercontent.com/yuukidach/wayper/main/assets/browse.png">
 <script type="application/ld+json">
 {
@@ -23,7 +23,7 @@
   "name": "wayper",
   "applicationCategory": "DesktopEnhancement",
   "operatingSystem": "Windows, macOS, Linux",
-  "description": "The wallpaper manager that learns what you like. Wallhaven integration, AI-native control, keyboard-driven GUI. Windows, macOS, and Linux.",
+  "description": "The wallpaper manager that learns what you like. Wallhaven integration, AI-assisted filtering, keyboard-driven GUI. Windows, macOS, and Linux.",
   "url": "https://yuukidach.github.io/wayper/",
   "downloadUrl": "https://github.com/yuukidach/wayper/releases",
   "license": "https://opensource.org/licenses/MIT",
@@ -204,9 +204,6 @@ kbd {
 .section-intro {
   margin-bottom: 14px; color: var(--subtext); font-size: .92em;
 }
-.mcp-tools {
-  margin-top: 14px; color: var(--subtext); font-size: .88em;
-}
 .req-list {
   list-style: none; padding: 0; line-height: 2.2;
 }
@@ -251,7 +248,6 @@ footer .links a { color: var(--subtext); }
       <a href="#usage">Usage</a>
       <a href="#browse">GUI</a>
       <a href="#keybindings">Keys</a>
-      <a href="#mcp">MCP</a>
       <a href="https://github.com/yuukidach/wayper/blob/main/example-config.toml">Config</a>
     </div>
     <a class="gh-btn" href="https://github.com/yuukidach/wayper">GitHub</a>
@@ -263,7 +259,7 @@ footer .links a { color: var(--subtext); }
     <img src="assets/icon-128.png" width="72" height="72" alt="Wayper logo">
     <h1>wayper</h1>
   </div>
-  <p class="tagline">The wallpaper manager that learns what you like. Wallhaven integration, AI-native, keyboard-driven.</p>
+  <p class="tagline">The wallpaper manager that learns what you like. Wallhaven integration, AI-assisted filtering, keyboard-driven.</p>
   <div class="badges">
     <a href="https://github.com/yuukidach/wayper"><img src="https://img.shields.io/github/stars/yuukidach/wayper?style=flat&color=89b4fa&labelColor=313244&logo=github" alt="GitHub stars"></a>
     <a href="https://github.com/yuukidach/wayper/blob/main/LICENSE"><img src="https://img.shields.io/github/license/yuukidach/wayper?style=flat&color=a6e3a1&labelColor=313244" alt="License"></a>
@@ -290,8 +286,8 @@ footer .links a { color: var(--subtext); }
       <p>Dislike a wallpaper the model missed to add an explicit training label. Ban stays a separate exact-image block for wallpapers you are tired of.</p>
     </div>
     <div class="feature" style="border-color: var(--teal);">
-      <strong style="color: var(--teal);">AI-native (MCP)</strong>
-      <p>Tell Codex or Claude "switch to something with mountains" — it just works. First wallpaper manager with native AI assistant integration.</p>
+      <strong style="color: var(--teal);">AI-assisted filtering</strong>
+      <p>The local Codex CLI analyzes tag, combination, and uploader statistics to suggest exclusion rules. Suggestions are checked against local evidence before being shown.</p>
     </div>
     <div class="feature" style="border-color: var(--mauve);">
       <strong style="color: var(--mauve);">Keyboard-driven</strong>
@@ -311,7 +307,7 @@ footer .links a { color: var(--subtext); }
     </div>
     <div class="feature">
       <strong>Cross-platform</strong>
-      <p>Windows, macOS, and Linux (Hyprland/Sway). CLI + GUI + MCP — pick your interface.</p>
+      <p>Windows, macOS, and Linux (Hyprland/Sway). CLI + GUI — pick your interface.</p>
     </div>
     <div class="feature">
       <strong>Pool management</strong>
@@ -445,26 +441,6 @@ wayper --json status        # machine-readable output</code></pre>
     <div><kbd>o</kbd> <span class="label">open on Wallhaven</span></div>
     <div><kbd>Space</kbd> / <kbd>Esc</kbd> <span class="label">close lightbox</span></div>
   </div>
-</section>
-
-<section id="mcp">
-  <h2>MCP</h2>
-  <p class="section-intro">Built-in <a href="https://modelcontextprotocol.io/">MCP</a> server lets AI assistants control your wallpapers. Ask Codex or Claude to <em>"favorite this wallpaper"</em> or <em>"switch to something with mountains"</em> — it just works.</p>
-  <pre><code># Codex (~/.codex/config.toml)
-[mcp_servers.wayper]
-command = "/path/to/wayper/.venv/bin/wayper-mcp"
-
-# Claude Code (~/.claude/.mcp.json)
-{
-  "mcpServers": {
-    "wayper": {
-      "command": "/path/to/wayper/.venv/bin/wayper-mcp"
-    }
-  }
-}</code></pre>
-  <p class="mcp-tools">
-    Tools: <code>status</code> <code>next_wallpaper</code> <code>prev_wallpaper</code> <code>fav</code> <code>unfav</code> <code>dislike</code> <code>ban</code> <code>unban</code> <code>set_mode</code> <code>delete_wallpaper</code> <code>wallpaper_info</code> <code>tag_stats_top</code> <code>tag_stats_lookup</code> <code>tag_stats_combo</code> <code>uploader_stats_lookup</code>
-  </p>
 </section>
 
 <section id="keybindings">

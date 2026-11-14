@@ -3,10 +3,10 @@
   <h1 align="center">wayper</h1>
   <p align="center">
     越用越懂你的壁纸管理器。<br>
-    Wallhaven 集成 · AI 原生 · 全键盘操作。
+    Wallhaven 集成 · AI 辅助筛选 · 全键盘操作。
   </p>
   <p align="center">
-    <a href="#安装">安装</a> · <a href="#gui">GUI</a> · <a href="#cli">CLI</a> · <a href="#mcp-服务">MCP</a> · <a href="#配置">配置</a> · <a href="../README.md">English</a>
+    <a href="#安装">安装</a> · <a href="#gui">GUI</a> · <a href="#cli">CLI</a> · <a href="#配置">配置</a> · <a href="../README.md">English</a>
   </p>
 </p>
 
@@ -28,7 +28,7 @@
 **核心差异：**
 
 - **越用越聪明** — 模型漏掉真正不喜欢的壁纸时，用 **Dislike（不喜欢）** 明确教给模型；**Ban（拉黑）** 则保留为“看腻了”的单图屏蔽，两者互不混淆。
-- **AI 原生（MCP）** — 内置 [MCP](https://modelcontextprotocol.io/) 服务器。对 Codex 或 Claude 说 *"换一张有山的壁纸"* 或 *"收藏这张"* 就行。首个原生支持 AI 助手的壁纸管理器。
+- **AI 辅助筛选** — 本地 Codex CLI 根据标签、组合和上传者的统计快照提出排除规则建议。建议展示前会再次用本地数据校验。
 - **全键盘操作 GUI** — 每个操作都有快捷键。网格导航、灯箱预览、收藏、设置——完全不需要鼠标。为重度用户打造。
 
 **基础能力：**
@@ -37,7 +37,7 @@
 - **智能标签过滤** — 排除标签自动同步到 Wallhaven 云端黑名单（服务端过滤）；溢出的标签通过 URL 参数发送；剩余的在元数据获取后本地过滤。零浪费下载。
 - **自动匹配方向** — 竖屏显示器自动用竖屏壁纸，无需分类。
 - **三档纯度** — SFW、Sketchy、NSFW 独立开关，跨会话持久化。
-- **跨平台** — Windows、macOS 和 Linux（Hyprland/Sway）。CLI + GUI + MCP。
+- **跨平台** — Windows、macOS 和 Linux（Hyprland/Sway）。CLI + GUI。
 - **图库管理** — 保留并校验下载原图，再进行轮换，内置收藏、黑名单与历史前后导航。
 - **`--json` 全覆盖** — 所有命令支持机器可读输出。
 
@@ -225,41 +225,6 @@ cmd-shift-b = 'exec-and-forget wayper ban'
 cmd-shift-f = 'exec-and-forget wayper fav'
 ```
 
-## MCP 服务
-
-wayper 内置 [MCP](https://modelcontextprotocol.io/) 服务器，让 AI 助手原生控制壁纸。
-
-请使用 `wayper-mcp` 的绝对路径。源码安装后通常是 `.venv/bin/wayper-mcp`。
-
-**Codex：**
-
-```bash
-codex mcp add wayper -- /path/to/wayper/.venv/bin/wayper-mcp
-```
-
-或编辑 `~/.codex/config.toml`：
-
-```toml
-[mcp_servers.wayper]
-command = "/path/to/wayper/.venv/bin/wayper-mcp"
-```
-
-**Claude Code：**
-
-添加到 `~/.claude/.mcp.json`：
-
-```json
-{
-  "mcpServers": {
-    "wayper": {
-      "command": "/path/to/wayper/.venv/bin/wayper-mcp"
-    }
-  }
-}
-```
-
-可用工具：`status` · `next_wallpaper` · `prev_wallpaper` · `fav` · `unfav` · `dislike` · `ban` · `unban` · `set_mode` · `delete_wallpaper` · `wallpaper_info` · `tag_stats_top` · `tag_stats_lookup` · `tag_stats_combo` · `uploader_stats_lookup`
-
 ## 配置
 
 Linux/macOS：
@@ -276,7 +241,7 @@ New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
 Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
-壁纸下载目录和登录自启动可在 GUI 设置页修改，也可编辑 [`example-config.toml`](../example-config.toml)。自启动在所有平台上默认开启，还可通过 `wayper autostart enable|disable|status` 或 MCP 的 `configure_autostart` 工具管理。Linux 使用图形会话级用户服务（无需再写 Hyprland `exec-once`），macOS 使用 LaunchAgent，Windows 使用当前用户的 Run 注册项：正常情况下直接启动 GUI；如果 uv 环境缺少可用的 `pythonw.exe`，则自动改用无窗口脚本启动。两种方式都不会出现控制台窗口。详见该文件的所有选项 — API key、代理、轮换间隔、配额、筛选策略、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
+壁纸下载目录和登录自启动可在 GUI 设置页修改，也可编辑 [`example-config.toml`](../example-config.toml)。自启动在所有平台上默认开启，还可通过 `wayper autostart enable|disable|status` 管理。Linux 使用图形会话级用户服务（无需再写 Hyprland `exec-once`），macOS 使用 LaunchAgent，Windows 使用当前用户的 Run 注册项：正常情况下直接启动 GUI；如果 uv 环境缺少可用的 `pythonw.exe`，则自动改用无窗口脚本启动。两种方式都不会出现控制台窗口。详见该文件的所有选项 — API key、代理、轮换间隔、配额、筛选策略、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
 
 Linux 下可在 **设置 → 基本设置 → 壁纸显示方式** 中选择 **裁剪铺满**（`crop`，默认）、**完整显示**（`fit`）、**拉伸铺满**（`stretch`）或 **原始尺寸**（`no`）。点击 **保存更改** 后，下次设置壁纸时生效；收藏或取消收藏时也会保留所选模式。也可在 `config.toml` 中设置 `[transition] resize`；缺失或无效的值会回退到 `crop`。Windows 和 macOS 上此控件不可用。
 

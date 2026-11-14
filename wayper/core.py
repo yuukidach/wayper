@@ -1,6 +1,6 @@
 """Unified business logic for wallpaper operations.
 
-All state-modifying operations live here. CLI, API, and MCP are thin wrappers.
+All state-modifying operations live here. CLI and API are thin wrappers.
 """
 
 from __future__ import annotations

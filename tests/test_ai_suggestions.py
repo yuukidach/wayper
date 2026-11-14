@@ -8,11 +8,13 @@ from unittest.mock import patch
 
 from wayper.ai_suggestions import (
     _AI_SUGGESTION_SCHEMA,
-    _CODEX_MCP_TOOLS,
     AISuggestionError,
+    _build_prompt,
     _filter_ai_suggestions,
     _invoke_codex,
+    _prompt_statistics,
 )
+from wayper.catalog import ImageCatalog
 from wayper.config import WayperConfig
 
 
@@ -68,7 +70,7 @@ class CodexSuggestionTest(unittest.TestCase):
 
         self.assertEqual(result["add_suggestions"], [])
 
-    def test_invoke_codex_uses_structured_output_and_scoped_mcp_tools(self) -> None:
+    def test_invoke_codex_uses_structured_output_without_server_registration(self) -> None:
         response = {
             "analysis": "pattern",
             "add_suggestions": [],
@@ -86,13 +88,12 @@ class CodexSuggestionTest(unittest.TestCase):
 
         with (
             patch("wayper.ai_suggestions._find_codex_bin", return_value="/opt/bin/codex"),
-            patch("wayper.ai_suggestions._find_mcp_bin", return_value="/opt/bin/wayper-mcp"),
             patch(
                 "wayper.ai_suggestions.asyncio.create_subprocess_exec",
                 new=fake_create_subprocess_exec,
             ),
         ):
-            result, tools_used = asyncio.run(_invoke_codex("analyze this", use_tools=True))
+            result = asyncio.run(_invoke_codex("analyze this"))
 
         args = captured["args"]
         self.assertIsInstance(args, tuple)
@@ -104,17 +105,48 @@ class CodexSuggestionTest(unittest.TestCase):
         self.assertEqual(args[args.index("--sandbox") + 1], "read-only")
         self.assertIn("--skip-git-repo-check", args)
 
-        configs = [args[i + 1] for i, arg in enumerate(args) if arg == "--config"]
-        self.assertIn('mcp_servers.wayper.command="/opt/bin/wayper-mcp"', configs)
-        self.assertIn("mcp_servers.wayper.required=true", configs)
-        self.assertIn(
-            f"mcp_servers.wayper.enabled_tools={json.dumps(_CODEX_MCP_TOOLS)}",
-            configs,
-        )
+        self.assertNotIn("--config", args)
         self.assertEqual(captured["schema"], _AI_SUGGESTION_SCHEMA)
         self.assertEqual(process.input, b"analyze this")
         self.assertEqual(result, response)
-        self.assertTrue(tools_used)
+
+    def test_prompt_supplies_exact_scoped_evidence_and_preserves_favorites(self) -> None:
+        catalog = ImageCatalog(
+            {
+                "ban.jpg": {"tags": ["specific", "Shared"], "uploader": "Artist", "purity": "nsfw"},
+                "keep.jpg": {"tags": ["shared"], "uploader": "artist", "purity": "nsfw"},
+                "fav.jpg": {
+                    "tags": ["shared", "favorite-only"],
+                    "uploader": "Artist",
+                    "purity": "nsfw",
+                },
+                "inactive.jpg": {"tags": ["inactive"], "purity": "sfw"},
+            },
+            {"ban.jpg", "inactive.jpg"},
+            {"fav.jpg"},
+            purities={"nsfw"},
+        )
+        prompt = _build_prompt(
+            catalog, ["shared"], [["specific", "shared"]], ["artist"], active_purities={"nsfw"}
+        )
+        statistics = json.loads(prompt.split("## Local Statistics\n")[1].splitlines()[0])
+        tags = {item["tag"]: item for item in statistics["tags"]}
+        self.assertEqual(tags["shared"], {"tag": "shared", "banned": 1, "kept": 2, "favorites": 1})
+        self.assertIn("favorite-only", tags)
+        self.assertNotIn("inactive", tags)
+        self.assertEqual(statistics["combos"][0]["banned"], 1)
+        self.assertEqual(statistics["combos"][0]["kept"], 0)
+        self.assertEqual(statistics["uploaders"][0]["favorites"], 1)
+        self.assertIn("unknown support", prompt)
+        self.assertNotIn("Available Tools", prompt)
+
+    def test_infrequent_referenced_tags_are_not_lost_from_the_prompt(self) -> None:
+        metadata = {f"{i}.jpg": {"tags": [f"tag{i}"]} for i in range(50)}
+        catalog = ImageCatalog(metadata, set(metadata))
+        statistics = _prompt_statistics(catalog, ["tag49"], [], [])
+        tags = {item["tag"]: item for item in statistics["tags"]}
+        self.assertLessEqual(len(tags), 31)
+        self.assertEqual(tags["tag49"]["banned"], 1)
 
     def test_invoke_codex_reports_missing_cli(self) -> None:
         with patch("wayper.ai_suggestions._find_codex_bin", return_value=None):

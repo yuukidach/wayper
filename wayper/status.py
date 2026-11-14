@@ -1,4 +1,4 @@
-"""Read-only application status shared by CLI, MCP, and HTTP adapters."""
+"""Read-only application status shared by CLI and HTTP adapters."""
 
 from __future__ import annotations
 
