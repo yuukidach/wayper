@@ -7,8 +7,8 @@ usage() {
 
 skill_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 repo_root="$(cd -- "$skill_dir/../../.." && pwd)"
-electron_dir="$repo_root/wayper/electron"
-electron_bin="$electron_dir/node_modules/.bin/electron"
+electron_bin="$repo_root/node_modules/.bin/electron"
+app_entry="$repo_root/dist/main/index.cjs"
 output_path=""
 timeout_seconds=15
 
@@ -47,7 +47,12 @@ done
 
 test -x "$electron_bin" || {
   printf 'Electron is unavailable at %s; run npm ci in %s first.\n' \
-    "$electron_bin" "$electron_dir" >&2
+    "$electron_bin" "$repo_root" >&2
+  exit 1
+}
+test -f "$app_entry" || {
+  printf 'The app bundle is missing at %s; run npm run build in %s first.\n' \
+    "$app_entry" "$repo_root" >&2
   exit 1
 }
 pgrep -f '(^|/|[[:space:]])[w]ayper(-gui)?([[:space:]]|$)' >/dev/null || {
@@ -72,7 +77,7 @@ else
 fi
 
 (
-  cd -- "$electron_dir"
+  cd -- "$repo_root"
   WAYPER_DEV=1 "$electron_bin" . "--wayper-capture=$output_path"
 ) >/dev/null 2>&1 || true
 
@@ -88,6 +93,6 @@ for ((attempt = 0; attempt < poll_count; attempt += 1)); do
   sleep 0.1
 done
 
-printf 'Electron did not produce a PNG within %s seconds. Restart Wayper so it loads the capture hook, then retry.\n' \
+printf 'Electron did not produce a PNG within %s seconds. Open the Wayper window once (a window that was never shown has no frame to capture) and check wayper.log in the config directory, then retry.\n' \
   "$timeout_seconds" >&2
 exit 1

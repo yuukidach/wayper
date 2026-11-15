@@ -21,45 +21,36 @@ jobs:
           - macos-latest
           - ubuntu-latest
           - windows-latest
+    env:
+      # Preference scoring runs on the CPU; skip the multi-hundred-MB GPU provider.
+      ONNXRUNTIME_NODE_INSTALL_CUDA: skip
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - uses: astral-sh/setup-uv@v4
-
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
-          cache-dependency-path: wayper/electron/package-lock.json
 
-      - name: Install Python dependencies
-        run: uv sync --extra dev
-
-      - name: Lint Python
-        run: uv run ruff check wayper tests
-
-      - name: Check Python formatting
-        run: uv run ruff format --check wayper tests
-
-      - name: Test Python
-        run: uv run pytest -q
-
-      - name: Install Electron dependencies
-        working-directory: wayper/electron
+      - name: Install dependencies
         run: npm ci
 
       - name: Configure Electron sandbox on Linux
         if: runner.os == 'Linux'
-        working-directory: wayper/electron
         run: |
           sudo chown root:root node_modules/electron/dist/chrome-sandbox
           sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
 
-      - name: Test Electron renderer and lifecycle
-        working-directory: wayper/electron
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Test on Node
         run: npm test
+
+      # The app, the ML worker and the packaged CLI run on Electron's Node.
+      - name: Test on the Electron runtime
+        run: npm run test:electron
+
+      - name: Build
+        run: npm run build

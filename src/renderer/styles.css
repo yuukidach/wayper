@@ -1,0 +1,428 @@
+@import "tailwindcss";
+
+/*
+ * Wayper visual system.
+ * The chrome is achromatic on purpose: wallpapers supply all the colour.  The
+ * window is lit by the wallpaper that is showing right now, surfaces are
+ * translucent so they pick that light up, and the only "accent" is the ink.
+ */
+@theme {
+  --color-frame: #0d0d0d;
+  --color-panel: #171717;
+  --color-well: #1d1d1d;
+  --color-raised: #212121;
+  --color-overlay: #292929;
+
+  --color-ink: #f4f4f5;
+  --color-ink-2: rgb(255 255 255 / 0.64);
+  --color-ink-3: rgb(255 255 255 / 0.46);
+
+  --color-accent: #f3f3f3;
+  --color-accent-hi: #ffffff;
+  --color-on-accent: #121212;
+
+  --color-keep: #62d296;
+  --color-drop: #f2646f;
+  --color-warn: #e8b05c;
+
+  --color-line: rgb(255 255 255 / 0.07);
+  --color-line-strong: rgb(255 255 255 / 0.13);
+
+  --font-sans:
+    "Geist Variable", "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI Variable",
+    "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei UI", sans-serif;
+
+  --shadow-float: 0 18px 50px -12px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.06);
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  color-scheme: dark;
+  background-color: var(--color-frame);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  letter-spacing: -0.003em;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+input,
+textarea,
+select,
+button {
+  font-family: inherit;
+  letter-spacing: inherit;
+}
+
+input,
+textarea,
+select {
+  user-select: text;
+}
+
+button {
+  cursor: default;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+:focus-visible {
+  outline: 2px solid rgb(255 255 255 / 0.72);
+  outline-offset: 2px;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+}
+
+/* Keyboard hint: plain, quiet, never boxed. */
+kbd.keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 5px;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--color-ink-3);
+  background: rgb(255 255 255 / 0.07);
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
+kbd.keycap-bright {
+  color: var(--color-ink-2);
+  background: rgb(255 255 255 / 0.1);
+}
+
+kbd.keycap-on-accent {
+  color: rgb(18 18 18 / 0.62);
+  background: rgb(18 18 18 / 0.1);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.1);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 0.22);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Floating glass: docks, popovers, sheets. */
+.glass {
+  background: rgb(34 34 36 / 0.72);
+  backdrop-filter: blur(28px) saturate(1.6);
+  box-shadow:
+    0 24px 60px -14px rgb(0 0 0 / 0.75),
+    0 2px 6px rgb(0 0 0 / 0.3),
+    inset 0 0 0 1px rgb(255 255 255 / 0.08),
+    inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
+
+/* Sheets: settings and other panels that sit on a blurred scrim. */
+.sheet-surface {
+  background: rgb(22 22 24 / 0.84);
+  box-shadow:
+    0 40px 90px -30px rgb(0 0 0 / 0.85),
+    inset 0 0 0 1px rgb(255 255 255 / 0.08),
+    inset 0 1px 0 rgb(255 255 255 / 0.07);
+}
+
+/* Same look as .glass for surfaces that sit on an already blurred backdrop. */
+.dock-surface {
+  background: rgb(30 30 32 / 0.78);
+  box-shadow:
+    0 20px 48px -16px rgb(0 0 0 / 0.7),
+    inset 0 0 0 1px rgb(255 255 255 / 0.08),
+    inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
+
+/* Darkens the ambient light: brightest behind the stage, quiet behind the library. */
+.ambient-shade {
+  background: linear-gradient(
+    to bottom,
+    rgb(13 13 13 / 0.6) 0%,
+    rgb(13 13 13 / 0.74) 26%,
+    rgb(13 13 13 / 0.89) 56%,
+    rgb(13 13 13 / 0.96) 100%
+  );
+}
+
+/* A display, drawn to scale.  The one being managed stands forward. */
+.now-stage {
+  --stage-height: clamp(148px, 25vh, 236px);
+}
+
+.stage-screen {
+  height: var(--stage-height);
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  cursor: pointer;
+  background: rgb(255 255 255 / 0.05);
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.1),
+    0 30px 60px -28px rgb(0 0 0 / 0.9);
+  opacity: 0.45;
+  transform: scale(0.9);
+  transform-origin: bottom center;
+  transition:
+    opacity 260ms var(--ease-out-soft),
+    transform 380ms var(--ease-out-soft),
+    box-shadow 260ms var(--ease-out-soft);
+  outline: none;
+}
+
+.stage-screen:hover {
+  opacity: 0.8;
+}
+
+.stage-screen[aria-pressed="true"] {
+  opacity: 1;
+  transform: none;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.16),
+    0 36px 70px -26px rgb(0 0 0 / 0.95);
+}
+
+.stage-screen:focus-visible {
+  box-shadow:
+    0 0 0 2px rgb(255 255 255 / 0.85),
+    0 30px 60px -28px rgb(0 0 0 / 0.9);
+}
+
+/* The dock is the stage in compact form: it arrives once the stage scrolls away. */
+@keyframes wayper-dock-arrive {
+  from {
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(22px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+  }
+}
+
+.dock-after-stage {
+  opacity: 0;
+  visibility: hidden;
+  animation: wayper-dock-arrive linear both;
+  animation-timeline: --page-scroll;
+  animation-range: 150px 270px;
+}
+
+/*
+ * Scroll edge under the navigation.  Content dissolves into the header through
+ * blur layers that get stronger towards the top and an eased dim, instead of a
+ * single blur with a hard seam.  The whole effect is tied to the scroll offset
+ * of the page scroller, so nothing sits on the content while it is at rest.
+ * Views without a page scroller hide the veil: an unresolved timeline would
+ * otherwise leave it fully applied.
+ */
+.page-scroll-scope {
+  timeline-scope: --page-scroll;
+}
+
+.page-scroll {
+  scroll-timeline: --page-scroll block;
+}
+
+.topbar-veil {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 104px;
+  pointer-events: none;
+}
+
+.topbar-veil[hidden] {
+  display: none;
+}
+
+.topbar-veil > * {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  animation: wayper-fade-in linear both;
+  animation-timeline: --page-scroll;
+  animation-range: 0px 32px;
+}
+
+.topbar-veil > i:nth-child(1) {
+  backdrop-filter: blur(1.5px);
+  mask-image: linear-gradient(to bottom, #000 64%, transparent 100%);
+}
+
+.topbar-veil > i:nth-child(2) {
+  backdrop-filter: blur(3px);
+  mask-image: linear-gradient(to bottom, #000 50%, transparent 86%);
+}
+
+.topbar-veil > i:nth-child(3) {
+  backdrop-filter: blur(6px);
+  mask-image: linear-gradient(to bottom, #000 38%, transparent 70%);
+}
+
+.topbar-veil > i:nth-child(4) {
+  backdrop-filter: blur(14px);
+  mask-image: linear-gradient(to bottom, #000 26%, transparent 54%);
+}
+
+.topbar-veil > b {
+  background: linear-gradient(
+    to bottom,
+    rgb(10 10 10 / 0.86) 0%,
+    rgb(10 10 10 / 0.78) 36%,
+    rgb(10 10 10 / 0.73) 44%,
+    rgb(10 10 10 / 0.64) 52%,
+    rgb(10 10 10 / 0.52) 60%,
+    rgb(10 10 10 / 0.38) 68%,
+    rgb(10 10 10 / 0.24) 76%,
+    rgb(10 10 10 / 0.12) 84%,
+    rgb(10 10 10 / 0.03) 92%,
+    rgb(10 10 10 / 0) 100%
+  );
+}
+
+@keyframes wayper-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.fade-in {
+  animation: wayper-fade-in 320ms var(--ease-out-soft) both;
+}
+
+/* Wallpaper tile: borderless, the image is the card. */
+.wallpaper-card {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 0.045);
+  transition:
+    box-shadow 160ms ease,
+    transform 200ms var(--ease-out-soft);
+  outline: none;
+}
+
+.wallpaper-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+  pointer-events: none;
+  transition: box-shadow 160ms ease;
+}
+
+.wallpaper-card:hover::after {
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.16);
+}
+
+.wallpaper-card:focus-visible,
+.wallpaper-card[data-focused="true"] {
+  box-shadow: 0 0 0 2.5px rgb(255 255 255 / 0.9);
+}
+
+.wallpaper-card.current {
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.5);
+}
+
+.wallpaper-card.current:focus-visible,
+.wallpaper-card.current[data-focused="true"] {
+  box-shadow: 0 0 0 2.5px #ffffff;
+}
+
+.wallpaper-card .card-actions {
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.wallpaper-card:hover .card-actions,
+.wallpaper-card:focus-within .card-actions,
+.wallpaper-card:focus-visible .card-actions,
+.wallpaper-card[data-focused="true"] .card-actions {
+  opacity: 1;
+}
+
+@keyframes wayper-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-4px);
+  }
+  40% {
+    transform: translateX(4px);
+  }
+  60% {
+    transform: translateX(-3px);
+  }
+  80% {
+    transform: translateX(2px);
+  }
+}
+
+.animate-shake {
+  animation: wayper-shake 280ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -40,14 +40,24 @@ jobs:
             echo "TAG_NAME=$TAG" >> $GITHUB_ENV
           fi
 
-      - name: Compute sha256sum
+      - name: Fetch release source
         run: |
           set -euo pipefail
-          HASH=$(curl --fail --silent --show-error --retry 3 -L \
-            "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG_NAME}.tar.gz" \
-            | sha256sum | cut -d' ' -f1)
+          curl --fail --silent --show-error --retry 3 -L \
+            -o /tmp/wayper-src.tar.gz \
+            "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG_NAME}.tar.gz"
+          HASH=$(sha256sum /tmp/wayper-src.tar.gz | cut -d' ' -f1)
           [[ "$HASH" =~ ^[[:xdigit:]]{64}$ ]] || { echo "::error::Invalid release checksum"; exit 1; }
           echo "SHA256=$HASH" >> $GITHUB_ENV
+          # The PKGBUILD is versioned with the code it builds, so publish the
+          # copy that belongs to this tag instead of patching the AUR's copy.
+          mkdir -p /tmp/wayper-src
+          tar -xzf /tmp/wayper-src.tar.gz -C /tmp/wayper-src --strip-components=1 \
+            --wildcards '*/packaging/aur/PKGBUILD'
+          test -s /tmp/wayper-src/packaging/aur/PKGBUILD || {
+            echo "::error::The release does not contain packaging/aur/PKGBUILD"
+            exit 1
+          }
 
       - name: Setup SSH
         env:
@@ -107,8 +117,19 @@ jobs:
           cd aur
           git config user.name "Da Chen"
           git config user.email "dachen@connect.hku.hk"
+          previous_version=$(sed -n 's/^pkgver=//p' PKGBUILD | head -1)
+          previous_release=$(sed -n 's/^pkgrel=//p' PKGBUILD | head -1)
+          cp /tmp/wayper-src/packaging/aur/PKGBUILD PKGBUILD
           sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
           sed -i "s/^sha256sums=.*/sha256sums=('$SHA256')/" PKGBUILD
+          if [[ "$previous_version" == "$VERSION" && "$previous_release" =~ ^[0-9]+$ ]]; then
+            # Same upstream version: never move pkgrel backwards, and bump it
+            # when the recipe itself changed.
+            sed -i "s/^pkgrel=.*/pkgrel=$previous_release/" PKGBUILD
+            if ! git diff --quiet -- PKGBUILD; then
+              sed -i "s/^pkgrel=.*/pkgrel=$((previous_release + 1))/" PKGBUILD
+            fi
+          fi
 
           # Generate .SRCINFO (makepkg refuses to run as root)
           useradd -m builder

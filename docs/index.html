@@ -286,8 +286,8 @@ footer .links a { color: var(--subtext); }
       <p>Dislike a wallpaper the model missed to add an explicit training label. Ban stays a separate exact-image block for wallpapers you are tired of.</p>
     </div>
     <div class="feature" style="border-color: var(--teal);">
-      <strong style="color: var(--teal);">AI-assisted filtering</strong>
-      <p>The local Codex CLI analyzes tag, combination, and uploader statistics to suggest exclusion rules. Suggestions are checked against local evidence before being shown.</p>
+      <strong style="color: var(--teal);">Rule suggestions</strong>
+      <p>Local statistics rank the tags, tag combinations, and uploaders that show up most in wallpapers you blocked. Exclude one with a click and new downloads skip it.</p>
     </div>
     <div class="feature" style="border-color: var(--mauve);">
       <strong style="color: var(--mauve);">Keyboard-driven</strong>
@@ -333,11 +333,7 @@ footer .links a { color: var(--subtext); }
   </div>
   <div id="tab-windows" class="tab-content">
     <pre><code># Download the latest Windows installer from GitHub Releases
-# Or install from source:
-git clone https://github.com/yuukidach/wayper.git
-cd wayper
-uv venv
-uv pip install -e .</code></pre>
+# and run it. Wayper is then available from the Start menu.</code></pre>
   </div>
   <div id="tab-macos" class="tab-content">
     <pre><code># Download the latest .dmg from GitHub Releases
@@ -347,12 +343,17 @@ open wayper.dmg
 wayper</code></pre>
   </div>
   <div id="tab-source" class="tab-content">
-    <pre><code>git clone https://github.com/yuukidach/wayper.git
+    <pre><code># Needs Node.js 24+ and npm
+git clone https://github.com/yuukidach/wayper.git
 cd wayper
-uv venv && uv pip install -e .</code></pre>
+npm ci
+npm run build
+npm link            # puts `wayper` on your PATH
+wayper</code></pre>
   </div>
-  <p>The standard installation includes browser cookie extraction and a Cloudflare-capable login
-  fallback for Wallhaven favorite sync.</p>
+  <p>Wayper is a single TypeScript application on Electron, and the installed app is also the CLI.
+  Wallhaven account sync signs in with your saved credentials and opens its own login window when
+  Cloudflare asks for a check.</p>
 </section>
 
 <section id="usage">
@@ -408,9 +409,9 @@ wayper --json status        # machine-readable output</code></pre>
   </p>
   <p class="kbd-label">Grid view</p>
   <div class="kbd-grid kbd-grid-gap">
-    <div><kbd>p</kbd> <kbd>v</kbd> <span class="label">pool / fav</span></div>
-    <div><kbd>m</kbd> <span class="label">Model</span></div>
-    <div><kbd>b</kbd> <span class="label">Blocklist</span></div>
+    <div><kbd>1</kbd> <kbd>2</kbd> <span class="label">pool / fav</span></div>
+    <div><kbd>3</kbd> <span class="label">Review</span></div>
+    <div><kbd>4</kbd> <span class="label">Blocklist</span></div>
     <div><kbd>Enter</kbd> / <kbd>Space</kbd> <span class="label">preview (lightbox)</span></div>
     <div><kbd>h</kbd> / <kbd>l</kbd> <span class="label">prev / next wallpaper</span></div>
     <div><kbd>f</kbd> <span class="label">favorite</span></div>
@@ -424,7 +425,7 @@ wayper --json status        # machine-readable output</code></pre>
     <div><kbd>Esc</kbd> <span class="label">clear search / unfocus</span></div>
     <div><kbd>Arrow keys</kbd> <span class="label">navigate grid</span></div>
     <div><kbd>[</kbd> / <kbd>]</kbd> <span class="label">blocklist: recoverable / all</span></div>
-    <div><kbd>1</kbd>–<kbd>9</kbd> <span class="label">switch monitor</span></div>
+    <div><kbd>Shift</kbd> + <kbd>1</kbd>–<kbd>9</kbd> <span class="label">switch monitor</span></div>
     <div><kbd>Tab</kbd> / <kbd>Arrow keys</kbd> <span class="label">enter and move through Review candidates</span></div>
     <div><kbd>Enter</kbd> / <kbd>Space</kbd> <span class="label">preview focused Review candidate</span></div>
     <div><kbd>←</kbd> / <kbd>→</kbd> <span class="label">switch candidates in Review preview</span></div>
@@ -474,11 +475,11 @@ cmd-shift-f = 'exec-and-forget wayper fav'</code></pre>
 <section>
   <h2>Requirements</h2>
   <ul class="req-list">
-    <li>Python 3.12+</li>
     <li><a href="https://wallhaven.cc/settings/account">Wallhaven API key</a></li>
     <li><strong>Linux:</strong> <a href="https://codeberg.org/LGFae/awww">awww</a>, plus <a href="https://hyprland.org/">Hyprland</a> or <a href="https://swaywm.org/">Sway</a></li>
-    <li><strong>macOS:</strong> Python 3.12+, Node.js</li>
-    <li><strong>Windows:</strong> Windows 10/11, Python 3.12+, Node.js</li>
+    <li><strong>macOS:</strong> nothing beyond the <code>.dmg</code></li>
+    <li><strong>Windows:</strong> Windows 10/11</li>
+    <li><strong>From source:</strong> Node.js 24+ and npm</li>
   </ul>
 </section>
 
