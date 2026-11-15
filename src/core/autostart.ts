@@ -162,17 +162,24 @@ function systemdQuote(arg: string): string {
   return `"${arg.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+const SYSTEMD_DESCRIPTION = "Description=Wayper wallpaper manager";
+// Stop by signalling only the app.  With systemd's default, every Chromium
+// helper is signalled at the same moment; the browser process then cannot
+// relaunch its GPU process, aborts, and holds the stop up for about a minute.
+const SYSTEMD_KILL_MODE = "KillMode=mixed";
+
 function buildSystemdService(args: readonly string[]): string {
   const execLine = args
     .map((arg, index) => (index < args.length - 1 || arg.includes(" ") ? systemdQuote(arg) : arg))
     .join(" ");
   return (
     "[Unit]\n" +
-    "Description=Wayper wallpaper manager\n" +
+    `${SYSTEMD_DESCRIPTION}\n` +
     "PartOf=graphical-session.target\n" +
     "After=graphical-session.target\n\n" +
     "[Service]\n" +
     "Type=simple\n" +
+    `${SYSTEMD_KILL_MODE}\n` +
     `ExecStart=${execLine}\n` +
     "Restart=on-failure\n" +
     "RestartSec=3\n\n" +
@@ -393,7 +400,31 @@ export function ensureDefaultAutostart(
   execCommand?: AutostartCommand,
   options?: AutostartOptions,
 ): void {
-  if (config.autostart && !getAutostartStatus(options).enabled) {
+  if (!config.autostart) return;
+  const status = getAutostartStatus(options);
+  if (!status.enabled) {
     setAutostart(config, true, execCommand, options);
+    return;
+  }
+  if ((options?.platform ?? process.platform) === "linux") {
+    upgradeSystemdService(status.unit, options?.systemctlRunner ?? defaultSystemctlRunner);
+  }
+}
+
+/** Adds the stop behavior to a unit written by a release that did not set it. */
+function upgradeSystemdService(unit: string, runSystemctl: (args: string[]) => void): void {
+  try {
+    const text = fs.readFileSync(unit, "utf8");
+    // Leave alone anything that is not ours or already chooses a kill mode.
+    if (!text.includes(SYSTEMD_DESCRIPTION) || /^KillMode=/m.test(text)) return;
+    if (!/^\[Service\]$/m.test(text)) return;
+    fs.writeFileSync(
+      unit,
+      text.replace(/^\[Service\]$/m, `[Service]\n${SYSTEMD_KILL_MODE}`),
+      "utf8",
+    );
+    runSystemctl(["daemon-reload"]);
+  } catch {
+    // Best effort: the app works without it, only stopping the service is slow.
   }
 }
