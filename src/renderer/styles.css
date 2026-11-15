@@ -34,6 +34,13 @@
 
   --shadow-float: 0 18px 50px -12px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.06);
   --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  /* A critically damped spring: quick to leave, no overshoot, soft to settle. */
+  --ease-spring: linear(
+    0, 0.0132 2%, 0.0721 5.1%, 0.1761 8.9%, 0.3073 13.1%, 0.4457 17.7%, 0.5755 22.7%,
+    0.6874 27.9%, 0.7779 33.5%, 0.8472 39.2%, 0.898 45.2%, 0.934 51.4%, 0.9585 57.8%,
+    0.9748 64.4%, 0.9853 71.2%, 0.992 78.2%, 0.9961 85.3%, 0.9985 92.6%, 1
+  );
+  --stage-move: 600ms var(--ease-spring);
 }
 
 *,
@@ -193,31 +200,39 @@ kbd.keycap-on-accent {
 
 /*
  * The displays, each in its own proportions.  The one being managed takes the
- * full stage height; the others sit beside it at half height, so a wide
- * display never outweighs a selected tall one.
+ * full stage height; the others sit beside it at half size, so a wide display
+ * never outweighs a selected tall one.
+ *
+ * Switching is one gesture: the row keeps its height, every display is laid
+ * out at full size and only moved and scaled, and the details follow on the
+ * same spring.  Nothing reflows, so the library below stays where it is.
  */
-.now-stage {
-  --stage-height: clamp(148px, 25vh, 236px);
+.stage-row {
+  position: relative;
+  flex-shrink: 0;
 }
 
 .stage-screen {
-  height: calc(var(--stage-height) * 0.5);
-  flex-shrink: 0;
+  position: absolute;
+  left: 0;
+  bottom: 0;
   padding: 0;
   border: 0;
-  border-radius: 9px;
+  border-radius: 14px;
   overflow: hidden;
   cursor: pointer;
   background: rgb(255 255 255 / 0.05);
+  /* Drawn at double weight: an inactive display is shown at half size. */
   box-shadow:
-    0 0 0 1px rgb(255 255 255 / 0.1),
-    0 18px 36px -20px rgb(0 0 0 / 0.9);
+    0 0 0 2px rgb(255 255 255 / 0.1),
+    0 36px 72px -40px rgb(0 0 0 / 0.9);
   opacity: 0.5;
+  transform-origin: 0 100%;
+  will-change: transform;
   transition:
-    height 380ms var(--ease-out-soft),
-    border-radius 380ms var(--ease-out-soft),
-    opacity 260ms var(--ease-out-soft),
-    box-shadow 260ms var(--ease-out-soft);
+    transform var(--stage-move),
+    opacity 320ms var(--ease-out-soft),
+    box-shadow 320ms var(--ease-out-soft);
   outline: none;
 }
 
@@ -226,18 +241,33 @@ kbd.keycap-on-accent {
 }
 
 .stage-screen[aria-pressed="true"] {
-  height: var(--stage-height);
-  border-radius: 14px;
   opacity: 1;
   box-shadow:
     0 0 0 1px rgb(255 255 255 / 0.16),
     0 36px 70px -26px rgb(0 0 0 / 0.95);
 }
 
+.stage-details {
+  will-change: transform;
+  transition: transform var(--stage-move);
+}
+
+/* Following the window is not a gesture: track a resize without easing. */
+.now-stage[data-resizing] .stage-screen,
+.now-stage[data-resizing] .stage-details {
+  transition-property: opacity, box-shadow;
+}
+
 .stage-screen:focus-visible {
   box-shadow:
+    0 0 0 4px rgb(255 255 255 / 0.85),
+    0 36px 72px -40px rgb(0 0 0 / 0.9);
+}
+
+.stage-screen[aria-pressed="true"]:focus-visible {
+  box-shadow:
     0 0 0 2px rgb(255 255 255 / 0.85),
-    0 30px 60px -28px rgb(0 0 0 / 0.9);
+    0 36px 70px -26px rgb(0 0 0 / 0.95);
 }
 
 /* The dock is the stage in compact form: it arrives once the stage scrolls away. */
@@ -345,6 +375,17 @@ kbd.keycap-on-accent {
 
 .fade-in {
   animation: wayper-fade-in 320ms var(--ease-out-soft) both;
+}
+
+/* A new library context replaces the previous cards in place. */
+.grid-enter {
+  animation: wayper-fade-in 300ms var(--ease-out-soft) backwards;
+  transition: opacity 180ms var(--ease-out-soft);
+}
+
+.grid-pending {
+  opacity: 0.4;
+  pointer-events: none;
 }
 
 /* Wallpaper tile: borderless, the image is the card. */

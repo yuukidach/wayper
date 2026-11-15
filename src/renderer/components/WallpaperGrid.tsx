@@ -96,6 +96,13 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
     const [allItems, setAllItems] = useState<ImageItem[]>([]);
     const [nextOffset, setNextOffset] = useState<number | null>(null);
     const [initialLoading, setInitialLoading] = useState<boolean>(true);
+    // What the grid is laid out for.  It trails the requested context until the
+    // new page arrives, so the previous cards stay in place instead of blinking
+    // out for a spinner.
+    const [shown, setShown] = useState<{ orientation: Orientation; epoch: number }>({
+      orientation,
+      epoch: 0,
+    });
     const [loadingMore, setLoadingMore] = useState<boolean>(false);
     const [focusedIndex, setFocusedIndex] = useState<number>(-1);
 
@@ -121,7 +128,10 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
       initialLoadingRef.current = true;
       setInitialLoading(true);
       setLoadingMore(false);
-      scrollRef.current?.scrollTo({ top: 0 });
+      const showContext = () => {
+        setShown((prev) => ({ orientation, epoch: prev.epoch + 1 }));
+        scrollRef.current?.scrollTo({ top: 0 });
+      };
       try {
         const page = await window.wayper.getImagesPage({
           mode,
@@ -133,6 +143,7 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
         if (seq !== contextSeqRef.current) return;
         setAllItems(page.items ?? []);
         setNextOffset(page.next_offset ?? null);
+        showContext();
         setFocusedIndex((prev) => {
           if (prev < 0) return -1;
           const len = (page.items ?? []).length;
@@ -143,6 +154,7 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
         if (seq === contextSeqRef.current) {
           setAllItems([]);
           setNextOffset(null);
+          showContext();
         }
       } finally {
         if (seq === contextSeqRef.current) {
@@ -585,11 +597,11 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
       void removeCard(item, kind);
     };
 
-    const isPortraitGrid = orientation === "portrait";
+    const isPortraitGrid = shown.orientation === "portrait";
 
     const placeholderHeight = header ? "min-h-[36vh]" : "min-h-[72vh]";
     let placeholder: React.ReactNode = null;
-    if (initialLoading) {
+    if (initialLoading && allItems.length === 0) {
       placeholder = (
         <div
           className={`flex ${placeholderHeight} items-center justify-center`}
@@ -643,19 +655,20 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
         {header}
         {placeholder}
         <div
+          key={shown.epoch}
           ref={gridRef}
           hidden={placeholder !== null}
-          className={
+          className={`grid-enter grid gap-3 ${initialLoading ? "grid-pending" : ""} ${
             isPortraitGrid
-              ? "grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-3"
-              : "grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3"
-          }
+              ? "grid-cols-[repeat(auto-fill,minmax(190px,1fr))]"
+              : "grid-cols-[repeat(auto-fill,minmax(280px,1fr))]"
+          }`}
         >
           {filteredItems.map((item, idx) => {
             const isCurrent = activeImagePath === item.path;
             const isFocused = focusedIndex === idx;
             const aspectClass =
-              (item.orientation ?? orientation) === "portrait"
+              (item.orientation ?? shown.orientation) === "portrait"
                 ? "aspect-[10/16]"
                 : "aspect-[16/10]";
 

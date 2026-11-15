@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   Heart,
   Monitor,
@@ -11,7 +11,7 @@ import {
   Undo2,
 } from "lucide-react";
 import type { ConfigPayload, MonitorInfo, StatusResponse } from "../../shared/types";
-import { previewUrl, thumbUrl } from "../lib/media";
+import { previewUrl } from "../lib/media";
 
 interface NowStageProps {
   t: (key: string) => string;
@@ -32,14 +32,50 @@ interface NowStageProps {
 const ROUND_BUTTON =
   "flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/[0.07] text-ink-2 transition-colors hover:bg-white/[0.14] hover:text-ink";
 
+const STAGE_GAP = 16;
+const INACTIVE_SCALE = 0.5;
+const DETAILS_GAP = 40;
+const DETAILS_MIN_WIDTH = 300;
+const PAGE_GUTTERS = 48;
+
 function aspectOf(monitor: MonitorInfo): number {
   if (monitor.width && monitor.height) return monitor.width / monitor.height;
   return monitor.orientation === "portrait" ? 9 / 16 : 16 / 9;
 }
 
+/** The window size, and whether it is being resized right now. */
+function useViewport(): { width: number; height: number; resizing: boolean } {
+  const [viewport, setViewport] = useState(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+    resizing: false,
+  }));
+  useEffect(() => {
+    let settle: number | undefined;
+    const update = () => {
+      setViewport({ width: window.innerWidth, height: window.innerHeight, resizing: true });
+      window.clearTimeout(settle);
+      settle = window.setTimeout(
+        () => setViewport((prev) => ({ ...prev, resizing: false })),
+        160,
+      );
+    };
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.clearTimeout(settle);
+    };
+  }, []);
+  return viewport;
+}
+
 /**
  * The displays as they are right now, each in its own proportions.  Picking a
  * display switches the library below to its orientation.
+ *
+ * Geometry is worked out here in whole pixels rather than left to layout, so a
+ * switch only changes transforms: the row never changes size and the details
+ * beside it slide instead of reflowing.
  */
 export const NowStage: React.FC<NowStageProps> = ({
   t,
@@ -56,8 +92,28 @@ export const NowStage: React.FC<NowStageProps> = ({
   onFavorite,
   onDislike,
 }) => {
+  const viewport = useViewport();
   const active = monitors.find((monitor) => monitor.name === activeMonitorName) ?? monitors[0];
   if (!active) return null;
+
+  const shown = monitors.slice(0, 9);
+  const activeIndex = shown.findIndex((monitor) => monitor.name === active.name);
+  const stageHeight = Math.min(236, Math.max(148, Math.round(viewport.height * 0.25)));
+  const widths = shown.map((monitor) => Math.round(stageHeight * aspectOf(monitor)));
+  const rowWidthFor = (selected: number): number =>
+    widths.reduce(
+      (sum, width, index) => sum + (index === selected ? width : width * INACTIVE_SCALE),
+      STAGE_GAP * (shown.length - 1),
+    );
+  // Room for the widest arrangement, so choosing another display never resizes the row.
+  const slotWidth = Math.ceil(Math.max(...widths.map((_, index) => rowWidthFor(index))));
+  const stacked = viewport.width < slotWidth + DETAILS_GAP + DETAILS_MIN_WIDTH + PAGE_GUTTERS;
+  const detailsShift = stacked ? 0 : Math.round(rowWidthFor(activeIndex) - slotWidth);
+  const offsets: number[] = [];
+  widths.reduce((offset, width, index) => {
+    offsets.push(offset);
+    return offset + (index === activeIndex ? width : width * INACTIVE_SCALE) + STAGE_GAP;
+  }, 0);
 
   const rotationPaused = Boolean(status?.rotation_paused);
   const rotationOff =
@@ -76,10 +132,15 @@ export const NowStage: React.FC<NowStageProps> = ({
   const hasImage = Boolean(active.current_image);
 
   return (
-    <section className="now-stage flex flex-wrap items-end gap-x-10 gap-y-6 pt-4 pb-9">
-      <div className="flex items-end gap-4">
-        {monitors.slice(0, 9).map((monitor, index) => {
-          const isActive = monitor.name === active.name;
+    <section
+      className={`now-stage flex pt-4 pb-9 ${
+        stacked ? "flex-col items-start gap-6" : "items-end gap-10"
+      }`}
+      data-resizing={viewport.resizing ? "true" : undefined}
+    >
+      <div className="stage-row" style={{ width: slotWidth, height: stageHeight }}>
+        {shown.map((monitor, index) => {
+          const isActive = index === activeIndex;
           const resolution =
             monitor.width && monitor.height
               ? `${monitor.width} × ${monitor.height}`
@@ -96,13 +157,17 @@ export const NowStage: React.FC<NowStageProps> = ({
               }
               aria-label={monitor.name}
               aria-pressed={isActive}
-              style={{ aspectRatio: String(aspectOf(monitor)) }}
+              style={{
+                width: widths[index],
+                height: stageHeight,
+                transform: `translate3d(${offsets[index]}px, 0, 0) scale(${isActive ? 1 : INACTIVE_SCALE})`,
+              }}
               className="stage-screen"
             >
               {monitor.current_image ? (
                 <img
                   key={monitor.current_image}
-                  src={isActive ? previewUrl(monitor.current_image) : thumbUrl(monitor.current_image)}
+                  src={previewUrl(monitor.current_image)}
                   alt=""
                   className="fade-in h-full w-full object-cover"
                   decoding="async"
@@ -118,8 +183,11 @@ export const NowStage: React.FC<NowStageProps> = ({
         })}
       </div>
 
-      <div className="flex min-w-[300px] flex-1 flex-col gap-5 pb-0.5">
-        <div>
+      <div
+        className="stage-details flex min-w-0 flex-1 flex-col gap-5 pb-0.5"
+        style={{ transform: `translate3d(${detailsShift}px, 0, 0)` }}
+      >
+        <div key={active.name} className="fade-in">
           <h1 className="m-0 text-[22px] leading-none font-semibold tracking-[-0.03em] text-ink">
             {active.name}
           </h1>
