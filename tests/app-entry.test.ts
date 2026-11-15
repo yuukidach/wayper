@@ -87,7 +87,8 @@ describe.skipIf(electronBinary === null)("app binary used as the CLI", () => {
     const version = wayperApp("--version");
     expect(version.signal).toBeNull();
     expect(version.code).toBe(0);
-    expect(version.stdout).toMatch(/^wayper, version \d+\.\d+\.\d+/);
+    // On Windows the desktop runtime writes a blank line before the CLI starts.
+    expect(version.stdout.trimStart()).toMatch(/^wayper, version \d+\.\d+\.\d+/);
 
     const autostart = wayperApp("--json", "autostart");
     expect(autostart.code).toBe(0);

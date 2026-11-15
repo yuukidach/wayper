@@ -84,7 +84,11 @@ describe("wayper CLI", () => {
   it("reports failures as JSON errors with a non-zero exit code", () => {
     const next = wayper("--json", "next");
     expect(next.code).toBe(1);
-    expect(JSON.parse(next.stdout)).toEqual({ error: "No monitor config found" });
+    // CI runners without a compositor report no monitors; macOS runners have a
+    // display, so there the empty library is what stops the command.
+    expect(JSON.parse(next.stdout)).toEqual({
+      error: expect.stringMatching(/^(No monitor config found|No images available)$/),
+    });
 
     const score = wayper("--json", "model", "score", "--tags", "anime");
     expect(score.code).toBe(1);
