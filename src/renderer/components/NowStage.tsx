@@ -38,8 +38,8 @@ function aspectOf(monitor: MonitorInfo): number {
 }
 
 /**
- * The displays as they are right now, drawn to scale.  Picking a display
- * switches the library below to its orientation.
+ * The displays as they are right now, each in its own proportions.  Picking a
+ * display switches the library below to its orientation.
  */
 export const NowStage: React.FC<NowStageProps> = ({
   t,
@@ -124,9 +124,10 @@ export const NowStage: React.FC<NowStageProps> = ({
             {active.name}
           </h1>
           <p className="m-0 mt-2 text-[13px] tabular-nums text-ink-2">
-            {active.width && active.height
-              ? `${active.width} × ${active.height}`
-              : t(active.orientation)}
+            {t(active.orientation === "portrait" ? "Portrait" : "Landscape")}
+            {active.width && active.height ? (
+              <span className="ml-2.5 text-ink-3">{`${active.width} × ${active.height}`}</span>
+            ) : null}
             {!hasImage && <span className="ml-3 text-ink-3">{t("Nothing showing yet")}</span>}
           </p>
         </div>

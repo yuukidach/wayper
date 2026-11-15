@@ -191,40 +191,44 @@ kbd.keycap-on-accent {
   );
 }
 
-/* A display, drawn to scale.  The one being managed stands forward. */
+/*
+ * The displays, each in its own proportions.  The one being managed takes the
+ * full stage height; the others sit beside it at half height, so a wide
+ * display never outweighs a selected tall one.
+ */
 .now-stage {
   --stage-height: clamp(148px, 25vh, 236px);
 }
 
 .stage-screen {
-  height: var(--stage-height);
+  height: calc(var(--stage-height) * 0.5);
   flex-shrink: 0;
   padding: 0;
   border: 0;
-  border-radius: 14px;
+  border-radius: 9px;
   overflow: hidden;
   cursor: pointer;
   background: rgb(255 255 255 / 0.05);
   box-shadow:
     0 0 0 1px rgb(255 255 255 / 0.1),
-    0 30px 60px -28px rgb(0 0 0 / 0.9);
-  opacity: 0.45;
-  transform: scale(0.9);
-  transform-origin: bottom center;
+    0 18px 36px -20px rgb(0 0 0 / 0.9);
+  opacity: 0.5;
   transition:
+    height 380ms var(--ease-out-soft),
+    border-radius 380ms var(--ease-out-soft),
     opacity 260ms var(--ease-out-soft),
-    transform 380ms var(--ease-out-soft),
     box-shadow 260ms var(--ease-out-soft);
   outline: none;
 }
 
 .stage-screen:hover {
-  opacity: 0.8;
+  opacity: 0.85;
 }
 
 .stage-screen[aria-pressed="true"] {
+  height: var(--stage-height);
+  border-radius: 14px;
   opacity: 1;
-  transform: none;
   box-shadow:
     0 0 0 1px rgb(255 255 255 / 0.16),
     0 36px 70px -26px rgb(0 0 0 / 0.95);

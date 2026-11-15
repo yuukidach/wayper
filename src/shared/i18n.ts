@@ -76,6 +76,8 @@ const ZH_STRINGS: Record<string, string> = {
   "Settings": "设置",
   "landscape": "横屏",
   "portrait": "竖屏",
+  "Landscape": "横屏",
+  "Portrait": "竖屏",
   "Active": "已应用",
   "Empty": "空闲",
 
