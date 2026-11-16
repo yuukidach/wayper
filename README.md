@@ -119,6 +119,7 @@ If the window loses its backend connection, launch Wayper again. The existing ap
 | `Enter` / `Space` | Preview (lightbox) | Arrow keys | Navigate grid |
 | `[` / `]` | Blocklist: previous / next tab | `Shift`+`1`–`9` | Switch monitor |
 | `g` | Locate current wallpaper | `gg` / `G` | Jump to first / last |
+| `F4` | Open view options (purity, filter strategy, storage) | | |
 
 **Review:**
 

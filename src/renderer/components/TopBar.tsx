@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   AtSign,
@@ -24,6 +24,10 @@ interface SuggestionEntry {
   kind: "uploader" | "tag";
   value: string;
   label: string;
+}
+
+export interface TopBarHandle {
+  toggleViewOptions: () => void;
 }
 
 interface TopBarProps {
@@ -74,36 +78,39 @@ function formatStorage(megabytes: number): string {
   return `${Math.round(megabytes)} MB`;
 }
 
-export const TopBar: React.FC<TopBarProps> = ({
-  t,
-  view,
-  immersive,
-  mode,
-  onSelectMode,
-  onToggleSettings,
-  status,
-  heldCount,
-  recommendedCount,
-  filterStrategy,
-  onChangeFilterStrategy,
-  purities,
-  shakingPurity,
-  purityHint,
-  onTogglePurity,
-  config,
-  diskUsage,
-  updateInfo,
-  onOpenUpdate,
-  searchInputRef,
-  searchQuery,
-  activeFilterLabel,
-  matchCount,
-  isSearching,
-  onCommitSearch,
-  onSelectUploader,
-  onSelectTag,
-  onClearSearch,
-}) => {
+export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
+  {
+    t,
+    view,
+    immersive,
+    mode,
+    onSelectMode,
+    onToggleSettings,
+    status,
+    heldCount,
+    recommendedCount,
+    filterStrategy,
+    onChangeFilterStrategy,
+    purities,
+    shakingPurity,
+    purityHint,
+    onTogglePurity,
+    config,
+    diskUsage,
+    updateInfo,
+    onOpenUpdate,
+    searchInputRef,
+    searchQuery,
+    activeFilterLabel,
+    matchCount,
+    isSearching,
+    onCommitSearch,
+    onSelectUploader,
+    onSelectTag,
+    onClearSearch,
+  },
+  ref,
+) {
   const [draft, setDraft] = useState(searchQuery);
   const [openDropdown, setOpenDropdown] = useState(false);
   const [suggestions, setSuggestions] = useState<SuggestionEntry[]>([]);
@@ -246,6 +253,12 @@ export const TopBar: React.FC<TopBarProps> = ({
   const [filtersOpen, setFiltersOpen] = useState(false);
   const filtersRef = useRef<HTMLDivElement | null>(null);
 
+  useImperativeHandle(
+    ref,
+    () => ({ toggleViewOptions: () => setFiltersOpen((open) => !open) }),
+    [],
+  );
+
   useEffect(() => {
     if (purityHint) setFiltersOpen(true);
   }, [purityHint]);
@@ -308,7 +321,8 @@ export const TopBar: React.FC<TopBarProps> = ({
         <i />
         <b />
       </div>
-      <div className="pointer-events-auto relative flex h-full items-center gap-3 px-6 min-[1000px]:grid min-[1000px]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+      <div className="pointer-events-auto relative grid h-full grid-cols-[1fr_minmax(150px,380px)_1fr] items-center gap-4 px-6">
+        <div className="flex items-center gap-3.5 justify-self-start">
         <img
           src={appIcon}
           alt="Wayper"
@@ -360,24 +374,9 @@ export const TopBar: React.FC<TopBarProps> = ({
           })}
         </nav>
 
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
-        {updateInfo?.update_available && (
-          <button
-            type="button"
-            onClick={onOpenUpdate}
-            title={`${t("Update available")}${updateInfo.latest_version ? ` (${updateInfo.latest_version})` : ""}`}
-            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-white/[0.08] px-2.5 text-[12px] font-medium text-ink transition-colors hover:bg-white/[0.14] max-[900px]:hidden"
-          >
-            <ArrowDownToLine className="h-3.5 w-3.5" strokeWidth={1.75} />
-            <span className="tabular-nums">
-              {updateInfo.latest_version
-                ? `v${updateInfo.latest_version.replace(/^v/, "")}`
-                : t("Update available")}
-            </span>
-          </button>
-        )}
+        </div>
 
-      <div ref={wrapperRef} className="relative w-[260px] min-w-[132px] shrink">
+      <div ref={wrapperRef} className="relative min-w-0">
         <div className="group flex h-8 items-center gap-2 rounded-full bg-white/[0.06] px-3 transition-colors hover:bg-white/[0.075] focus-within:bg-white/[0.09] focus-within:shadow-[0_0_0_1px_rgb(255_255_255/0.22)]">
           <Search className="h-3.5 w-3.5 shrink-0 text-ink-3 transition-colors group-focus-within:text-ink-2" />
           <input
@@ -429,7 +428,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         {openDropdown && suggestions.length > 0 && (
           <div
             role="listbox"
-            className="absolute top-[calc(100%+6px)] right-0 z-40 max-h-[380px] w-[320px] max-w-[80vw] overflow-y-auto glass rounded-2xl p-1.5"
+            className="absolute top-[calc(100%+6px)] left-1/2 z-40 max-h-[380px] w-full min-w-[300px] -translate-x-1/2 overflow-y-auto glass rounded-2xl p-1.5"
           >
             {suggestions.map((entry, idx) => {
               const isSelected = idx === activeIndex;
@@ -463,11 +462,28 @@ export const TopBar: React.FC<TopBarProps> = ({
         )}
       </div>
 
+        <div className="flex items-center gap-1 justify-self-end">
+        {updateInfo?.update_available && (
+          <button
+            type="button"
+            onClick={onOpenUpdate}
+            title={`${t("Update available")}${updateInfo.latest_version ? ` (${updateInfo.latest_version})` : ""}`}
+            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-white/[0.08] mr-1.5 px-2.5 text-[12px] font-medium text-ink transition-colors hover:bg-white/[0.14] max-[900px]:hidden"
+          >
+            <ArrowDownToLine className="h-3.5 w-3.5" strokeWidth={1.75} />
+            <span className="tabular-nums">
+              {updateInfo.latest_version
+                ? `v${updateInfo.latest_version.replace(/^v/, "")}`
+                : t("Update available")}
+            </span>
+          </button>
+        )}
+
         <div ref={filtersRef} className="relative shrink-0">
           <button
             type="button"
             onClick={() => setFiltersOpen((open) => !open)}
-            title={t("View options")}
+            title={`${t("View options")} [F4]`}
             aria-label={t("View options")}
             aria-expanded={filtersOpen}
             className={`flex h-8 shrink-0 items-center gap-2 rounded-full pr-2.5 pl-2.5 text-ink-2 transition-colors hover:bg-white/[0.08] hover:text-ink ${
@@ -498,7 +514,16 @@ export const TopBar: React.FC<TopBarProps> = ({
                 className="glass absolute top-[calc(100%+8px)] right-0 z-40 flex w-[288px] flex-col gap-4 rounded-2xl p-4"
               >
                 <div>
-                  <div className="mb-2 text-[12.5px] text-ink-3">{t("Purity")}</div>
+                  <div className="mb-2 flex items-center justify-between text-[12.5px] text-ink-3">
+                    <span>{t("Purity")}</span>
+                    <span className="flex items-center gap-1" aria-hidden="true">
+                      {purityItems.map((p) => (
+                        <kbd key={p.value} className="keycap">
+                          {p.kbd}
+                        </kbd>
+                      ))}
+                    </span>
+                  </div>
                   <div className="grid grid-cols-3 gap-1.5">
                     {purityItems.map((p) => {
                       const active = purities.includes(p.value);
@@ -598,4 +623,4 @@ export const TopBar: React.FC<TopBarProps> = ({
       </div>
     </header>
   );
-};
+});

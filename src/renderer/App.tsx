@@ -19,7 +19,7 @@ import { NowDock } from "./components/NowDock";
 import { NowStage } from "./components/NowStage";
 import { useAmbient } from "./lib/ambient";
 import { thumbUrl } from "./lib/media";
-import { TopBar } from "./components/TopBar";
+import { TopBar, type TopBarHandle } from "./components/TopBar";
 import { WallpaperGrid, type WallpaperGridHandle } from "./components/WallpaperGrid";
 import {
   ReviewWorkspace,
@@ -98,6 +98,7 @@ export const App: React.FC = () => {
   const gridRef = useRef<WallpaperGridHandle | null>(null);
   const reviewRef = useRef<ReviewWorkspaceHandle | null>(null);
   const blocklistRef = useRef<BlocklistWorkspaceHandle | null>(null);
+  const topBarRef = useRef<TopBarHandle | null>(null);
   const searchSeqRef = useRef(0);
   const pendingGRef = useRef<number | null>(null);
   const purityHintTimerRef = useRef<number | null>(null);
@@ -725,6 +726,11 @@ export const App: React.FC = () => {
         void handleTogglePurity("nsfw");
         return;
       }
+      if (e.key === "F4") {
+        e.preventDefault();
+        topBarRef.current?.toggleViewOptions();
+        return;
+      }
 
       const digit = /^Digit([1-9])$/.exec(e.code)?.[1];
       if (digit && e.shiftKey) {
@@ -1002,6 +1008,7 @@ export const App: React.FC = () => {
       </div>
 
       <TopBar
+        ref={topBarRef}
         t={t}
         view={view}
         immersive={mode === "model-review"}
@@ -1092,6 +1099,11 @@ export const App: React.FC = () => {
                 refreshToken={refreshToken}
                 onRefreshConfigAndStatus={async () => {
                   await Promise.all([refreshConfig(), refreshStatusAndCounts()]);
+                }}
+                onManageRules={() => {
+                  setSettingsTab("filters");
+                  setPreviewLang(null);
+                  setView("settings");
                 }}
                 onOpenTrashLightbox={(item, list) => {
                   const idx = Math.max(

@@ -11,6 +11,7 @@ import { motion } from "motion/react";
 import {
   ArrowLeft,
   Check,
+  ChevronRight,
   ExternalLink,
   Loader2,
   Plus,
@@ -71,13 +72,14 @@ interface BlocklistWorkspaceProps {
   onOpenTrashLightbox: (item: ImageItem, list: ImageItem[]) => void;
   onOpenLibraryLightbox: (item: ImageItem, list: ImageItem[]) => void;
   onOpenWallhaven: (filenameOrPath: string) => void;
+  onManageRules: () => void;
   onNotify: (text: string, tone?: "info" | "success" | "error") => void;
 }
 
 const BLOCKED_BATCH_SIZE = 100;
 const TRASH_BATCH_SIZE = 60;
 const RULE_ROWS_PER_COLUMN = 10;
-const RULE_SKELETON_WIDTHS = [94, 81, 70, 62, 53, 45, 39, 33];
+const RULE_SKELETON_WIDTHS = [58, 44, 66, 38, 52, 47, 34, 41];
 
 type RuleType = "tag" | "combo" | "uploader";
 
@@ -91,104 +93,122 @@ interface RuleRow {
   applied: boolean;
 }
 
-interface RuleColumnProps {
+interface RuleTableProps {
   title: string;
   rows: RuleRow[];
   loading: boolean;
-  pendingKey: string | null;
+  blockedLabel: string;
+  keptLabel: string;
   excludeLabel: string;
-  removeLabel: string;
+  undoLabel: string;
   onOpen: (row: RuleRow) => void;
   onToggle: (row: RuleRow) => void;
 }
 
+const RuleName: React.FC<{ row: RuleRow }> = ({ row }) =>
+  row.type === "uploader" ? (
+    <>
+      <span className="text-ink-3">@</span>
+      {row.tags[0]}
+    </>
+  ) : (
+    <>
+      {row.tags.map((tag, index) => (
+        <React.Fragment key={`${tag}-${index}`}>
+          {index > 0 && <span className="mx-1.5 text-ink-3">+</span>}
+          {tag}
+        </React.Fragment>
+      ))}
+    </>
+  );
+
 /**
- * A ranked list: the bar behind each rule shows how many blocked wallpapers
- * carry it, and the pale end is how many wallpapers with it were kept.
+ * One kind of rule as a small table.  The column headings say what the two
+ * numbers are, the order is the ranking, and the action is always in view.
  */
-const RuleColumn: React.FC<RuleColumnProps> = ({
+const RuleTable: React.FC<RuleTableProps> = ({
   title,
   rows,
   loading,
-  pendingKey,
+  blockedLabel,
+  keptLabel,
   excludeLabel,
-  removeLabel,
+  undoLabel,
   onOpen,
   onToggle,
-}) => {
-  const peak = rows.reduce((max, row) => Math.max(max, row.banned + row.kept), 1);
-  return (
-    <div className="min-w-0">
-      <h3 className="m-0 mb-1.5 px-3 text-[12.5px] font-medium text-ink-3">{title}</h3>
-      {loading ? (
-        <ul className="m-0 list-none p-0" aria-hidden="true">
-          {RULE_SKELETON_WIDTHS.map((width) => (
-            <li key={width} className="flex h-[34px] items-center">
-              <span
-                className="h-7 animate-pulse rounded-md bg-white/[0.045]"
-                style={{ width: `${width}%` }}
-              />
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <ul className="m-0 list-none p-0">
-          {rows.map((row) => {
-            const share = Math.max(4, ((row.banned + row.kept) / peak) * 100);
-            return (
-              <li key={row.key} className="group/rule relative">
-                <button
-                  type="button"
-                  onClick={() => onOpen(row)}
-                  title={row.label}
-                  className="relative flex h-[34px] w-full items-center gap-3 rounded-lg px-3 text-left outline-none transition-colors hover:bg-white/[0.045] focus-visible:bg-white/[0.07]"
-                >
-                  <span aria-hidden="true" className="absolute inset-y-[3px] right-[76px] left-0">
-                    <span
-                      className={`flex h-full gap-px overflow-hidden rounded-md transition-opacity ${
-                        row.applied ? "opacity-40" : ""
-                      }`}
-                      style={{ width: `${share}%` }}
-                    >
-                      <span className="bg-white/[0.075]" style={{ flexGrow: row.banned }} />
-                      <span className="bg-keep/55" style={{ flexGrow: row.kept }} />
-                    </span>
-                  </span>
-                  <span
-                    className={`relative flex min-w-0 flex-1 items-center gap-1.5 text-[13px] ${
-                      row.applied ? "text-ink-3" : "text-ink"
-                    }`}
-                  >
-                    {row.applied && (
-                      <Check className="h-3.5 w-3.5 shrink-0 text-keep" strokeWidth={2.25} />
-                    )}
-                    <span className="truncate">{row.label}</span>
-                  </span>
-                  <span className="relative flex w-[64px] shrink-0 items-baseline justify-end gap-2 text-[12.5px] tabular-nums transition-opacity duration-100 group-focus-within/rule:opacity-0 group-hover/rule:opacity-0">
-                    <span className={row.applied ? "text-ink-3" : "text-ink-2"}>{row.banned}</span>
-                    <span className="min-w-[22px] text-right text-ink-3">{row.kept}</span>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  disabled={pendingKey === row.key}
-                  onClick={() => onToggle(row)}
-                  className={`absolute top-1/2 right-1.5 inline-flex h-6 -translate-y-1/2 items-center rounded-full px-2.5 text-[12px] font-medium opacity-0 transition-[opacity,background-color,color] duration-100 group-focus-within/rule:opacity-100 group-hover/rule:opacity-100 disabled:opacity-50 ${
-                    row.applied
-                      ? "bg-white/[0.1] text-ink-2 hover:bg-white/[0.16] hover:text-ink"
-                      : "bg-accent text-on-accent hover:bg-accent-hi"
-                  }`}
-                >
-                  {row.applied ? removeLabel : excludeLabel}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+}) => (
+  <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto_auto] content-start gap-x-4">
+    <div className="col-span-4 grid h-[32px] grid-cols-subgrid items-center px-3 text-[12px] text-ink-3 shadow-[inset_0_-1px_0_var(--color-line)]">
+      <h3 className="m-0 text-[12px] font-medium text-ink-2">{title}</h3>
+      <span className="text-right">{blockedLabel}</span>
+      <span className="text-right">{keptLabel}</span>
+      {/* Holds the action column at its final width while the rows load. */}
+      <span aria-hidden="true" className="invisible px-[10px] font-medium whitespace-nowrap">
+        {excludeLabel}
+      </span>
     </div>
-  );
-};
+    {loading ? (
+      <ul className="col-span-4 m-0 list-none p-0 pt-1" aria-hidden="true">
+        {RULE_SKELETON_WIDTHS.map((width) => (
+          <li key={width} className="flex h-[36px] items-center px-3">
+            <span
+              className="h-2.5 animate-pulse rounded-full bg-white/[0.07]"
+              style={{ width: `${width}%` }}
+            />
+          </li>
+        ))}
+      </ul>
+    ) : (
+      <ul className="col-span-4 m-0 grid list-none grid-cols-subgrid p-0 pt-1">
+        {rows.map((row) => (
+          <li
+            key={row.key}
+            className="group/rule col-span-4 grid h-[36px] grid-cols-subgrid items-center rounded-lg px-3 transition-colors hover:bg-white/[0.05] has-[:focus-visible]:bg-white/[0.05]"
+          >
+            <button
+              type="button"
+              onClick={() => onOpen(row)}
+              title={row.label}
+              className="col-span-3 grid h-full grid-cols-subgrid items-center rounded-md text-left outline-offset-0"
+            >
+              <span
+                className={`flex min-w-0 items-center gap-1.5 text-[13.5px] ${
+                  row.applied ? "text-ink-3" : "text-ink"
+                }`}
+              >
+                {row.applied && (
+                  <Check className="h-3.5 w-3.5 shrink-0 text-keep" strokeWidth={2.25} />
+                )}
+                <span className="truncate">
+                  <RuleName row={row} />
+                </span>
+              </span>
+              <span
+                className={`text-right text-[13px] tabular-nums ${
+                  row.applied ? "text-ink-3" : "text-ink"
+                }`}
+              >
+                {row.banned}
+              </span>
+              <span className="text-right text-[13px] tabular-nums text-ink-3">{row.kept}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onToggle(row)}
+              className={`inline-flex h-[24px] items-center justify-self-end rounded-full px-[10px] text-[12px] font-medium whitespace-nowrap transition-colors duration-100 ${
+                row.applied
+                  ? "text-ink-3 hover:bg-white/[0.1] hover:text-ink"
+                  : "bg-white/[0.06] text-ink-2 group-hover/rule:bg-white/[0.13] group-hover/rule:text-ink hover:!bg-accent hover:!text-on-accent"
+              }`}
+            >
+              {row.applied ? undoLabel : excludeLabel}
+            </button>
+          </li>
+        ))}
+      </ul>
+    )}
+  </div>
+);
 
 export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, BlocklistWorkspaceProps>(
   (
@@ -203,6 +223,7 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
       onOpenTrashLightbox,
       onOpenLibraryLightbox,
       onOpenWallhaven,
+      onManageRules,
       onNotify,
     },
     ref,
@@ -215,7 +236,9 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
     const [visibleTrashCount, setVisibleTrashCount] = useState(TRASH_BATCH_SIZE);
     const [suggestionsLoaded, setSuggestionsLoaded] = useState(false);
     const [suggestionsStale, setSuggestionsStale] = useState(true);
-    const [pendingRuleKey, setPendingRuleKey] = useState<string | null>(null);
+    // A toggled rule shows its new state at once; the saved config confirms it.
+    const [ruleOverrides, setRuleOverrides] = useState<Record<string, boolean>>({});
+    const savingRulesRef = useRef<Set<string>>(new Set());
     const suggestionSeqRef = useRef(0);
 
     const [trashPermissionIssue, setTrashPermissionIssue] = useState<{
@@ -446,37 +469,59 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
       };
     }, [drilldown, purities, orientation]);
 
+    // Rule edits run one at a time against the lists as last written, so two
+    // quick clicks cannot overwrite each other with a stale config.
+    const ruleListsRef = useRef<ExclusionRulesState>(rulesState);
+    const ruleQueueRef = useRef<Promise<void>>(Promise.resolve());
+    const queuedRuleEditsRef = useRef(0);
+    useEffect(() => {
+      if (queuedRuleEditsRef.current === 0) ruleListsRef.current = rulesState;
+    }, [rulesState]);
+
     const applyExclusionMutation = async (
       type: "tag" | "combo" | "uploader",
       tags: string[],
       action: "add" | "remove",
     ) => {
       if (!config || tags.length === 0) return;
-      const wh = config.wallhaven;
-      if (type === "uploader") {
-        const target = tags[0].replace(/^@/, "").trim();
-        const nextUploaders =
-          action === "add"
-            ? dedupeStringsCaseInsensitive([...(wh.exclude_uploaders ?? []), target])
-            : (wh.exclude_uploaders ?? []).filter((u) => casefold(u) !== casefold(target));
-        await window.wayper.patchConfig({ wallhaven: { exclude_uploaders: nextUploaders } });
-      } else if (type === "combo" || tags.length >= 2) {
-        const targetKey = comboIdentityKey(tags);
-        const nextCombos =
-          action === "add"
-            ? dedupeCombos([...(wh.exclude_combos ?? []), tags], { dropSupersets: true })
-            : (wh.exclude_combos ?? []).filter((c) => comboIdentityKey(c) !== targetKey);
-        await window.wayper.patchConfig({ wallhaven: { exclude_combos: nextCombos } });
-      } else {
-        const norm = normalizeTag(tags[0]);
-        const nextTags =
-          action === "add"
-            ? dedupeTagsNormalized([...(wh.exclude_tags ?? []), norm])
-            : (wh.exclude_tags ?? []).filter((x) => normalizeTag(x) !== norm);
-        await window.wayper.patchConfig({ wallhaven: { exclude_tags: nextTags } });
+      const edit = async () => {
+        const lists = ruleListsRef.current;
+        if (type === "uploader") {
+          const target = tags[0].replace(/^@/, "").trim();
+          const nextUploaders =
+            action === "add"
+              ? dedupeStringsCaseInsensitive([...lists.excludeUploaders, target])
+              : lists.excludeUploaders.filter((u) => casefold(u) !== casefold(target));
+          await window.wayper.patchConfig({ wallhaven: { exclude_uploaders: nextUploaders } });
+          ruleListsRef.current = { ...lists, excludeUploaders: nextUploaders };
+        } else if (type === "combo" || tags.length >= 2) {
+          const targetKey = comboIdentityKey(tags);
+          const nextCombos =
+            action === "add"
+              ? dedupeCombos([...lists.excludeCombos, tags], { dropSupersets: true })
+              : lists.excludeCombos.filter((c) => comboIdentityKey(c) !== targetKey);
+          await window.wayper.patchConfig({ wallhaven: { exclude_combos: nextCombos } });
+          ruleListsRef.current = { ...lists, excludeCombos: nextCombos };
+        } else {
+          const norm = normalizeTag(tags[0]);
+          const nextTags =
+            action === "add"
+              ? dedupeTagsNormalized([...lists.excludeTags, norm])
+              : lists.excludeTags.filter((x) => normalizeTag(x) !== norm);
+          await window.wayper.patchConfig({ wallhaven: { exclude_tags: nextTags } });
+          ruleListsRef.current = { ...lists, excludeTags: nextTags };
+        }
+        await onRefreshConfigAndStatus();
+        setSuggestionsStale(true);
+      };
+      queuedRuleEditsRef.current += 1;
+      const task = ruleQueueRef.current.then(edit);
+      ruleQueueRef.current = task.catch(() => undefined);
+      try {
+        await task;
+      } finally {
+        queuedRuleEditsRef.current -= 1;
       }
-      await onRefreshConfigAndStatus();
-      setSuggestionsStale(true);
     };
 
     const handleTrashThumbError = async (filename: string) => {
@@ -596,7 +641,8 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
       tags: [item.tag],
       banned: item.banned,
       kept: item.kept + item.favorites,
-      applied: isRuleApplied(rulesState, "tag", [item.tag]),
+      applied:
+        ruleOverrides[`tag-${item.tag}`] ?? isRuleApplied(rulesState, "tag", [item.tag]),
     }));
     const comboRows: RuleRow[] = comboSuggestions.map((item) => ({
       key: `combo-${comboIdentityKey(item.tags)}`,
@@ -605,7 +651,9 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
       tags: [...item.tags],
       banned: item.banned,
       kept: item.kept + item.favorites,
-      applied: isRuleApplied(rulesState, "combo", item.tags),
+      applied:
+        ruleOverrides[`combo-${comboIdentityKey(item.tags)}`] ??
+        isRuleApplied(rulesState, "combo", item.tags),
     }));
     const uploaderRows: RuleRow[] = uploaderSuggestions.map((item) => ({
       key: `uploader-${item.uploader}`,
@@ -614,13 +662,19 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
       tags: [item.uploader],
       banned: item.ban_count,
       kept: item.kept_count + item.fav_count,
-      applied: isRuleApplied(rulesState, "uploader", [item.uploader]),
+      applied:
+        ruleOverrides[`uploader-${item.uploader}`] ??
+        isRuleApplied(rulesState, "uploader", [item.uploader]),
     }));
     const ruleColumns: Array<[string, RuleRow[]]> = [
       [t("Tags"), tagRows],
-      [t("Combos"), comboRows],
+      [t("Tag combos"), comboRows],
       [t("Uploaders"), uploaderRows],
     ];
+    const activeRuleCount =
+      rulesState.excludeTags.length +
+      rulesState.excludeCombos.length +
+      rulesState.excludeUploaders.length;
     const hasRuleRows = ruleColumns.some(([, rows]) => rows.length > 0);
 
     const openRule = (row: RuleRow) =>
@@ -631,19 +685,24 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
       );
 
     const toggleRule = async (row: RuleRow) => {
-      if (pendingRuleKey) return;
-      setPendingRuleKey(row.key);
+      if (savingRulesRef.current.has(row.key)) return;
+      savingRulesRef.current.add(row.key);
+      setRuleOverrides((prev) => ({ ...prev, [row.key]: !row.applied }));
       try {
         await applyExclusionMutation(row.type, row.tags, row.applied ? "remove" : "add");
-        onNotify(row.applied ? t("Removed") : t("Applied"), "success");
+        onNotify(row.applied ? t("Exclusion undone") : t("Excluded"), "success");
       } catch (err) {
         onNotify(err instanceof Error ? err.message : "Failed updating exclusion rule", "error");
       } finally {
-        setPendingRuleKey(null);
+        savingRulesRef.current.delete(row.key);
+        setRuleOverrides((prev) => {
+          const next = { ...prev };
+          delete next[row.key];
+          return next;
+        });
       }
     };
 
-    // Counts for the rule being inspected, when it came from the suggestions.
     const drillStats = drilldown
       ? ([...tagRows, ...comboRows, ...uploaderRows].find((row) =>
           drilldown.kind === "uploader"
@@ -779,23 +838,21 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
                       {drillStats && (
                         <>
                           <span>
-                            <span className="mr-1.5 tabular-nums text-ink-2">
-                              {drillStats.banned}
-                            </span>
-                            {t("blocked")}
+                            {t("Blocked")}
+                            <span className="ml-1.5 tabular-nums text-ink">{drillStats.banned}</span>
                           </span>
                           <span>
-                            <span className="mr-1.5 tabular-nums text-ink-2">{drillStats.kept}</span>
-                            {t("kept")}
+                            {t("Kept")}
+                            <span className="ml-1.5 tabular-nums text-ink">{drillStats.kept}</span>
                           </span>
                         </>
                       )}
                       {!drilldownLoading && (
                         <span>
-                          <span className="mr-1.5 tabular-nums text-ink-2">
+                          {t("In your library")}
+                          <span className="ml-1.5 tabular-nums text-ink">
                             {drilldownMatches.length}
                           </span>
-                          {t("in your library now")}
                         </span>
                       )}
                     </div>
@@ -837,7 +894,7 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
 
               {drilldown.kind === "tags" && refinementTags.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="mr-1.5 text-[12.5px] text-ink-3">{t("Refine with")}</span>
+                  <span className="mr-1.5 text-[12.5px] text-ink-3">{t("Often blocked together with")}</span>
                   {refinementTags.map((rt) => (
                     <button
                       key={`ref-${rt.tag}`}
@@ -848,8 +905,8 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
                           tags: [...drilldown.tags, normalizeTag(rt.tag)],
                         })
                       }
-                      title={`${rt.banned} ${t("blocked")}, ${rt.kept} ${t("kept")}`}
-                      className="group/refine inline-flex h-7 items-center gap-1.5 rounded-full pr-3 pl-2 text-[12.5px] text-ink-2 shadow-[inset_0_0_0_1px_var(--color-line-strong)] transition-colors hover:bg-white/[0.07] hover:text-ink"
+                      title={`${t("Blocked")} ${rt.banned}, ${t("Kept")} ${rt.kept}`}
+                      className="group/refine inline-flex h-7 items-center gap-1.5 rounded-full bg-white/[0.06] pr-3 pl-2 text-[12.5px] text-ink-2 transition-colors hover:bg-white/[0.12] hover:text-ink"
                     >
                       <Plus
                         className="h-3 w-3 text-ink-3 transition-colors group-hover/refine:text-ink"
@@ -899,41 +956,43 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
               </div>
             </section>
           ) : tab === "rules" ? (
-            <section>
-              <div className="mb-5 flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
+            <section className="max-w-[1280px]">
+              <div className="mb-6 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
                 <p className="m-0 max-w-[560px] text-[13px] leading-relaxed text-ink-2">
                   {t(
                     "What shows up most in the wallpapers you blocked. Exclude one and new downloads skip it.",
                   )}
                 </p>
-                <div className="flex items-center gap-4 text-[12px] text-ink-3">
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="h-2 w-3.5 rounded-[3px] bg-white/20" />
-                    {t("blocked")}
-                  </span>
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="h-2 w-3.5 rounded-[3px] bg-keep/55" />
-                    {t("kept")}
-                  </span>
-                </div>
+                {activeRuleCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={onManageRules}
+                    className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full pr-1.5 pl-3 text-[12.5px] font-medium text-ink-2 transition-colors hover:bg-white/[0.07] hover:text-ink"
+                  >
+                    <span>{t("Excluded so far")}</span>
+                    <span className="tabular-nums text-ink-3">{activeRuleCount}</span>
+                    <ChevronRight className="h-3.5 w-3.5 text-ink-3" strokeWidth={1.75} />
+                  </button>
+                )}
               </div>
               {suggestionsLoaded && !hasRuleRows ? (
                 <p className="m-0 py-10 text-center text-[13.5px] text-ink-2">
                   {t("No rule suggestions yet")}
                 </p>
               ) : (
-                <div className="grid grid-cols-[repeat(auto-fit,minmax(250px,1fr))] gap-x-6 gap-y-7">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(290px,1fr))] gap-x-10 gap-y-9">
                   {ruleColumns
                     .filter(([, rows]) => !suggestionsLoaded || rows.length > 0)
                     .map(([title, rows]) => (
-                      <RuleColumn
+                      <RuleTable
                         key={title}
                         title={title}
                         rows={rows}
                         loading={!suggestionsLoaded}
-                        pendingKey={pendingRuleKey}
+                        blockedLabel={t("Blocked")}
+                        keptLabel={t("Kept")}
                         excludeLabel={t("Exclude")}
-                        removeLabel={t("Remove")}
+                        undoLabel={t("Undo")}
                         onOpen={openRule}
                         onToggle={(row) => void toggleRule(row)}
                       />
