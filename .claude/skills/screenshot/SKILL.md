@@ -1,6 +1,6 @@
 ---
 name: screenshot
-description: Capture the running wayper-gui renderer through Electron and analyze the UI for layout or design issues. Use when debugging Wayper GUI problems or verifying visual changes without taking a desktop screenshot.
+description: Capture the running Wayper renderer through Electron and analyze the UI for layout or design issues. Use when debugging Wayper GUI problems or verifying visual changes without taking a desktop screenshot.
 ---
 
 # Wayper GUI Screenshot and Inspection
@@ -12,8 +12,10 @@ If `$ARGUMENTS` names an existing PNG file, skip capture and inspect that file i
 
 ## Capture
 
-The running `wayper-gui` must already be open and its Electron dependencies must be installed.
-From the repository root, run:
+Wayper must already be running with its window opened at least once: a window that was started
+hidden and never shown has no frame to capture, and the request fails after a few seconds. The
+repository needs its dependencies and bundles (`npm ci && npm run build`). From the repository
+root, run:
 
 ```bash
 .claude/skills/screenshot/scripts/capture.sh

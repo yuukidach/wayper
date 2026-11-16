@@ -1,11 +1,7 @@
-__pycache__/
-*.pyc
-.venv/
-.tmp-pytest-*/
-*.egg-info/
+node_modules/
 dist/
+release/
 build/
-uv.lock
 .worktrees/
 .claude/settings.local.json
 .claude/scheduled_tasks.*

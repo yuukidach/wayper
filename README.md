@@ -28,7 +28,7 @@ Most wallpaper tools stop at "set image on desktop." wayper is a full **Wallhave
 **What makes it different:**
 
 - **Learns from you** — mark a wallpaper **Dislike** when the model misses it and wayper adds an explicit training label. **Ban** remains a separate exact-image block for wallpapers you are simply tired of.
-- **AI-assisted filtering** — the local Codex CLI analyzes a snapshot of tag, combination, and uploader statistics to suggest exclusion rules. Suggestions are checked against your local evidence before being shown.
+- **Rule suggestions** — local statistics rank the tags, tag combinations, and uploaders that show up most in wallpapers you blocked, next to how many wallpapers with them you kept. Exclude one with a click and new downloads skip it.
 - **Keyboard-driven GUI** — every single action has a shortcut. Grid navigation, lightbox, favorites, settings — fully operable without a mouse. Built for power users.
 
 **And the fundamentals:**
@@ -51,29 +51,31 @@ paru -S wayper     # or: yay -S wayper
 
 ### Windows
 
-Download the latest Windows installer from [GitHub Releases](https://github.com/yuukidach/wayper/releases/latest), or install from source with Python 3.12+.
-
-```powershell
-git clone https://github.com/yuukidach/wayper.git
-cd wayper
-uv venv
-uv pip install -e .
-```
+Download the latest Windows installer from [GitHub Releases](https://github.com/yuukidach/wayper/releases/latest).
 
 ### macOS
 
-Download the latest `.dmg` from [GitHub Releases](https://github.com/yuukidach/wayper/releases/latest), or install from source with Python 3.12+.
+Download the latest `.dmg` from [GitHub Releases](https://github.com/yuukidach/wayper/releases/latest).
 
 ### From source
+
+Wayper is a single TypeScript application on Electron; there is no separate backend to install.
+Building needs Node.js 24 or newer and npm.
 
 ```bash
 git clone https://github.com/yuukidach/wayper.git
 cd wayper
-uv venv && uv pip install -e .
+npm ci
+npm run build
+npm link            # puts `wayper` on your PATH
+wayper              # opens the app; `wayper --hidden` starts it in the tray
 ```
 
-Browser cookie extraction and the Cloudflare-capable login fallback for Wallhaven sync are
-included in the standard installation.
+The installed app is also the CLI: `wayper next`, `wayper status --json`, and the other commands
+below work from the same executable and do not need a display.
+
+Wallhaven account sync signs in with your saved credentials. When Cloudflare asks for a check,
+Wayper opens its own login window, so no browser extension or cookie export is needed.
 
 ## GUI
 
@@ -95,8 +97,7 @@ Use Review to inspect auto-held downloads and model recommendations. Keep or Dis
 - **Fixed login background (Linux)** — with `[greeter].image` configured, open a wallpaper preview and click **Greeter**. Wayper copies that image to the greeter target and stops random greeter updates; desktop rotation is unchanged
 - **Tag search** — search by Wallhaven tags, category, or filename with autocomplete
 - **Smart suggestions** — analyzes ban patterns to recommend tags to exclude; co-occurrence mining finds common descriptors across excluded individuals; drill into combo exclusions (e.g., "tattoo + nude") for precise filtering
-- **AI analysis** — Codex-powered deep analysis of ban patterns with iterative feedback. Identifies uploader patterns and suggests Wallhaven user blacklist candidates. Click suggested tags to preview matching images
-- **Adaptive filtering** — choose `rules`, `model`, or `rules + model` from the always-visible sidebar control. **Review** keeps automatically held downloads and ordinary model recommendations in separate card lanes; clear the Auto-held lane to filter it without adding preference labels
+- **Adaptive filtering** — choose `rules`, `model`, or `rules + model` from the view options menu in the top bar. **Review** keeps automatically held downloads and ordinary model recommendations in separate card lanes; clear the Auto-held lane to filter it without adding preference labels
 - **Background rotation** — closing the window keeps Wayper in the system tray, where you can change wallpaper, pause rotation, reopen the window, or quit
 - **Settings** — configure the download folder, Wallhaven queries, excluded tags/combos, purity, and monitors from the GUI. Changes apply to automatic rotation instantly
 - **Keyboard-driven** — every action has a shortcut: grid navigation, lightbox, favorites, Dislike, Ban, and undo
@@ -109,16 +110,16 @@ If the window loses its backend connection, launch Wayper again. The existing ap
 
 | Key | Action | Key | Action |
 |-----|--------|-----|--------|
-| `p` / `v` | Pool / Favorites | `m` / `b` | Model / Blocklist |
+| `1` / `2` | Pool / Favorites | `3` / `4` | Review / Blocklist |
 | `s` | Settings | `F1` `F2` `F3` | Toggle SFW / Sketchy / NSFW |
 | `h` / `l` | Prev / Next wallpaper | `f` | Favorite (focused card or current) |
 | `d` | Dislike + teach model | `x` / `Del` | Ban exact image only |
 | `u` | Undo last Dislike / Ban | `o` | Open on Wallhaven |
 | `/` | Focus search bar | `Esc` | Clear search / Unfocus |
 | `Enter` / `Space` | Preview (lightbox) | Arrow keys | Navigate grid |
-| `[` / `]` | Blocklist: Recoverable / All | `a` | AI analysis (Blocklist) |
+| `[` / `]` | Blocklist: previous / next tab | `Shift`+`1`–`9` | Switch monitor |
 | `g` | Locate current wallpaper | `gg` / `G` | Jump to first / last |
-| `1`–`9` | Switch monitor | | |
+| `F4` | Open view options (purity, filter strategy, storage) | | |
 
 **Review:**
 
@@ -160,7 +161,6 @@ wayper mode                 # toggle sfw↔nsfw (preserves sketchy)
 wayper mode sketchy         # toggle sketchy on/off
 wayper mode sfw,sketchy     # set exact purity combination
 wayper suggest             # frequency-based tag exclusion suggestions
-wayper suggest --ai        # AI-powered analysis via Codex CLI
 wayper model train         # train the lightweight local metadata ranking model
 wayper model score --tags "tag1,tag2"  # explain a local dislike score
 wayper model status        # inspect the saved model and recent validation
@@ -208,8 +208,9 @@ locally after enough feedback.
 Open the dedicated **Review** view to teach the model. Choose `Rules`, `Model`, or
 `Both` (`Rules + model`) for new downloads. **Auto-held** contains downloads set
 aside by the model; **Recommended** contains possible blocks already in the pool.
-Auto-held appears first. Drag, scroll, or use the arrows to move through cards;
-`Enter`/`Space` opens a preview, `A` keeps, and `D` dislikes. Keeping an Auto-held
+Auto-held appears first. Use the arrows to move through cards; `Enter`/`Space`
+opens a preview, `A` keeps, and `D` dislikes. Dragging a card left keeps it and
+dragging it right dislikes it, matching the key positions. Keeping an Auto-held
 file releases it into the pool; keeping a recommendation records feedback without
 moving the file. In Settings, the language can follow the system or be set to
 English/Simplified Chinese; download batch size is configured under General.
@@ -258,7 +259,7 @@ New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
 Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
-Set the wallpaper download folder and login autostart in the GUI Settings view, or edit the options in [`example-config.toml`](example-config.toml). Autostart defaults on and can also be managed with `wayper autostart enable|disable|status`. Wayper uses a graphical-session user service on Linux (so no Hyprland `exec-once` is needed), a LaunchAgent on macOS, and a per-user Run registration on Windows. Windows launches the GUI executable directly when possible and automatically uses a windowless script fallback for uv environments without a working `pythonw.exe`; neither path opens a console window. See the example file for all options — API key, proxy, intervals, quota, filtering, transitions, etc. On Linux, `[transition] resize` controls how `awww img --resize` scales wallpapers: `crop` (default), `fit`, `stretch`, or `no`. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
+Set the wallpaper download folder and login autostart in the GUI Settings view, or edit the options in [`example-config.toml`](example-config.toml). Autostart defaults on and can also be managed with `wayper autostart enable|disable|status`. Wayper uses a graphical-session user service on Linux (so no Hyprland `exec-once` is needed), a LaunchAgent on macOS, and a per-user Run registration on Windows. See the example file for all options — API key, proxy, intervals, quota, filtering, transitions, etc. On Linux, `[transition] resize` controls how `awww img --resize` scales wallpapers: `crop` (default), `fit`, `stretch`, or `no`. Monitors are auto-detected; the `[[monitors]]` config section is only needed as a fallback when detection fails.
 
 On Linux, choose **Settings → General → Wallpaper Display Mode**: **Crop to fill** (`crop`, default), **Fit entire image** (`fit`), **Stretch to fill** (`stretch`), or **Original size** (`no`). Click **Save Changes**; the selected mode applies the next time a wallpaper is set and is preserved when favoriting or unfavoriting. The same setting is available as `[transition] resize` in `config.toml`; missing or invalid values fall back to `crop`. This control is disabled on Windows and macOS.
 
@@ -266,16 +267,23 @@ For Linux login backgrounds, configure `[greeter].image` to the background file 
 
 ## Requirements
 
-- Python 3.12+
 - [Wallhaven API key](https://wallhaven.cc/settings/account)
 
 **Linux:** [awww](https://codeberg.org/LGFae/awww), plus
 [Hyprland](https://hyprland.org/) or [Sway](https://swaywm.org/). Wayper detects
 the active compositor and preserves transformed output dimensions on both.
 
-**macOS:** Python 3.12+, Node.js (for Electron GUI)
+**macOS:** nothing beyond the `.dmg`.
 
-**Windows:** Windows 10/11, Python 3.12+, Node.js (for Electron GUI)
+**Windows:** Windows 10/11.
+
+**From source:** Node.js 24+ and npm.
+
+The preference model trains and scores locally inside the app. The first training run downloads a
+small text-embedding model (about 35 MB) into `~/.cache/wayper/semantic`. A model trained by the
+earlier Python releases is retrained once in the background when the new app first opens; until
+that finishes, model filtering of new downloads is paused and **Review** shows **Calibrating**.
+Run `wayper model train` to retrain immediately.
 
 ## License
 

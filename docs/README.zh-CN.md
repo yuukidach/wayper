@@ -28,7 +28,7 @@
 **核心差异：**
 
 - **越用越聪明** — 模型漏掉真正不喜欢的壁纸时，用 **Dislike（不喜欢）** 明确教给模型；**Ban（拉黑）** 则保留为“看腻了”的单图屏蔽，两者互不混淆。
-- **AI 辅助筛选** — 本地 Codex CLI 根据标签、组合和上传者的统计快照提出排除规则建议。建议展示前会再次用本地数据校验。
+- **规则建议** — 本地统计会列出在你屏蔽的壁纸中出现最多的标签、标签组合和上传者，并标出其中有多少被你保留。一键排除后，新的下载会跳过它们。
 - **全键盘操作 GUI** — 每个操作都有快捷键。网格导航、灯箱预览、收藏、设置——完全不需要鼠标。为重度用户打造。
 
 **基础能力：**
@@ -51,28 +51,31 @@ paru -S wayper     # 或: yay -S wayper
 
 ### Windows
 
-从 [GitHub Releases](https://github.com/yuukidach/wayper/releases/latest) 下载最新版 Windows 安装包，或用 Python 3.12+ 从源码安装。
-
-```powershell
-git clone https://github.com/yuukidach/wayper.git
-cd wayper
-uv venv
-uv pip install -e .
-```
+从 [GitHub Releases](https://github.com/yuukidach/wayper/releases/latest) 下载最新版 Windows 安装包。
 
 ### macOS
 
-从 [GitHub Releases](https://github.com/yuukidach/wayper/releases/latest) 下载最新版 `.dmg`，或用 Python 3.12+ 从源码安装。
+从 [GitHub Releases](https://github.com/yuukidach/wayper/releases/latest) 下载最新版 `.dmg`。
 
 ### 从源码安装
+
+Wayper 是一个基于 Electron 的单体 TypeScript 应用，不需要另外安装后端。
+构建需要 Node.js 24 或更新版本和 npm。
 
 ```bash
 git clone https://github.com/yuukidach/wayper.git
 cd wayper
-uv venv && uv pip install -e .
+npm ci
+npm run build
+npm link            # 把 `wayper` 放进 PATH
+wayper              # 打开应用；`wayper --hidden` 启动到托盘
 ```
 
-标准安装已经包含浏览器 Cookie 提取和支持 Cloudflare 的 Wallhaven 登录备用方案。
+安装好的应用本身就是 CLI：`wayper next`、`wayper status --json` 以及下文的其他命令都由同一个可执行文件提供，
+并且不需要图形环境。
+
+Wallhaven 账号同步使用你保存的账号密码登录。遇到 Cloudflare 验证时，Wayper 会打开自带的登录窗口，
+不需要浏览器扩展或导出 Cookie。
 
 ## GUI
 
@@ -93,8 +96,7 @@ uv venv && uv pip install -e .
 - **浏览与预览** — 网格浏览（缩略图缓存）、灯箱预览、Enter 设为壁纸
 - **标签搜索** — 按 Wallhaven 标签、分类或文件名搜索，支持自动补全
 - **智能建议** — 分析拉黑模式，推荐要排除的标签；共现挖掘找出跨排除个体的共同描述符；支持组合排除（如"tattoo + nude"）精细过滤
-- **AI 分析** — 基于 Codex 的深度分析，支持迭代反馈。识别上传者模式并建议 Wallhaven 用户黑名单候选。点击建议标签可预览匹配图片
-- **偏好筛选** — 可通过侧边栏选择仅用规则、仅用偏好模型或两者结合。**待确认** 页面分别展示模型自动拦截的下载和建议检查的图库图片；清空 Auto-held 会过滤整条队列，但不会增加偏好标签
+- **偏好筛选** — 可通过顶栏的显示选项菜单选择仅用规则、仅用偏好模型或两者结合。**待确认** 页面分别展示模型自动拦截的下载和建议检查的图库图片；清空 Auto-held 会过滤整条队列，但不会增加偏好标签
 - **后台自动换壁纸** — 关闭窗口后 Wayper 仍驻留系统托盘，可切换壁纸、暂停自动更换、重新打开窗口或完全退出
 - **设置** — 在 GUI 中配置下载目录、Wallhaven 查询、排除标签/组合、内容级别和显示器；修改会即时生效
 - **固定登录背景（Linux）** — 配置 `[greeter].image` 后，打开壁纸预览并点击「登录背景」。Wayper 会将所选图片复制到登录背景文件，并停止随机更换登录背景；桌面壁纸仍按原设置轮换
@@ -108,16 +110,16 @@ uv venv && uv pip install -e .
 
 | 按键 | 操作 | 按键 | 操作 |
 |------|------|------|------|
-| `p` / `v` | 壁纸池 / 收藏 | `m` / `b` | Model / 黑名单 |
+| `1` / `2` | 壁纸池 / 收藏 | `3` / `4` | Review / 黑名单 |
 | `s` | 设置 | `F1` `F2` `F3` | 切换 SFW / Sketchy / NSFW |
 | `h` / `l` | 上一张 / 下一张壁纸 | `f` | 收藏 |
 | `d` | 不喜欢 + 教给模型 | `x` / `Del` | 仅拉黑这张图 |
 | `u` | 撤销上次不喜欢 / 拉黑 | `o` | 在 Wallhaven 打开 |
 | `/` | 聚焦搜索栏 | `Esc` | 清除搜索 / 取消聚焦 |
 | `Enter` / `Space` | 预览（灯箱） | 方向键 | 网格导航 |
-| `[` / `]` | 黑名单：可恢复 / 全部 | `a` | AI 分析（黑名单视图） |
+| `[` / `]` | 黑名单：上一个 / 下一个标签页 | `Shift`+`1`–`9` | 切换显示器 |
 | `g` | 定位当前壁纸 | `gg` / `G` | 跳到第一张 / 最后一张 |
-| `1`–`9` | 切换显示器 | | |
+| `F4` | 打开显示选项（分级、过滤策略、存储） | | |
 
 **待确认：**
 
@@ -159,7 +161,6 @@ wayper mode                 # 切换 sfw↔nsfw（保留 sketchy 状态）
 wayper mode sketchy         # 开关 sketchy
 wayper mode sfw,sketchy     # 设置精确组合
 wayper suggest             # 基于频率的标签排除建议
-wayper suggest --ai        # 通过 Codex CLI 进行 AI 分析
 wayper model train         # 训练轻量的本地元数据排序模型
 wayper model score --tags "tag1,tag2"  # 解释本地“不喜欢”评分
 wayper model status        # 查看已保存模型和近期验证结果
@@ -192,9 +193,10 @@ wayper --json status        # JSON 格式输出
 不会被当成「喜欢」。在明确的两类反馈和独立校准都可用前，模型过滤保持关闭。就绪后模型会学习相近的元数据，
 把疑似拉黑项放入可恢复的队列并给出推荐；它不会自动修改黑名单，积累足够反馈后会在本地刷新。
 
-打开 **Review** 来教模型。侧边栏可为新下载选择 `Rules`、`Model` 或 `Both`（`Rules + model`）。
+打开 **Review** 来教模型。顶栏的显示选项菜单可为新下载选择 `Rules`、`Model` 或 `Both`（`Rules + model`）。
 **Auto-held** 是被模型暂存的下载，**Recommended** 是图库中可能需要拉黑的图片，Auto-held 会优先显示。
-拖动、滚轮或左右按钮可切换卡片；`Enter`/`Space` 打开预览，`A` 保留，`D` 标记不喜欢。保留 Auto-held
+左右按钮可切换卡片；`Enter`/`Space` 打开预览，`A` 保留，`D` 标记不喜欢。向左拖动卡片为保留、向右拖动为不喜欢，
+与按键位置一致。保留 Auto-held
 会把文件放回图库；保留 Recommended 只记录反馈，不移动文件。设置中的语言可以跟随系统，也可以切换为
 English/简体中文；下载批量大小位于「常规」配置。**清空已拦截** 会将当前图库范围内的 Auto-held
 图片加入黑名单，但不会记录 Keep 或 Dislike 反馈。
@@ -241,7 +243,7 @@ New-Item -ItemType Directory -Force "$env:APPDATA\wayper"
 Copy-Item example-config.toml "$env:APPDATA\wayper\config.toml"
 ```
 
-壁纸下载目录和登录自启动可在 GUI 设置页修改，也可编辑 [`example-config.toml`](../example-config.toml)。自启动在所有平台上默认开启，还可通过 `wayper autostart enable|disable|status` 管理。Linux 使用图形会话级用户服务（无需再写 Hyprland `exec-once`），macOS 使用 LaunchAgent，Windows 使用当前用户的 Run 注册项：正常情况下直接启动 GUI；如果 uv 环境缺少可用的 `pythonw.exe`，则自动改用无窗口脚本启动。两种方式都不会出现控制台窗口。详见该文件的所有选项 — API key、代理、轮换间隔、配额、筛选策略、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
+壁纸下载目录和登录自启动可在 GUI 设置页修改，也可编辑 [`example-config.toml`](../example-config.toml)。自启动在所有平台上默认开启，还可通过 `wayper autostart enable|disable|status` 管理。Linux 使用图形会话级用户服务（无需再写 Hyprland `exec-once`），macOS 使用 LaunchAgent，Windows 使用当前用户的 Run 注册项。详见该文件的所有选项 — API key、代理、轮换间隔、配额、筛选策略、转场效果等。显示器会自动检测，`[[monitors]]` 配置段仅在检测失败时作为兜底。
 
 Linux 下可在 **设置 → 基本设置 → 壁纸显示方式** 中选择 **裁剪铺满**（`crop`，默认）、**完整显示**（`fit`）、**拉伸铺满**（`stretch`）或 **原始尺寸**（`no`）。点击 **保存更改** 后，下次设置壁纸时生效；收藏或取消收藏时也会保留所选模式。也可在 `config.toml` 中设置 `[transition] resize`；缺失或无效的值会回退到 `crop`。Windows 和 macOS 上此控件不可用。
 
@@ -249,16 +251,22 @@ Linux 登录背景的 `[greeter].image` 应指向登录界面已经使用的背�
 
 ## 依赖
 
-- Python 3.12+
 - [Wallhaven API key](https://wallhaven.cc/settings/account)
 
 **Linux：** [awww](https://codeberg.org/LGFae/awww)，以及
 [Hyprland](https://hyprland.org/) 或 [Sway](https://swaywm.org/)。Wayper 会自动识别当前合成器，
 并在两者上正确处理经过旋转的显示器尺寸。
 
-**macOS：** Python 3.12+、Node.js（用于 Electron GUI）
+**macOS：** 安装 `.dmg` 即可。
 
-**Windows：** Windows 10/11、Python 3.12+、Node.js（用于 Electron GUI）
+**Windows：** Windows 10/11。
+
+**从源码安装：** Node.js 24+ 和 npm。
+
+偏好模型在应用内本地训练和评分。首次训练会把一个小型文本嵌入模型（约 35 MB）下载到
+`~/.cache/wayper/semantic`。由早期 Python 版本训练的模型会在新应用首次打开时于后台重新训练一次；
+完成之前，模型不会过滤新下载的壁纸，**Review** 中显示“学习校准中”（英文界面为 **Calibrating**）。
+运行 `wayper model train` 可立即重新训练。
 
 ## 许可
 
