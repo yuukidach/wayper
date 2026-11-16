@@ -1,1 +1,1 @@
-export const WAYPER_VERSION = "1.8.13";
+export const WAYPER_VERSION = "2.0.0";
