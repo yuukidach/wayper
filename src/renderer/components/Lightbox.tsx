@@ -716,11 +716,11 @@ export const Lightbox: React.FC<LightboxProps> = ({
                           "keep",
                         )
                       }
-                      className={dockPrimary}
+                      className="inline-flex h-10 items-center gap-2 rounded-xl pr-3 pl-3.5 text-[13.5px] font-medium text-ink transition-colors hover:bg-keep/15 hover:text-keep"
                     >
-                      <Check className="h-4 w-4" strokeWidth={2.25} />
+                      <Check className="h-4 w-4" strokeWidth={2} />
                       <span>{t("Keep")}</span>
-                      <kbd className="keycap keycap-on-accent">A</kbd>
+                      <kbd className="keycap">A</kbd>
                     </button>
                     <button
                       type="button"

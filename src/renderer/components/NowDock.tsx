@@ -1,7 +1,7 @@
 import React from "react";
 import { LocateFixed, Pause, Play, SkipBack, SkipForward, Timer, Undo2 } from "lucide-react";
 import type { ConfigPayload, MonitorInfo, StatusResponse } from "../../shared/types";
-import { thumbUrl } from "../lib/media";
+import { MonitorTiles } from "./MonitorTiles";
 
 interface NowDockProps {
   t: (key: string) => string;
@@ -19,8 +19,6 @@ interface NowDockProps {
 
 const DOCK_BUTTON =
   "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-ink-2 transition-colors hover:bg-white/[0.08] hover:text-ink";
-
-const TILE_HEIGHT = 40;
 
 export const NowDock: React.FC<NowDockProps> = ({
   t,
@@ -53,48 +51,13 @@ export const NowDock: React.FC<NowDockProps> = ({
     <div className="glass flex items-center gap-1 rounded-[20px] p-1.5">
       {monitors.length > 0 && (
         <>
-          <div className="flex items-center gap-1.5 pr-1 pl-0.5">
-            {monitors.slice(0, 9).map((mon, idx) => {
-              const isActive = mon.name === activeMonitorName;
-              const ratio =
-                mon.width && mon.height
-                  ? mon.width / mon.height
-                  : mon.orientation === "portrait"
-                    ? 9 / 16
-                    : 16 / 9;
-              const width = Math.round(Math.min(84, TILE_HEIGHT * ratio));
-              const resLabel =
-                mon.width && mon.height ? `${mon.width}×${mon.height}` : t(mon.orientation);
-              return (
-                <button
-                  key={mon.name}
-                  type="button"
-                  onClick={() => onSelectMonitor(mon.name)}
-                  title={`${mon.name} · ${resLabel} [Shift+${idx + 1}]`}
-                  aria-label={mon.name}
-                  aria-pressed={isActive}
-                  style={{ width, height: TILE_HEIGHT }}
-                  className={`shrink-0 overflow-hidden rounded-[10px] bg-white/[0.06] transition-all duration-200 ${
-                    isActive
-                      ? "shadow-[0_0_0_1.5px_rgb(255_255_255/0.95)]"
-                      : "opacity-50 hover:opacity-100"
-                  }`}
-                >
-                  {mon.current_image && (
-                    <img
-                      key={mon.current_image}
-                      src={thumbUrl(mon.current_image)}
-                      alt=""
-                      className="fade-in h-full w-full object-cover"
-                      loading="eager"
-                      decoding="async"
-                      draggable={false}
-                    />
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          <MonitorTiles
+            t={t}
+            monitors={monitors}
+            activeMonitorName={activeMonitorName}
+            onSelectMonitor={onSelectMonitor}
+            className="pr-1 pl-0.5"
+          />
           <span className="mx-1 h-5 w-px bg-white/[0.1]" />
         </>
       )}

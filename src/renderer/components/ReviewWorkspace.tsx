@@ -27,6 +27,7 @@ import {
 import type {
   LearningStatus,
   ModelReviewListResponse,
+  MonitorInfo,
   Orientation,
   PreferenceSuggestionsResponse,
   Purity,
@@ -35,6 +36,7 @@ import type {
 import { NON_PREFERENCE_FEATURE_TAGS } from "../../shared/tags";
 import { renderAmbient } from "../lib/ambient";
 import { previewUrl, thumbUrl } from "../lib/media";
+import { MonitorTiles } from "./MonitorTiles";
 
 export type ReviewLane = "held" | "recommended";
 
@@ -53,7 +55,9 @@ interface ReviewWorkspaceProps {
   onClearAutoHeld: () => void;
   purities: Purity[];
   orientation: Orientation;
+  monitors: MonitorInfo[];
   activeMonitorName: string | null;
+  onSelectMonitor: (monitorName: string) => void;
   lane: ReviewLane;
   onLaneChange: (lane: ReviewLane) => void;
   refreshToken: number;
@@ -317,7 +321,9 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
       onClearAutoHeld,
       purities,
       orientation,
+      monitors,
       activeMonitorName,
+      onSelectMonitor,
       lane,
       onLaneChange,
       refreshToken,
@@ -727,6 +733,9 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
       </motion.div>
     );
 
+    const decisionItem = !loading && !errorState ? currentItem : null;
+    const showDock = Boolean(decisionItem) || monitors.length > 1;
+
     return (
       <div className="relative flex h-full w-full flex-col overflow-hidden">
         {/* Ambient light: a pre-blurred miniature of the candidate fills the window. */}
@@ -810,7 +819,9 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
             <RefreshCw className="h-5 w-5 animate-spin text-ink-3" strokeWidth={1.75} />
           </div>
         ) : errorState ? (
-          <div className="relative flex flex-1 items-center justify-center pb-16">
+          <div
+            className={`relative flex flex-1 items-center justify-center ${showDock ? "" : "pb-16"}`}
+          >
             {emptyState(
               t("Review is temporarily unavailable"),
               errorState,
@@ -825,7 +836,9 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
             )}
           </div>
         ) : !currentItem ? (
-          <div className="relative flex flex-1 items-center justify-center pb-16">
+          <div
+            className={`relative flex flex-1 items-center justify-center ${showDock ? "" : "pb-16"}`}
+          >
             {!isReady && heldItems.length === 0 && recItems.length === 0
               ? emptyState(
                   t("The model is still learning"),
@@ -947,114 +960,135 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
               )}
             </div>
 
-            {/* One dock: the model's reason on demand, then the decision. */}
-            <div className="relative flex shrink-0 items-center justify-center px-6 pt-3 pb-5">
-              <motion.div
-                initial={{ opacity: 0, y: 28, scale: 0.96 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.8 }}
-                className="dock-surface flex items-center gap-1 rounded-[20px] p-1.5"
-              >
-                <div className="group/why relative">
-                  <button
-                    type="button"
-                    aria-label={`${t("Dislike score")} ${score.toFixed(2)}`}
-                    aria-describedby="review-why"
-                    className="flex h-10 cursor-default items-center gap-2 rounded-xl pr-3 pl-2.5 text-[13.5px] transition-colors hover:bg-white/[0.08] focus-visible:bg-white/[0.08]"
-                  >
-                    <ScoreRing value={score} threshold={threshold} />
-                    <span className="font-medium tabular-nums text-ink">{score.toFixed(2)}</span>
-                  </button>
-                  <div
-                    id="review-why"
-                    role="tooltip"
-                    className="dock-surface pointer-events-none absolute bottom-full left-0 z-10 mb-3.5 w-[300px] bg-[rgb(26_26_28/0.97)]! origin-bottom-left translate-y-1.5 scale-[0.98] rounded-2xl p-4 opacity-0 transition-[opacity,transform] duration-150 ease-out group-focus-within/why:translate-y-0 group-focus-within/why:scale-100 group-focus-within/why:opacity-100 group-hover/why:translate-y-0 group-hover/why:scale-100 group-hover/why:opacity-100"
-                  >
-                    <div className="flex items-baseline justify-between gap-3">
-                      <span className="text-[13px] font-medium text-ink">{t("Dislike score")}</span>
-                      <span className="text-[13px] tabular-nums text-ink">{score.toFixed(2)}</span>
-                    </div>
-                    <div className="relative mt-2.5 h-1 rounded-full bg-white/[0.1]">
+          </div>
+        )}
+
+        {/*
+          One dock, where every other view keeps its dock: the displays first,
+          then the model's reason on demand and the decision.  Neither answer
+          is pre-selected.
+        */}
+        {showDock && (
+          <div className="relative flex shrink-0 items-center justify-center px-6 pt-3 pb-5">
+            <motion.div
+              initial={{ opacity: 0, y: 28, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.8 }}
+              className="dock-surface flex items-center gap-1 rounded-[20px] p-1.5"
+            >
+              {monitors.length > 1 && (
+                <MonitorTiles
+                  t={t}
+                  monitors={monitors}
+                  activeMonitorName={activeMonitorName}
+                  onSelectMonitor={onSelectMonitor}
+                  className="pr-1 pl-0.5"
+                />
+              )}
+              {decisionItem && (
+                <>
+                  {monitors.length > 1 && <span className="mx-1 h-5 w-px bg-white/[0.1]" />}
+                    <div className="group/why relative">
+                      <button
+                        type="button"
+                        aria-label={`${t("Dislike score")} ${score.toFixed(2)}`}
+                        aria-describedby="review-why"
+                        className="flex h-10 cursor-default items-center gap-2 rounded-xl pr-3 pl-2.5 text-[13.5px] transition-colors hover:bg-white/[0.08] focus-visible:bg-white/[0.08]"
+                      >
+                        <ScoreRing value={score} threshold={threshold} />
+                        <span className="font-medium tabular-nums text-ink">{score.toFixed(2)}</span>
+                      </button>
                       <div
-                        className={`h-full rounded-full ${overThreshold ? "bg-drop" : "bg-ink"}`}
-                        style={{ width: `${Math.round(Math.min(1, Math.max(0, score)) * 100)}%` }}
-                      />
-                      {typeof threshold === "number" && (
-                        <span
-                          className="absolute top-1/2 h-2.5 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/70"
-                          style={{ left: `${Math.round(Math.min(1, Math.max(0, threshold)) * 100)}%` }}
-                        />
-                      )}
+                        id="review-why"
+                        role="tooltip"
+                        className="dock-surface pointer-events-none absolute bottom-full left-0 z-10 mb-3.5 w-[300px] bg-[rgb(26_26_28/0.97)]! origin-bottom-left translate-y-1.5 scale-[0.98] rounded-2xl p-4 opacity-0 transition-[opacity,transform] duration-150 ease-out group-focus-within/why:translate-y-0 group-focus-within/why:scale-100 group-focus-within/why:opacity-100 group-hover/why:translate-y-0 group-hover/why:scale-100 group-hover/why:opacity-100"
+                      >
+                        <div className="flex items-baseline justify-between gap-3">
+                          <span className="text-[13px] font-medium text-ink">{t("Dislike score")}</span>
+                          <span className="text-[13px] tabular-nums text-ink">{score.toFixed(2)}</span>
+                        </div>
+                        <div className="relative mt-2.5 h-1 rounded-full bg-white/[0.1]">
+                          <div
+                            className={`h-full rounded-full ${overThreshold ? "bg-drop" : "bg-ink"}`}
+                            style={{ width: `${Math.round(Math.min(1, Math.max(0, score)) * 100)}%` }}
+                          />
+                          {typeof threshold === "number" && (
+                            <span
+                              className="absolute top-1/2 h-2.5 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/70"
+                              style={{ left: `${Math.round(Math.min(1, Math.max(0, threshold)) * 100)}%` }}
+                            />
+                          )}
+                        </div>
+                        {typeof threshold === "number" && (
+                          <div className="mt-2 flex items-baseline justify-between gap-3 text-[12px] text-ink-3">
+                            <span>{t("Threshold")}</span>
+                            <span className="tabular-nums">{threshold.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {nearestDislike && (
+                          <div className="mt-3 flex items-baseline justify-between gap-3 border-t border-white/[0.08] pt-3 text-[12.5px]">
+                            <span className="text-ink-2">{t("Similar to a disliked wallpaper")}</span>
+                            <span className="font-medium tabular-nums text-ink">
+                              {Math.round((nearestDislike.similarity ?? 0) * 100)}%
+                            </span>
+                          </div>
+                        )}
+                        {(topDislikeEvidence.length > 0 || neighborTagMatches.length > 0) && (
+                          <div className="mt-3 flex flex-wrap gap-1.5">
+                            {topDislikeEvidence.map((ev) => (
+                              <span
+                                key={`ev-${ev.type}-${ev.feature}`}
+                                className="inline-flex h-6 items-center gap-1.5 rounded-full bg-white/[0.08] px-2.5 text-[12px] text-ink-2"
+                              >
+                                {evidenceLabel(ev.feature)}
+                              </span>
+                            ))}
+                            {neighborTagMatches.map((tm, i) => (
+                              <span
+                                key={`tm-${tm.query}-${tm.prototype}-${i}`}
+                                className="inline-flex h-6 items-center rounded-full px-2.5 text-[12px] text-ink-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]"
+                              >
+                                {tm.query === tm.prototype ? tm.query : `${tm.query} ≈ ${tm.prototype}`}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    {typeof threshold === "number" && (
-                      <div className="mt-2 flex items-baseline justify-between gap-3 text-[12px] text-ink-3">
-                        <span>{t("Threshold")}</span>
-                        <span className="tabular-nums">{threshold.toFixed(2)}</span>
-                      </div>
-                    )}
-                    {nearestDislike && (
-                      <div className="mt-3 flex items-baseline justify-between gap-3 border-t border-white/[0.08] pt-3 text-[12.5px]">
-                        <span className="text-ink-2">{t("Similar to a disliked wallpaper")}</span>
-                        <span className="font-medium tabular-nums text-ink">
-                          {Math.round((nearestDislike.similarity ?? 0) * 100)}%
-                        </span>
-                      </div>
-                    )}
-                    {(topDislikeEvidence.length > 0 || neighborTagMatches.length > 0) && (
-                      <div className="mt-3 flex flex-wrap gap-1.5">
-                        {topDislikeEvidence.map((ev) => (
-                          <span
-                            key={`ev-${ev.type}-${ev.feature}`}
-                            className="inline-flex h-6 items-center gap-1.5 rounded-full bg-white/[0.08] px-2.5 text-[12px] text-ink-2"
-                          >
-                            {evidenceLabel(ev.feature)}
-                          </span>
-                        ))}
-                        {neighborTagMatches.map((tm, i) => (
-                          <span
-                            key={`tm-${tm.query}-${tm.prototype}-${i}`}
-                            className="inline-flex h-6 items-center rounded-full px-2.5 text-[12px] text-ink-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]"
-                          >
-                            {tm.query === tm.prototype ? tm.query : `${tm.query} ≈ ${tm.prototype}`}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <span className="mx-1 h-5 w-px bg-white/[0.1]" />
-                <motion.button
-                  type="button"
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => void decideItem(currentItem, "keep")}
-                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-accent pr-3 pl-3.5 text-[13.5px] font-semibold text-on-accent transition-colors hover:bg-accent-hi"
-                >
-                  <Check className="h-4 w-4" strokeWidth={2.25} />
-                  <span>{t("Keep")}</span>
-                  <kbd className="keycap keycap-on-accent">A</kbd>
-                </motion.button>
-                <motion.button
-                  type="button"
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => void decideItem(currentItem, "ban")}
-                  className="inline-flex h-10 items-center gap-2 rounded-xl pr-3 pl-3.5 text-[13.5px] font-medium text-ink transition-colors hover:bg-drop/15 hover:text-drop"
-                >
-                  <X className="h-4 w-4" strokeWidth={2} />
-                  <span>{t("Dislike")}</span>
-                  <kbd className="keycap">D</kbd>
-                </motion.button>
-                <span className="mx-1 h-5 w-px bg-white/[0.1]" />
-                <button
-                  type="button"
-                  onClick={() => onOpenWallhaven(currentItem.name)}
-                  title={`${t("Open on Wallhaven")} [O]`}
-                  aria-label={t("Open on Wallhaven")}
-                  className="flex h-10 w-10 items-center justify-center rounded-xl text-ink-2 transition-colors hover:bg-white/[0.08] hover:text-ink"
-                >
-                  <ExternalLink className="h-4 w-4" strokeWidth={1.75} />
-                </button>
-              </motion.div>
-            </div>
+                    <span className="mx-1 h-5 w-px bg-white/[0.1]" />
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => void decideItem(decisionItem, "keep")}
+                      className="inline-flex h-10 items-center gap-2 rounded-xl pr-3 pl-3.5 text-[13.5px] font-medium text-ink transition-colors hover:bg-keep/15 hover:text-keep"
+                    >
+                      <Check className="h-4 w-4" strokeWidth={2} />
+                      <span>{t("Keep")}</span>
+                      <kbd className="keycap">A</kbd>
+                    </motion.button>
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => void decideItem(decisionItem, "ban")}
+                      className="inline-flex h-10 items-center gap-2 rounded-xl pr-3 pl-3.5 text-[13.5px] font-medium text-ink transition-colors hover:bg-drop/15 hover:text-drop"
+                    >
+                      <X className="h-4 w-4" strokeWidth={2} />
+                      <span>{t("Dislike")}</span>
+                      <kbd className="keycap">D</kbd>
+                    </motion.button>
+                    <span className="mx-1 h-5 w-px bg-white/[0.1]" />
+                    <button
+                      type="button"
+                      onClick={() => onOpenWallhaven(decisionItem.name)}
+                      title={`${t("Open on Wallhaven")} [O]`}
+                      aria-label={t("Open on Wallhaven")}
+                      className="flex h-10 w-10 items-center justify-center rounded-xl text-ink-2 transition-colors hover:bg-white/[0.08] hover:text-ink"
+                    >
+                      <ExternalLink className="h-4 w-4" strokeWidth={1.75} />
+                    </button>
+                </>
+              )}
+            </motion.div>
           </div>
         )}
       </div>

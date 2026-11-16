@@ -33,49 +33,49 @@ const ROUND_BUTTON =
   "flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/[0.07] text-ink-2 transition-colors hover:bg-white/[0.14] hover:text-ink";
 
 const STAGE_GAP = 16;
-const INACTIVE_SCALE = 0.5;
 const DETAILS_GAP = 40;
 const DETAILS_MIN_WIDTH = 300;
 const PAGE_GUTTERS = 48;
+const WIDE_HEIGHT = 9 / 16;
+/** How much taller the stage gets when one of the displays stands upright. */
+const UPRIGHT_STAGE_GROWTH = 0.22;
+/** Below this share of its natural size the row stops sharing a line with the details. */
+const MIN_BESIDE_SHARE = 0.7;
 
 function aspectOf(monitor: MonitorInfo): number {
   if (monitor.width && monitor.height) return monitor.width / monitor.height;
   return monitor.orientation === "portrait" ? 9 / 16 : 16 / 9;
 }
 
-/** The window size, and whether it is being resized right now. */
-function useViewport(): { width: number; height: number; resizing: boolean } {
+/**
+ * A display's footprint with its long side as 1.  Panels are drawn as if they
+ * were the same size, the way they sit on a desk, so a rotated display takes
+ * as much room as a wide one.
+ */
+function footprintOf(monitor: MonitorInfo): { width: number; height: number } {
+  const aspect = aspectOf(monitor);
+  return aspect >= 1 ? { width: 1, height: 1 / aspect } : { width: aspect, height: 1 };
+}
+
+function useViewport(): { width: number; height: number } {
   const [viewport, setViewport] = useState(() => ({
     width: window.innerWidth,
     height: window.innerHeight,
-    resizing: false,
   }));
   useEffect(() => {
-    let settle: number | undefined;
-    const update = () => {
-      setViewport({ width: window.innerWidth, height: window.innerHeight, resizing: true });
-      window.clearTimeout(settle);
-      settle = window.setTimeout(
-        () => setViewport((prev) => ({ ...prev, resizing: false })),
-        160,
-      );
-    };
+    const update = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
     window.addEventListener("resize", update);
-    return () => {
-      window.removeEventListener("resize", update);
-      window.clearTimeout(settle);
-    };
+    return () => window.removeEventListener("resize", update);
   }, []);
   return viewport;
 }
 
 /**
- * The displays as they are right now, each in its own proportions.  Picking a
- * display switches the library below to its orientation.
+ * The displays as they are right now.  Picking one switches the library below
+ * to its orientation.
  *
- * Geometry is worked out here in whole pixels rather than left to layout, so a
- * switch only changes transforms: the row never changes size and the details
- * beside it slide instead of reflowing.
+ * Every display keeps its size and place whichever one is selected: the choice
+ * is shown with a ring and brightness, so a switch moves nothing.
  */
 export const NowStage: React.FC<NowStageProps> = ({
   t,
@@ -98,22 +98,28 @@ export const NowStage: React.FC<NowStageProps> = ({
 
   const shown = monitors.slice(0, 9);
   const activeIndex = shown.findIndex((monitor) => monitor.name === active.name);
-  const stageHeight = Math.min(236, Math.max(148, Math.round(viewport.height * 0.25)));
-  const widths = shown.map((monitor) => Math.round(stageHeight * aspectOf(monitor)));
-  const rowWidthFor = (selected: number): number =>
-    widths.reduce(
-      (sum, width, index) => sum + (index === selected ? width : width * INACTIVE_SCALE),
-      STAGE_GAP * (shown.length - 1),
-    );
-  // Room for the widest arrangement, so choosing another display never resizes the row.
-  const slotWidth = Math.ceil(Math.max(...widths.map((_, index) => rowWidthFor(index))));
-  const stacked = viewport.width < slotWidth + DETAILS_GAP + DETAILS_MIN_WIDTH + PAGE_GUTTERS;
-  const detailsShift = stacked ? 0 : Math.round(rowWidthFor(activeIndex) - slotWidth);
-  const offsets: number[] = [];
-  widths.reduce((offset, width, index) => {
-    offsets.push(offset);
-    return offset + (index === activeIndex ? width : width * INACTIVE_SCALE) + STAGE_GAP;
-  }, 0);
+  const footprints = shown.map(footprintOf);
+  const tallest = Math.max(...footprints.map((footprint) => footprint.height));
+  const span = footprints.reduce((sum, footprint) => sum + footprint.width, 0);
+  const gaps = STAGE_GAP * (shown.length - 1);
+
+  // Wide displays alone keep a low stage.  An upright one raises it, so the
+  // wide displays next to it do not shrink to thumbnails.
+  const lowStage = Math.min(236, Math.max(148, Math.round(viewport.height * 0.25)));
+  const upright = Math.min(1, Math.max(0, (tallest - WIDE_HEIGHT) / (1 - WIDE_HEIGHT)));
+  const naturalUnit = (lowStage * (1 + UPRIGHT_STAGE_GROWTH * upright)) / tallest;
+  const available = viewport.width - PAGE_GUTTERS;
+  const besideUnit = (available - DETAILS_GAP - DETAILS_MIN_WIDTH - gaps) / span;
+  const stacked = besideUnit < naturalUnit * MIN_BESIDE_SHARE;
+  const unit = Math.max(
+    48,
+    Math.min(naturalUnit, stacked ? (available - gaps) / span : besideUnit),
+  );
+  const sizes = footprints.map((footprint) => ({
+    width: Math.round(footprint.width * unit),
+    height: Math.round(footprint.height * unit),
+  }));
+  const stageHeight = Math.max(...sizes.map((size) => size.height));
 
   const rotationPaused = Boolean(status?.rotation_paused);
   const rotationOff =
@@ -136,9 +142,12 @@ export const NowStage: React.FC<NowStageProps> = ({
       className={`now-stage flex pt-4 pb-9 ${
         stacked ? "flex-col items-start gap-6" : "items-end gap-10"
       }`}
-      data-resizing={viewport.resizing ? "true" : undefined}
     >
-      <div className="stage-row" style={{ width: slotWidth, height: stageHeight }}>
+      <div
+        className="stage-row"
+        style={{ height: stageHeight, gap: STAGE_GAP }}
+        data-solo={shown.length === 1 ? "true" : undefined}
+      >
         {shown.map((monitor, index) => {
           const isActive = index === activeIndex;
           const resolution =
@@ -157,11 +166,7 @@ export const NowStage: React.FC<NowStageProps> = ({
               }
               aria-label={monitor.name}
               aria-pressed={isActive}
-              style={{
-                width: widths[index],
-                height: stageHeight,
-                transform: `translate3d(${offsets[index]}px, 0, 0) scale(${isActive ? 1 : INACTIVE_SCALE})`,
-              }}
+              style={sizes[index]}
               className="stage-screen"
             >
               {monitor.current_image ? (
@@ -183,10 +188,7 @@ export const NowStage: React.FC<NowStageProps> = ({
         })}
       </div>
 
-      <div
-        className="stage-details flex min-w-0 flex-1 flex-col gap-5 pb-0.5"
-        style={{ transform: `translate3d(${detailsShift}px, 0, 0)` }}
-      >
+      <div className="flex min-w-0 flex-1 flex-col gap-5 pb-0.5">
         <div key={active.name} className="fade-in">
           <h1 className="m-0 text-[22px] leading-none font-semibold tracking-[-0.03em] text-ink">
             {active.name}

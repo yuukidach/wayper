@@ -1064,7 +1064,9 @@ export const App: React.FC = () => {
                 onClearAutoHeld={() => void handleClearAutoHeld()}
                 purities={purities}
                 orientation={activeOrientation}
+                monitors={monitors}
                 activeMonitorName={activeMonitor?.name ?? null}
+                onSelectMonitor={handleSelectMonitor}
                 lane={reviewLane}
                 onLaneChange={setReviewLane}
                 refreshToken={refreshToken}
