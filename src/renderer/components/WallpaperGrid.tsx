@@ -1,5 +1,6 @@
 import React, {
   forwardRef,
+  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -19,15 +20,11 @@ import {
 import type { ImageItem, Orientation, Purity } from "../../shared/types";
 import { casefold } from "../../shared/tags";
 import { thumbUrl } from "../lib/media";
+import { motionDuration, motionEasing, prefersReducedMotion, scrollMotion } from "../lib/motion";
 
 const PAGE_SIZE = 120;
-const REFLOW_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 
 type RemovalKind = "dislike" | "ban";
-
-function prefersReducedMotion(): boolean {
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
 
 function sameItems(left: ImageItem[], right: ImageItem[]): boolean {
   if (left.length !== right.length) return false;
@@ -70,7 +67,7 @@ interface WallpaperGridProps {
   onClearFilter: () => void;
 }
 
-export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>(
+export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridProps>(
   (
     {
       t,
@@ -359,7 +356,7 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
       for (const { card, dx, dy } of moves) {
         card.animate(
           [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "translate(0, 0)" }],
-          { duration: 300, easing: REFLOW_EASING },
+          { duration: motionDuration.normal * 1000, easing: motionEasing },
         );
       }
     }, [filteredItems]);
@@ -407,7 +404,7 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
     }, [hasFilter, filteredItems.length, onFilteredCountChange]);
 
     const focusCardAtIndex = useCallback(
-      (index: number, behavior: ScrollBehavior = "smooth") => {
+      (index: number, behavior: ScrollBehavior = scrollMotion()) => {
         if (filteredItems.length === 0) {
           setFocusedIndex(-1);
           return;
@@ -441,7 +438,7 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
           if (filteredItems.length === 0) return;
           const cols = getColumnCount();
           if (focusedIndex < 0) {
-            focusCardAtIndex(0, "smooth");
+            focusCardAtIndex(0);
             return;
           }
           let next = focusedIndex;
@@ -450,7 +447,7 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
           else if (key === "ArrowDown")
             next = Math.min(filteredItems.length - 1, focusedIndex + cols);
           else if (key === "ArrowUp") next = Math.max(0, focusedIndex - cols);
-          focusCardAtIndex(next, "smooth");
+          focusCardAtIndex(next);
         },
         locateCurrent: async () => {
           if (!activeImagePath) return false;
@@ -460,7 +457,7 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
             const el = cardRefs.current.get(activeImagePath);
             if (el) {
               el.focus({ preventScroll: true });
-              el.scrollIntoView({ block: "center", behavior: "smooth" });
+              el.scrollIntoView({ block: "center", behavior: scrollMotion() });
             }
             return true;
           }
@@ -502,7 +499,7 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
                       const el = cardRefs.current.get(activeImagePath);
                       if (el) {
                         el.focus({ preventScroll: true });
-                        el.scrollIntoView({ block: "center", behavior: "smooth" });
+                        el.scrollIntoView({ block: "center", behavior: scrollMotion() });
                       }
                     });
                   }
@@ -521,20 +518,20 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
           return false;
         },
         jumpToTop: () => {
-          scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+          scrollRef.current?.scrollTo({ top: 0, behavior: scrollMotion() });
           if (filteredItems.length > 0) {
-            focusCardAtIndex(0, "smooth");
+            focusCardAtIndex(0);
           }
         },
         jumpToBottom: () => {
           if (scrollRef.current) {
             scrollRef.current.scrollTo({
               top: scrollRef.current.scrollHeight,
-              behavior: "smooth",
+              behavior: scrollMotion(),
             });
           }
           if (filteredItems.length > 0) {
-            focusCardAtIndex(filteredItems.length - 1, "smooth");
+            focusCardAtIndex(filteredItems.length - 1);
           }
         },
         getFocusedItem: () => {
@@ -705,7 +702,7 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
                     // Keep the neutral card instead of the browser's broken-image glyph.
                     event.currentTarget.style.visibility = "hidden";
                   }}
-                  className="h-full w-full object-cover opacity-0 transition-[opacity,transform] duration-500 ease-[var(--ease-out-soft)] group-hover:scale-[1.03]"
+                  className="wallpaper-thumbnail h-full w-full object-cover opacity-0"
                 />
 
                 {/* Top Status Indicators */}
@@ -795,6 +792,6 @@ export const WallpaperGrid = forwardRef<WallpaperGridHandle, WallpaperGridProps>
       </div>
     );
   },
-);
+));
 
 WallpaperGrid.displayName = "WallpaperGrid";

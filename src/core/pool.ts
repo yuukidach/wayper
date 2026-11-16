@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { PREVIEW_DIMENSIONS, previewCacheDirectory } from "../shared/media";
 import { normalizeTag } from "../shared/tags";
 import type { ImageItem, ImageMetadata, Orientation, Purity, TagDetail } from "../shared/types";
 import type { WayperConfig } from "./config";
@@ -605,7 +606,7 @@ export function clearImageDerivatives(config: ConfigOrDir, relPath: string): voi
   const stem = path.basename(normalizedInput, ext);
   if (!stem) return;
 
-  for (const cacheName of [".thumbnails", ".previews"] as const) {
+  for (const cacheName of [".thumbnails", ...PREVIEW_DIMENSIONS.map(previewCacheDirectory)]) {
     const derivative = path.join(dl, cacheName, parentDir, `${stem}.jpg`);
     try {
       fs.rmSync(derivative, { force: true });

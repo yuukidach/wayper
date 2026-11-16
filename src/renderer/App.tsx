@@ -4,6 +4,7 @@ import type {
   DiskUsageResponse,
   FilterStrategy,
   GalleryMode,
+  ImageItem,
   LanguagePreference,
   MonitorInfo,
   Orientation,
@@ -14,11 +15,12 @@ import type {
 } from "../shared/types";
 import { createTranslator, normalizeLanguagePreference, resolveLocale } from "../shared/i18n";
 import { normalizeTag, wallhavenUrl } from "../shared/tags";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { NowDock } from "./components/NowDock";
 import { NowStage } from "./components/NowStage";
 import { useAmbient } from "./lib/ambient";
 import { thumbUrl } from "./lib/media";
+import { motionCssVariables, motionTransition } from "./lib/motion";
 import { TopBar, type TopBarHandle } from "./components/TopBar";
 import { WallpaperGrid, type WallpaperGridHandle } from "./components/WallpaperGrid";
 import {
@@ -54,6 +56,7 @@ const MODE_KEYS: Record<string, GalleryMode> = {
 };
 
 export const App: React.FC = () => {
+  const reducedMotion = useReducedMotion();
   const [config, setConfig] = useState<ConfigPayload | null>(null);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [diskUsage, setDiskUsage] = useState<DiskUsageResponse | null>(null);
@@ -969,6 +972,26 @@ export const App: React.FC = () => {
     handleSetWallpaper,
   ]);
 
+  const handleOpenLibraryLightbox = useCallback((item: ImageItem, items: ImageItem[]) => {
+    setLightbox({
+      context: "library",
+      index: Math.max(0, items.findIndex((entry) => entry.path === item.path)),
+      items,
+    });
+  }, []);
+  const handleSetGridWallpaper = useCallback((item: ImageItem) => {
+    void handleSetWallpaper(item.path);
+  }, [handleSetWallpaper]);
+  const handleToggleGridFavorite = useCallback((item: ImageItem) => {
+    return handleToggleFavorite(item.path);
+  }, [handleToggleFavorite]);
+  const handleDislikeGridImage = useCallback((item: ImageItem) => {
+    return handleDislikePath(item.path);
+  }, [handleDislikePath]);
+  const handleBanGridImage = useCallback((item: ImageItem) => {
+    return handleBanPath(item.path);
+  }, [handleBanPath]);
+
   const filterStrategy: FilterStrategy = config?.wallhaven?.filter_strategy ?? "rules";
   const viewKey = mode === "model-review" ? "review" : mode === "trash" ? "blocklist" : "library";
   const openUpdate = () => {
@@ -986,9 +1009,29 @@ export const App: React.FC = () => {
       ? thumbUrl(activeMonitor.current_image)
       : null,
   );
+  const stageHeader = useMemo(() => stageVisible ? (
+    <NowStage
+      t={t}
+      monitors={monitors}
+      activeMonitorName={activeMonitor?.name ?? null}
+      onSelectMonitor={handleSelectMonitor}
+      status={status}
+      config={config}
+      onRotationAction={() => void handleRotationButton()}
+      onPrev={() => void handleControl("prev")}
+      onNext={() => void handleControl("next")}
+      onLocate={() => void handleLocateCurrent()}
+      onUndo={() => void handleControl("unban")}
+      onFavorite={(favorite) => void handleControl(favorite ? "fav" : "unfav")}
+      onDislike={() => void handleControl("dislike")}
+    />
+  ) : null, [
+    stageVisible, t, monitors, activeMonitor?.name, handleSelectMonitor, status, config,
+    handleRotationButton, handleControl, handleLocateCurrent,
+  ]);
 
   return (
-    <div className="page-scroll-scope relative h-screen w-screen overflow-hidden bg-frame text-ink">
+    <div style={motionCssVariables} className="page-scroll-scope relative h-screen w-screen overflow-hidden bg-frame text-ink">
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
         <AnimatePresence initial={false}>
           {ambient && (
@@ -999,7 +1042,7 @@ export const App: React.FC = () => {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: 0.7, ease: "linear" }}
+              transition={motionTransition.ambient}
               className="absolute inset-0 h-full w-full object-cover"
             />
           )}
@@ -1049,12 +1092,9 @@ export const App: React.FC = () => {
         onClearSearch={handleClearSearch}
       />
 
-      <motion.main
+      <main
         key={viewKey}
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-        className="absolute inset-0 flex flex-col overflow-hidden"
+        className="workspace-enter absolute inset-0 flex flex-col overflow-hidden"
       >
             {mode === "model-review" ? (
               <ReviewWorkspace
@@ -1118,17 +1158,7 @@ export const App: React.FC = () => {
                     items: list,
                   });
                 }}
-                onOpenLibraryLightbox={(item, list) => {
-                  const idx = Math.max(
-                    0,
-                    list.findIndex((x) => x.path === item.path),
-                  );
-                  setLightbox({
-                    context: "library",
-                    index: idx,
-                    items: list,
-                  });
-                }}
+                onOpenLibraryLightbox={handleOpenLibraryLightbox}
                 onOpenWallhaven={handleOpenWallhaven}
                 onNotify={notify}
               />
@@ -1143,55 +1173,27 @@ export const App: React.FC = () => {
                 searchQuery={searchQuery}
                 searchMatches={searchMatches}
                 refreshToken={refreshToken}
-                header={
-                  stageVisible ? (
-                    <NowStage
-                      t={t}
-                      monitors={monitors}
-                      activeMonitorName={activeMonitor?.name ?? null}
-                      onSelectMonitor={handleSelectMonitor}
-                      status={status}
-                      config={config}
-                      onRotationAction={() => void handleRotationButton()}
-                      onPrev={() => void handleControl("prev")}
-                      onNext={() => void handleControl("next")}
-                      onLocate={() => void handleLocateCurrent()}
-                      onUndo={() => void handleControl("unban")}
-                      onFavorite={(favorite) => void handleControl(favorite ? "fav" : "unfav")}
-                      onDislike={() => void handleControl("dislike")}
-                    />
-                  ) : null
-                }
+                header={stageHeader}
                 onFilteredCountChange={setMatchCount}
-                onOpenLightbox={(item, list) => {
-                  const idx = Math.max(
-                    0,
-                    list.findIndex((x) => x.path === item.path),
-                  );
-                  setLightbox({
-                    context: "library",
-                    index: idx,
-                    items: list,
-                  });
-                }}
-                onSetWallpaper={(item) => void handleSetWallpaper(item.path)}
-                onToggleFavorite={(item) => handleToggleFavorite(item.path)}
-                onDislike={(item) => handleDislikePath(item.path)}
-                onBan={(item) => handleBanPath(item.path)}
+                onOpenLightbox={handleOpenLibraryLightbox}
+                onSetWallpaper={handleSetGridWallpaper}
+                onToggleFavorite={handleToggleGridFavorite}
+                onDislike={handleDislikeGridImage}
+                onBan={handleBanGridImage}
                 onOpenWallhaven={handleOpenWallhaven}
                 onClearFilter={handleClearSearch}
               />
             )}
-      </motion.main>
+      </main>
 
       <AnimatePresence initial={false}>
         {mode !== "model-review" && (
           <motion.div
             key="now-dock"
-            initial={{ opacity: 0, y: 28, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 28, scale: 0.96 }}
-            transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.8 }}
+            initial={{ opacity: 0, transform: reducedMotion ? "none" : "translate3d(0, 12px, 0)" }}
+            animate={{ opacity: 1, transform: "translate3d(0, 0, 0)" }}
+            exit={{ opacity: 0, transform: reducedMotion ? "none" : "translate3d(0, 8px, 0)" }}
+            transition={motionTransition.normal}
             className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex justify-center px-4"
           >
             <div className={`pointer-events-auto ${stageVisible ? "dock-after-stage" : ""}`}>
@@ -1220,17 +1222,17 @@ export const App: React.FC = () => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.16 }}
+            transition={motionTransition.fast}
             onMouseDown={(event) => {
               if (event.target === event.currentTarget) closeSettingsRevertingPreview();
             }}
-            className="absolute inset-0 z-40 flex items-center justify-center bg-black/60 p-6 backdrop-blur-md"
+            className="absolute inset-0 z-40 flex items-center justify-center bg-black/75 p-6"
           >
             <motion.div
-              initial={{ opacity: 0, scale: 0.96, y: 12 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.98, y: 6 }}
-              transition={{ type: "spring", stiffness: 460, damping: 36, mass: 0.8 }}
+              initial={{ opacity: 0, transform: reducedMotion ? "none" : "translate3d(0, 12px, 0) scale(0.98)" }}
+              animate={{ opacity: 1, transform: "translate3d(0, 0, 0) scale(1)" }}
+              exit={{ opacity: 0, transform: reducedMotion ? "none" : "translate3d(0, 8px, 0) scale(0.99)" }}
+              transition={motionTransition.normal}
               role="dialog"
               aria-modal="true"
               aria-label={t("Settings")}

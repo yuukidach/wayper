@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { nativeImage, net, protocol } from "electron";
 import type { WayperConfig } from "../core/config";
 import { findTrashImage } from "../core/trash";
+import { PREVIEW_DIMENSIONS, previewCacheDirectory } from "../shared/media";
 
 export function registerWayperSchemePrivileges(): void {
   protocol.registerSchemesAsPrivileged([
@@ -182,6 +183,23 @@ function errorResponse(status: number, message: string): Response {
   });
 }
 
+async function servePreview(
+  sourcePath: string,
+  downloadDir: string,
+  relativePath: string,
+  url: URL,
+): Promise<Response> {
+  const requestedSize = Number(url.searchParams.get("size"));
+  const size = PREVIEW_DIMENSIONS.find((dimension) => dimension === requestedSize) ?? PREVIEW_DIMENSIONS[0];
+  const target = path.join(
+    downloadDir,
+    previewCacheDirectory(size),
+    path.dirname(relativePath),
+    `${path.parse(relativePath).name}.jpg`,
+  );
+  return serveLocalFile(await ensureDerivative(sourcePath, target, size, 86), true);
+}
+
 export function installWayperMediaProtocol(getConfig: () => WayperConfig): void {
   protocol.handle("wayper", async (request) => {
     try {
@@ -190,7 +208,7 @@ export function installWayperMediaProtocol(getConfig: () => WayperConfig): void 
       const config = getConfig();
       const downloadDir = config.download_dir;
 
-      if (route === "trash" || route === "trash-thumb") {
+      if (route === "trash" || route === "trash-thumb" || route === "trash-preview") {
         const rawName = url.searchParams.get("name") || "";
         const safeName = path.basename(rawName);
         if (!safeName || safeName !== rawName || safeName === "." || safeName === "..") {
@@ -213,6 +231,9 @@ export function installWayperMediaProtocol(getConfig: () => WayperConfig): void 
         if (route === "trash") {
           return serveLocalFile(trashed, false);
         }
+        if (route === "trash-preview") {
+          return servePreview(trashed, downloadDir, path.join("__trash", safeName), url);
+        }
         const stem = path.parse(safeName).name;
         const thumbTarget = path.join(downloadDir, ".thumbnails", "__trash", `${stem}.jpg`);
         return serveLocalFile(await ensureDerivative(trashed, thumbTarget, 420, 80), true);
@@ -227,6 +248,9 @@ export function installWayperMediaProtocol(getConfig: () => WayperConfig): void 
           const stem = path.parse(fname).name;
           const thumbTarget = path.join(downloadDir, ".thumbnails", "__trash", `${stem}.jpg`);
           return serveLocalFile(await ensureDerivative(trashed, thumbTarget, 420, 80), true);
+        }
+        if (route === "preview") {
+          return servePreview(trashed, downloadDir, path.join("__trash", fname), url);
         }
         return serveLocalFile(trashed, false);
       }
@@ -254,8 +278,7 @@ export function installWayperMediaProtocol(getConfig: () => WayperConfig): void 
       }
 
       if (route === "preview") {
-        const previewTarget = path.join(downloadDir, ".previews", relDir, `${stem}.jpg`);
-        return serveLocalFile(await ensureDerivative(resolved, previewTarget, 1920, 86), true);
+        return servePreview(resolved, downloadDir, rel, url);
       }
 
       return errorResponse(404, "Unknown media route");

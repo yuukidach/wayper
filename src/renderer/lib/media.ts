@@ -4,8 +4,8 @@ export function thumbUrl(filePath: string): string {
   return `wayper://media/thumb?path=${encodeURIComponent(filePath)}`;
 }
 
-export function previewUrl(filePath: string): string {
-  return `wayper://media/preview?path=${encodeURIComponent(filePath)}`;
+export function previewUrl(filePath: string, size = 1920): string {
+  return `wayper://media/preview?path=${encodeURIComponent(filePath)}&size=${size}`;
 }
 
 export function fullImgUrl(filePath: string): string {
@@ -18,6 +18,10 @@ export function trashUrl(filename: string): string {
 
 export function trashThumbUrl(filename: string): string {
   return `wayper://media/trash-thumb?name=${encodeURIComponent(filename)}`;
+}
+
+export function trashPreviewUrl(filename: string, size = 1920): string {
+  return `wayper://media/trash-preview?name=${encodeURIComponent(filename)}&size=${size}`;
 }
 
 export function formatFileSize(bytes?: number): string {

@@ -13,6 +13,7 @@ import {
   statusSnapshot,
 } from "../src/core/core";
 import { loadPreferenceFeedback } from "../src/core/preference/ledger";
+import { clearImageDerivatives } from "../src/core/pool";
 import { isBlacklisted, readMode, toggleBase, togglePurity, writeMode } from "../src/core/state";
 import { createSandbox, type Sandbox } from "./helpers/sandbox";
 
@@ -27,6 +28,20 @@ afterEach(() => {
 });
 
 describe("wallpaper actions", () => {
+  it("clears every preview size without touching the source image", () => {
+    const image = sandbox.addImage("sfw", "landscape", "wallhaven-cache1.png");
+    const derivatives = [".thumbnails", ".previews", ".previews/2560", ".previews/3840"].map(
+      (cache) => path.join(sandbox.downloadDir, cache, "sfw", "landscape", "wallhaven-cache1.jpg"),
+    );
+    for (const derivative of derivatives) {
+      fs.mkdirSync(path.dirname(derivative), { recursive: true });
+      fs.writeFileSync(derivative, "cached");
+    }
+    clearImageDerivatives(sandbox.config(), image);
+    expect(derivatives.some((derivative) => fs.existsSync(derivative))).toBe(false);
+    expect(fs.existsSync(image)).toBe(true);
+  });
+
   it("rotates forward and walks back through history", async () => {
     sandbox.addImage("sfw", "landscape", "wallhaven-aaa111.png");
     sandbox.addImage("sfw", "landscape", "wallhaven-bbb222.png");

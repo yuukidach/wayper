@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Ban,
   Check,
@@ -15,7 +15,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
 import type {
   ConfigPayload,
   ImageItem,
@@ -26,14 +26,13 @@ import { tagItems } from "../../shared/tags";
 import {
   extractUploaderName,
   formatFileSize,
-  fullImgUrl,
   normalizeHexColor,
-  previewUrl,
   thumbUrl,
   trashThumbUrl,
-  trashUrl,
 } from "../lib/media";
 import { useAmbient } from "../lib/ambient";
+import { motionTransition } from "../lib/motion";
+import { LightboxImage } from "./LightboxImage";
 import type { ReviewLane } from "./ReviewWorkspace";
 
 export type LightboxContextKind = "library" | "trash" | "review";
@@ -82,7 +81,7 @@ const dockIcon =
 const dockIconDanger =
   "flex h-10 w-10 items-center justify-center rounded-xl text-ink-2 transition-colors hover:bg-drop/15 hover:text-drop";
 
-export const Lightbox: React.FC<LightboxProps> = ({
+const LightboxView: React.FC<Omit<LightboxProps, "session"> & { session: LightboxSession }> = ({
   t,
   session,
   config,
@@ -104,7 +103,8 @@ export const Lightbox: React.FC<LightboxProps> = ({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [fullSrcReady, setFullSrcReady] = useState(false);
+  const [entered, setEntered] = useState(false);
+  const [direction, setDirection] = useState(1);
   const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
   const [metadata, setMetadata] = useState<ImageMetadata | null>(null);
   const [metaLoading, setMetaLoading] = useState(false);
@@ -112,37 +112,54 @@ export const Lightbox: React.FC<LightboxProps> = ({
   const [favOverride, setFavOverride] = useState<Record<string, boolean>>({});
 
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const dragStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const zoomRef = useRef({ scale: 1, pan: { x: 0, y: 0 } });
+  const zoomFrameRef = useRef<number | null>(null);
+  const oneToOneRef = useRef<{ x: number; y: number } | null>(null);
+  const isPresent = useIsPresent();
+  const reducedMotion = useReducedMotion();
 
-  const current = session ? session.items[session.index] ?? null : null;
+  const current = session.items[session.index];
 
   useEffect(() => {
+    const previousFocus = document.activeElement;
+    dialogRef.current?.focus({ preventScroll: true });
+    return () => {
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) {
+        previousFocus.focus({ preventScroll: true });
+      }
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    zoomRef.current = { scale: 1, pan: { x: 0, y: 0 } };
+    oneToOneRef.current = null;
+    dragStartRef.current = null;
     setScale(1);
     setPan({ x: 0, y: 0 });
-    setFullSrcReady(false);
+    setDragging(false);
     setNaturalSize(null);
+  }, [current.path]);
 
-    if (!current || !session) return;
-    const hiResSrc =
-      session.context === "trash" ? trashUrl(current.name) : fullImgUrl(current.path);
+  useEffect(() => () => {
+    if (zoomFrameRef.current !== null) cancelAnimationFrame(zoomFrameRef.current);
+  }, []);
 
-    let cancelled = false;
-    const loader = new Image();
-    loader.decoding = "async";
-    loader.onload = () => {
-      if (cancelled) return;
-      setNaturalSize({ w: loader.naturalWidth, h: loader.naturalHeight });
-      setFullSrcReady(true);
-    };
-    loader.src = hiResSrc;
-    return () => {
-      cancelled = true;
-    };
-  }, [current?.path, current?.name, session?.context]);
+  const scheduleZoom = useCallback(() => {
+    if (zoomFrameRef.current !== null) return;
+    zoomFrameRef.current = requestAnimationFrame(() => {
+      zoomFrameRef.current = null;
+      setScale(zoomRef.current.scale);
+      setPan(zoomRef.current.pan);
+    });
+  }, []);
+
+  const handleEntered = useCallback(() => setEntered(true), []);
 
   useEffect(() => {
-    if (!inspectorOpen || !current) return;
+    if (!inspectorOpen || !entered || !isPresent) return;
     const key = current.name;
     if (metadataCache.has(key)) {
       setMetadata(metadataCache.get(key) ?? null);
@@ -150,6 +167,7 @@ export const Lightbox: React.FC<LightboxProps> = ({
       return;
     }
     let cancelled = false;
+    setMetadata(null);
     setMetaLoading(true);
     window.wayper
       .getImageMetadata(current.name)
@@ -167,43 +185,51 @@ export const Lightbox: React.FC<LightboxProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [inspectorOpen, current?.name]);
+  }, [inspectorOpen, entered, isPresent, current.name]);
 
   const clampScale = (next: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
 
   const zoomAnchoredAt = useCallback(
     (nextScaleRaw: number, clientX?: number, clientY?: number) => {
-      const stage = stageRef.current;
+      const stage = stageRef.current?.querySelector("[data-lightbox-area]") ?? stageRef.current;
       const nextScale = clampScale(nextScaleRaw);
       if (!stage) {
-        setScale(nextScale);
-        if (nextScale <= 1) setPan({ x: 0, y: 0 });
+        zoomRef.current = { scale: nextScale, pan: { x: 0, y: 0 } };
+        scheduleZoom();
         return;
       }
       const rect = stage.getBoundingClientRect();
       const cx = (clientX ?? rect.left + rect.width / 2) - (rect.left + rect.width / 2);
       const cy = (clientY ?? rect.top + rect.height / 2) - (rect.top + rect.height / 2);
 
-      setScale((prevScale) => {
-        if (nextScale === 1) {
-          setPan({ x: 0, y: 0 });
-          return 1;
-        }
-        const ratio = nextScale / prevScale;
-        setPan((prevPan) => ({
-          x: cx - (cx - prevPan.x) * ratio,
-          y: cy - (cy - prevPan.y) * ratio,
-        }));
-        return nextScale;
-      });
+      const previous = zoomRef.current;
+      const ratio = nextScale / previous.scale;
+      zoomRef.current = {
+        scale: nextScale,
+        pan: nextScale === 1 ? { x: 0, y: 0 } : {
+          x: cx - (cx - previous.pan.x) * ratio,
+          y: cy - (cy - previous.pan.y) * ratio,
+        },
+      };
+      scheduleZoom();
     },
-    [],
+    [scheduleZoom],
   );
 
   const resetZoom = useCallback(() => {
-    setScale(1);
-    setPan({ x: 0, y: 0 });
-  }, []);
+    oneToOneRef.current = null;
+    zoomRef.current = { scale: 1, pan: { x: 0, y: 0 } };
+    scheduleZoom();
+  }, [scheduleZoom]);
+
+  const handleNaturalSize = useCallback((size: { w: number; h: number }) => {
+    setNaturalSize(size);
+    const anchor = oneToOneRef.current;
+    if (anchor && imgRef.current) {
+      oneToOneRef.current = null;
+      zoomAnchoredAt(size.w / Math.max(1, imgRef.current.clientWidth), anchor.x, anchor.y);
+    }
+  }, [zoomAnchoredAt]);
 
   const toggleOneToOne = useCallback(
     (e: React.MouseEvent) => {
@@ -214,7 +240,12 @@ export const Lightbox: React.FC<LightboxProps> = ({
         return;
       }
       const baseWidth = imgEl.clientWidth || 1;
-      const natWidth = naturalSize?.w || imgEl.naturalWidth || baseWidth;
+      if (!naturalSize) {
+        oneToOneRef.current = { x: e.clientX, y: e.clientY };
+        zoomAnchoredAt(2, e.clientX, e.clientY);
+        return;
+      }
+      const natWidth = naturalSize.w;
       const oneToOneScale = clampScale(natWidth / baseWidth);
       if (Math.abs(oneToOneScale - 1) < 0.05) {
         zoomAnchoredAt(2, e.clientX, e.clientY);
@@ -225,32 +256,42 @@ export const Lightbox: React.FC<LightboxProps> = ({
     [scale, naturalSize, resetZoom, zoomAnchoredAt],
   );
 
-  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.16 : 1 / 1.16;
-    zoomAnchoredAt(scale * factor, e.clientX, e.clientY);
-  };
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage || !isPresent) return;
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      oneToOneRef.current = null;
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stage.clientHeight : 1;
+      const delta = Math.max(-120, Math.min(120, event.deltaY * unit));
+      zoomAnchoredAt(zoomRef.current.scale * Math.exp(-delta * 0.002), event.clientX, event.clientY);
+    };
+    stage.addEventListener("wheel", handleWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", handleWheel);
+  }, [isPresent, zoomAnchoredAt]);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || scale <= 1) return;
+    if ((e.target as HTMLElement).closest("button")) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     setDragging(true);
     dragStartRef.current = {
       x: e.clientX,
       y: e.clientY,
-      panX: pan.x,
-      panY: pan.y,
+      panX: zoomRef.current.pan.x,
+      panY: zoomRef.current.pan.y,
     };
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragging || !dragStartRef.current) return;
+    if (!dragStartRef.current) return;
     const dx = e.clientX - dragStartRef.current.x;
     const dy = e.clientY - dragStartRef.current.y;
-    setPan({
+    zoomRef.current.pan = {
       x: dragStartRef.current.panX + dx,
       y: dragStartRef.current.panY + dy,
-    });
+    };
+    scheduleZoom();
   };
 
   const handlePointerUp = () => {
@@ -261,6 +302,7 @@ export const Lightbox: React.FC<LightboxProps> = ({
   const navigateItem = useCallback(
     (delta: -1 | 1) => {
       if (!session || session.items.length <= 1) return;
+      setDirection(delta);
       const next = (session.index + delta + session.items.length) % session.items.length;
       onChangeIndex(next);
     },
@@ -280,27 +322,45 @@ export const Lightbox: React.FC<LightboxProps> = ({
         const maxOverflowX = Math.max(0, (imgEl.clientWidth * scale - stageEl.clientWidth) / 2);
         const step = 120;
         if (delta === -1 && pan.x < maxOverflowX - 4) {
-          setPan((p) => ({ ...p, x: Math.min(maxOverflowX, p.x + step) }));
+          zoomRef.current.pan = { ...pan, x: Math.min(maxOverflowX, pan.x + step) };
+          scheduleZoom();
           return;
         }
         if (delta === 1 && pan.x > -maxOverflowX + 4) {
-          setPan((p) => ({ ...p, x: Math.max(-maxOverflowX, p.x - step) }));
+          zoomRef.current.pan = { ...pan, x: Math.max(-maxOverflowX, pan.x - step) };
+          scheduleZoom();
           return;
         }
       }
       navigateItem(delta);
     },
-    [session, scale, pan.x, navigateItem],
+    [session, scale, pan, navigateItem, scheduleZoom],
   );
 
   useEffect(() => {
-    if (!session || !current) return;
+    if (!isPresent) return;
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
       e.stopPropagation();
 
       switch (e.key) {
+        case "Tab": {
+          const buttons = Array.from(
+            dialogRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [],
+          );
+          const first = buttons[0];
+          const last = buttons[buttons.length - 1];
+          const outsideButtons = target === dialogRef.current || !dialogRef.current?.contains(target);
+          if (e.shiftKey && (target === first || outsideButtons)) {
+            e.preventDefault();
+            last?.focus();
+          } else if (!e.shiftKey && (target === last || outsideButtons)) {
+            e.preventDefault();
+            first?.focus();
+          }
+          return;
+        }
         case "Escape":
           e.preventDefault();
           onClose();
@@ -404,6 +464,7 @@ export const Lightbox: React.FC<LightboxProps> = ({
   }, [
     session,
     current,
+    isPresent,
     scale,
     arrowPanOrNavigate,
     zoomAnchoredAt,
@@ -418,20 +479,12 @@ export const Lightbox: React.FC<LightboxProps> = ({
   ]);
 
   const ambient = useAmbient(
-    current && session
+    entered && current && session
       ? session.context === "trash"
         ? trashThumbUrl(current.name)
         : thumbUrl(current.path)
       : null,
   );
-
-  const displaySrc = useMemo(() => {
-    if (!current || !session) return "";
-    if (session.context === "trash") {
-      return fullSrcReady ? trashUrl(current.name) : trashThumbUrl(current.name);
-    }
-    return fullSrcReady ? fullImgUrl(current.path) : previewUrl(current.path);
-  }, [current, session, fullSrcReady]);
 
   const isFav = useMemo(() => {
     if (!current) return false;
@@ -457,32 +510,28 @@ export const Lightbox: React.FC<LightboxProps> = ({
     return "—";
   }, [metadata, naturalSize]);
 
-  // Grow out of the tile that was opened, so the image never just "appears".
-  const openOrigin = useRef("50% 50%");
-  const wasOpen = useRef(false);
-  if (session && current && !wasOpen.current) {
-    const tile = Array.from(document.querySelectorAll<HTMLElement>("[data-path]")).find(
-      (node) => node.dataset.path === current.path,
-    );
-    const rect = tile?.getBoundingClientRect();
-    openOrigin.current = rect
-      ? `${Math.round(rect.left + rect.width / 2)}px ${Math.round(rect.top + rect.height / 2)}px`
-      : "50% 50%";
-  }
-  wasOpen.current = Boolean(session && current);
-
   return (
-    <AnimatePresence>
-      {session && current && (
         <motion.div
-          initial={{ opacity: 0 }}
+          ref={dialogRef}
+          initial={{ opacity: 1 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.16 }}
-          className="fixed inset-0 z-50 flex overflow-hidden bg-[#070707] select-none"
+          transition={motionTransition.normal}
+          role="dialog"
+          tabIndex={-1}
+          aria-modal="true"
+          aria-label={current.name}
+          data-lightbox="true"
+          className="fixed inset-0 z-50 flex overflow-hidden outline-none select-none"
         >
           {/* The viewed image lights its own room. */}
-          <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+          <motion.div
+            aria-hidden="true"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={motionTransition.normal}
+            className="pointer-events-none absolute inset-0 overflow-hidden bg-[#070707]"
+          >
             <AnimatePresence initial={false}>
               {ambient && (
                 <motion.img
@@ -492,15 +541,20 @@ export const Lightbox: React.FC<LightboxProps> = ({
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 0.55 }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 0.4, ease: "linear" }}
+                  transition={motionTransition.ambient}
                   className="absolute inset-0 h-full w-full object-cover"
                 />
               )}
             </AnimatePresence>
             <div className="absolute inset-0 bg-black/55" />
-          </div>
+          </motion.div>
           <div className="relative flex min-w-0 flex-1 flex-col">
-            <div className="pointer-events-none absolute top-0 right-0 left-0 z-20 flex h-14 items-center justify-between gap-4 px-5">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={motionTransition.normal}
+              className="pointer-events-none absolute top-0 right-0 left-0 z-20 flex h-14 items-center justify-between gap-4 px-5"
+            >
               <div className="flex min-w-0 items-baseline gap-2.5 text-[13px]">
                 <span className="truncate font-medium text-white/90">{current.name}</span>
                 <span className="shrink-0 tabular-nums text-white/45">
@@ -546,40 +600,40 @@ export const Lightbox: React.FC<LightboxProps> = ({
                   <X className="h-4 w-4" strokeWidth={1.75} />
                 </button>
               </div>
-            </div>
+            </motion.div>
 
-            <motion.div
+            <div
               ref={stageRef}
-              initial={{ scale: 0.3, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ type: "spring", stiffness: 380, damping: 34, mass: 0.8 }}
-              style={{ transformOrigin: openOrigin.current }}
-              onWheel={handleWheel}
               onDoubleClick={toggleOneToOne}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
+              onLostPointerCapture={handlePointerUp}
               onClick={(e) => {
                 if (e.target === stageRef.current && scale === 1) {
                   onClose();
                 }
               }}
-              className={`relative flex flex-1 items-center justify-center overflow-hidden px-16 pt-14 pb-[88px] ${
+              className={`relative flex flex-1 touch-none items-center justify-center overflow-hidden ${
                 scale > 1 ? (dragging ? "cursor-grabbing" : "cursor-grab") : "cursor-zoom-in"
               }`}
             >
-              <img
-                ref={imgRef}
-                src={displaySrc}
-                alt={current.name}
-                draggable={false}
-                style={{
-                  transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${scale})`,
-                  transition: dragging ? "none" : "transform 110ms cubic-bezier(0.22, 1, 0.36, 1)",
-                }}
-                className="max-h-full max-w-full rounded-lg object-contain shadow-[0_30px_80px_-20px_rgb(0_0_0/0.9)] select-none"
-              />
+              <AnimatePresence custom={{ closing: !isPresent, direction }} propagate>
+                <LightboxImage
+                  key={current.path}
+                  item={current}
+                  context={session.context}
+                  opening={!entered}
+                  direction={direction}
+                  scale={scale}
+                  pan={pan}
+                  dragging={dragging}
+                  imageRef={imgRef}
+                  onNaturalSize={handleNaturalSize}
+                  onEntered={handleEntered}
+                />
+              </AnimatePresence>
 
               {session.items.length > 1 && (
                 <>
@@ -589,7 +643,7 @@ export const Lightbox: React.FC<LightboxProps> = ({
                       e.stopPropagation();
                       navigateItem(-1);
                     }}
-                    className="absolute left-4 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.08] text-white/70 backdrop-blur-md transition-colors hover:bg-white/[0.16] hover:text-white"
+                    className="absolute left-4 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.08] text-white/70 transition-colors hover:bg-white/[0.16] hover:text-white"
                     aria-label="Previous"
                   >
                     <ChevronLeft className="h-5 w-5" strokeWidth={1.75} />
@@ -600,16 +654,22 @@ export const Lightbox: React.FC<LightboxProps> = ({
                       e.stopPropagation();
                       navigateItem(1);
                     }}
-                    className="absolute right-4 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.08] text-white/70 backdrop-blur-md transition-colors hover:bg-white/[0.16] hover:text-white"
+                    style={{ transform: inspectorOpen ? "translateX(-348px)" : "none" }}
+                    className="absolute right-4 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.08] text-white/70 transition-[transform,background-color,color] duration-200 hover:bg-white/[0.16] hover:text-white"
                     aria-label="Next"
                   >
                     <ChevronRight className="h-5 w-5" strokeWidth={1.75} />
                   </button>
                 </>
               )}
-            </motion.div>
+            </div>
 
-            <div className="pointer-events-none absolute right-0 bottom-5 left-0 z-20 flex justify-center px-4">
+            <motion.div
+              initial={{ opacity: 0, transform: reducedMotion ? "none" : "translateY(8px)" }}
+              animate={{ opacity: 1, transform: "none" }}
+              transition={motionTransition.reveal}
+              className="pointer-events-none absolute right-0 bottom-5 left-0 z-20 flex justify-center px-4"
+            >
               <div className="pointer-events-auto flex items-center gap-1 dock-surface rounded-[20px] p-1.5">
                 {session.context === "library" && (
                   <>
@@ -763,17 +823,17 @@ export const Lightbox: React.FC<LightboxProps> = ({
                   <ExternalLink className="h-4 w-4" strokeWidth={1.75} />
                 </button>
               </div>
-            </div>
+            </motion.div>
           </div>
 
           <AnimatePresence initial={false}>
             {inspectorOpen && (
               <motion.aside
-                initial={{ width: 0, opacity: 0 }}
-                animate={{ width: 332, opacity: 1 }}
-                exit={{ width: 0, opacity: 0 }}
-                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-                className="relative flex h-full shrink-0 flex-col overflow-hidden bg-black/45 shadow-[inset_1px_0_0_var(--color-line)]"
+                initial={{ opacity: 0, transform: reducedMotion ? "none" : "translateX(16px)" }}
+                animate={{ opacity: 1, transform: "none" }}
+                exit={{ opacity: 0, transform: reducedMotion ? "none" : "translateX(16px)" }}
+                transition={motionTransition.normal}
+                className="absolute top-16 right-4 bottom-24 z-30 flex w-[332px] flex-col overflow-hidden rounded-2xl bg-panel/95 shadow-float"
               >
                 <div className="flex h-14 w-[332px] shrink-0 items-center justify-between pr-3 pl-5">
                   <span className="text-[14px] font-semibold tracking-[-0.01em] text-ink">
@@ -890,7 +950,13 @@ export const Lightbox: React.FC<LightboxProps> = ({
             )}
           </AnimatePresence>
         </motion.div>
-      )}
-    </AnimatePresence>
   );
 };
+
+export const Lightbox: React.FC<LightboxProps> = (props) => (
+  <AnimatePresence>
+    {props.session?.items[props.session.index] && (
+      <LightboxView {...props} session={props.session} />
+    )}
+  </AnimatePresence>
+);
