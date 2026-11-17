@@ -226,6 +226,8 @@ export interface NeighborMatchDetail {
 export interface ReviewCandidateItem {
   path: string;
   name: string;
+  width?: number;
+  height?: number;
   purity?: Purity;
   orientation?: Orientation;
   auto_filtered?: boolean;

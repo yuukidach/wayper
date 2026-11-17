@@ -3,6 +3,7 @@ import React, {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -35,13 +36,24 @@ import type {
   ReviewCandidateItem,
 } from "../../shared/types";
 import { NON_PREFERENCE_FEATURE_TAGS } from "../../shared/tags";
-import { renderAmbient } from "../lib/ambient";
+import { preloadAmbient, useAmbient } from "../lib/ambient";
+import { decodeImage, getDecodedImage } from "../lib/decoded-image";
 import { prewarmLightboxPreview } from "../lib/lightbox-preview";
 import { previewUrl, thumbUrl } from "../lib/media";
 import { motionTransition, prefersReducedMotion } from "../lib/motion";
 import { MonitorTiles } from "./MonitorTiles";
 
 export type ReviewLane = "held" | "recommended";
+
+export interface ReviewPrefetchSnapshot {
+  scopeKey: string;
+  held: ModelReviewListResponse | null;
+  recommended: PreferenceSuggestionsResponse | null;
+}
+
+export function reviewScopeKey(purities: readonly Purity[], orientation: Orientation): string {
+  return `${[...purities].sort().join(",")}|${orientation}`;
+}
 
 export interface ReviewWorkspaceHandle {
   moveSelection: (delta: -1 | 1) => void;
@@ -64,6 +76,8 @@ interface ReviewWorkspaceProps {
   lane: ReviewLane;
   onLaneChange: (lane: ReviewLane) => void;
   refreshToken: number;
+  initialSnapshot?: ReviewPrefetchSnapshot | null;
+  onSnapshotChange?: (snapshot: ReviewPrefetchSnapshot) => void;
   onCountsChange: (held: number, recommended: number) => void;
   onOpenReviewLightbox: (
     item: ReviewCandidateItem,
@@ -164,13 +178,29 @@ function mergeQueue(
   return merged;
 }
 
-interface MediaProbe {
-  aspect: number;
-  ambient: string | null;
-}
-
 function guessAspect(item: ReviewCandidateItem): number {
   return item.orientation === "portrait" ? 9 / 16 : 16 / 9;
+}
+
+function resolveItemAspect(
+  item: ReviewCandidateItem,
+  measuredAspects: Record<string, number>,
+): number {
+  const measured = measuredAspects[item.path];
+  if (typeof measured === "number" && measured > 0) return measured;
+  if (
+    typeof item.width === "number" &&
+    typeof item.height === "number" &&
+    item.width > 0 &&
+    item.height > 0
+  ) {
+    return item.width / item.height;
+  }
+  const cached = getDecodedImage(previewUrl(item.path));
+  if (cached && cached.width > 0 && cached.height > 0) {
+    return cached.width / cached.height;
+  }
+  return guessAspect(item);
 }
 
 interface DeckCardProps {
@@ -184,6 +214,7 @@ interface DeckCardProps {
   dropLabel: string;
   onDecide: (action: "keep" | "ban") => void;
   onOpen: () => void;
+  onNaturalSize: (itemPath: string, width: number, height: number) => void;
 }
 
 const DeckCard: React.FC<DeckCardProps> = ({
@@ -197,8 +228,15 @@ const DeckCard: React.FC<DeckCardProps> = ({
   dropLabel,
   onDecide,
   onOpen,
+  onNaturalSize,
 }) => {
   const reducedMotion = useReducedMotion();
+  const previewSrc = previewUrl(item.path);
+  const [previewReady, setPreviewReady] = useState(() => Boolean(getDecodedImage(previewSrc)));
+  useEffect(() => {
+    setPreviewReady(Boolean(getDecodedImage(previewSrc)));
+  }, [previewSrc]);
+
   const x = useMotionValue(0);
   const rotate = useTransform(x, [-420, 420], reducedMotion ? [0, 0] : [-7, 7]);
   // Keep sits on the left and dislike on the right, like the A and D keys.
@@ -252,17 +290,25 @@ const DeckCard: React.FC<DeckCardProps> = ({
         width,
         height,
         gridArea: "1 / 1",
-        backgroundImage: `url("${thumbUrl(item.path)}")`,
+        backgroundImage: previewReady ? undefined : `url("${thumbUrl(item.path)}")`,
       }}
       className={`relative overflow-hidden rounded-[18px] bg-well bg-cover bg-center shadow-[0_22px_48px_-24px_rgb(0_0_0/0.85),0_0_0_1px_rgb(255_255_255/0.09)] will-change-transform ${
         isTop ? "cursor-grab" : "pointer-events-none"
       }`}
     >
       <img
-        src={previewUrl(item.path)}
+        src={previewSrc}
         alt={item.name}
         decoding="async"
+        fetchPriority={isTop ? "high" : "low"}
         draggable={false}
+        onLoad={(event) => {
+          setPreviewReady(true);
+          const img = event.currentTarget;
+          if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+            onNaturalSize(item.path, img.naturalWidth, img.naturalHeight);
+          }
+        }}
         className="pointer-events-none h-full w-full object-cover select-none"
       />
       <motion.div
@@ -330,6 +376,8 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
       lane,
       onLaneChange,
       refreshToken,
+      initialSnapshot,
+      onSnapshotChange,
       onCountsChange,
       onOpenReviewLightbox,
       onBrowsePool,
@@ -338,95 +386,216 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
     },
     ref,
   ) => {
-    const [heldData, setHeldData] = useState<ModelReviewListResponse | null>(null);
-    const [recData, setRecData] = useState<PreferenceSuggestionsResponse | null>(null);
-    const [heldItems, setHeldItems] = useState<ReviewCandidateItem[]>([]);
-    const [recItems, setRecItems] = useState<ReviewCandidateItem[]>([]);
+    const scopeKey = useMemo(() => reviewScopeKey(purities, orientation), [purities, orientation]);
+    const initialMatching = initialSnapshot?.scopeKey === scopeKey ? initialSnapshot : null;
+    const initialHeldItems = useMemo(
+      () =>
+        (initialMatching?.held?.items ?? []).map((item) => ({ ...item, auto_filtered: true })),
+      [initialMatching],
+    );
+    const initialRecItems = useMemo(
+      () =>
+        (initialMatching?.recommended?.items ?? []).map((item) => ({
+          ...item,
+          auto_filtered: false,
+        })),
+      [initialMatching],
+    );
+
+    const [heldData, setHeldData] = useState<ModelReviewListResponse | null>(
+      () => initialMatching?.held ?? null,
+    );
+    const [recData, setRecData] = useState<PreferenceSuggestionsResponse | null>(
+      () => initialMatching?.recommended ?? null,
+    );
+    const [heldItems, setHeldItems] = useState<ReviewCandidateItem[]>(() => initialHeldItems);
+    const [recItems, setRecItems] = useState<ReviewCandidateItem[]>(() => initialRecItems);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [exitIntent, setExitIntent] = useState<ExitIntent>("fade");
-    const [loading, setLoading] = useState(true);
+    const [heldLoading, setHeldLoading] = useState<boolean>(() => !initialMatching?.held);
+    const [recLoading, setRecLoading] = useState<boolean>(() => !initialMatching?.recommended);
+    const [autoLaneDone, setAutoLaneDone] = useState<boolean>(() =>
+      Boolean(
+        initialHeldItems.length > 0 || (initialMatching?.held && initialMatching?.recommended),
+      ),
+    );
     const [errorState, setErrorState] = useState<string | null>(null);
     const [retraining, setRetraining] = useState(false);
 
     const inFlightPathsRef = useRef<Set<string>>(new Set());
     const autoLaneInitializedRef = useRef(false);
     const seqRef = useRef(0);
-    const loadedRef = useRef(false);
+    const loadedRef = useRef(Boolean(initialMatching?.held || initialMatching?.recommended));
+    const latestHeldRef = useRef<ModelReviewListResponse | null>(initialMatching?.held ?? null);
+    const latestRecRef = useRef<PreferenceSuggestionsResponse | null>(
+      initialMatching?.recommended ?? null,
+    );
+    const snapshotRef = useRef(initialSnapshot ?? null);
+    snapshotRef.current = initialSnapshot ?? null;
+    const onSnapshotChangeRef = useRef(onSnapshotChange);
+    onSnapshotChangeRef.current = onSnapshotChange;
 
-    const purityKey = useMemo(() => [...purities].sort().join(","), [purities]);
-    const scopeRef = useRef({ purities, orientation });
-    scopeRef.current = { purities, orientation };
+    const scopeRef = useRef({ purities, orientation, scopeKey });
+    scopeRef.current = { purities, orientation, scopeKey };
 
     /**
-     * The first load of a scope shows a spinner.  Every later refresh is silent:
-     * the deck stays on screen and the fresh queue is merged into it.
+     * Fetches both lanes independently so fast local Auto-held cards appear right
+     * away without waiting on worker-scored Recommended candidates.
      */
     const fetchBothLanes = useCallback(async () => {
       const seq = ++seqRef.current;
       const silent = loadedRef.current;
       if (!silent) {
-        setLoading(true);
+        setHeldLoading(latestHeldRef.current === null);
+        setRecLoading(latestRecRef.current === null);
         setErrorState(null);
       }
-      try {
-        const scope = scopeRef.current;
-        const [heldRes, recRes] = await Promise.all([
-          window.wayper.getModelReview({
-            purities: scope.purities,
-            orient: scope.orientation,
-            limit: 80,
-          }),
-          window.wayper.getPreferenceSuggestions({
-            purities: scope.purities,
-            orient: scope.orientation,
-            limit: 60,
-          }),
-        ]);
-        if (seq !== seqRef.current) return;
+      const scope = scopeRef.current;
+      let resolvedHeldCount: number | null =
+        latestHeldRef.current !== null ? (latestHeldRef.current.items?.length ?? 0) : null;
+      let failures = 0;
+      let lastError: unknown = null;
 
-        const busy = inFlightPathsRef.current;
-        const nextHeld = (heldRes.items ?? [])
-          .filter((item) => !busy.has(item.path))
-          .map((item) => ({ ...item, auto_filtered: true }));
-        const nextRec = (recRes.items ?? [])
-          .filter((item) => !busy.has(item.path))
-          .map((item) => ({ ...item, auto_filtered: false }));
-
-        loadedRef.current = true;
-        setErrorState(null);
-        setHeldData(heldRes);
-        setRecData(recRes);
-        setHeldItems((prev) => mergeQueue(prev, nextHeld));
-        setRecItems((prev) => mergeQueue(prev, nextRec));
-
-        if (!autoLaneInitializedRef.current) {
-          autoLaneInitializedRef.current = true;
-          if (nextHeld.length === 0 && nextRec.length > 0) {
-            onLaneChange("recommended");
-          } else if (nextHeld.length > 0) {
+      const heldTask = window.wayper
+        .getModelReview({
+          purities: scope.purities,
+          orient: scope.orientation,
+          limit: 80,
+        })
+        .then((heldRes) => {
+          if (seq !== seqRef.current) return;
+          const busy = inFlightPathsRef.current;
+          const nextHeld = (heldRes.items ?? [])
+            .filter((item) => !busy.has(item.path))
+            .map((item) => ({ ...item, auto_filtered: true }));
+          resolvedHeldCount = nextHeld.length;
+          loadedRef.current = true;
+          latestHeldRef.current = heldRes;
+          setErrorState(null);
+          setHeldData(heldRes);
+          setHeldItems((prev) => mergeQueue(prev, nextHeld));
+          setHeldLoading(false);
+          onSnapshotChangeRef.current?.({
+            scopeKey: scope.scopeKey,
+            held: heldRes,
+            recommended: latestRecRef.current,
+          });
+          if (!autoLaneInitializedRef.current && nextHeld.length > 0) {
+            autoLaneInitializedRef.current = true;
+            setAutoLaneDone(true);
             onLaneChange("held");
           }
+        })
+        .catch((err) => {
+          if (seq !== seqRef.current) return;
+          failures += 1;
+          lastError = err;
+          setHeldLoading(false);
+        });
+
+      const recTask = window.wayper
+        .getPreferenceSuggestions({
+          purities: scope.purities,
+          orient: scope.orientation,
+          limit: 60,
+        })
+        .then((recRes) => {
+          if (seq !== seqRef.current) return;
+          const busy = inFlightPathsRef.current;
+          const nextRec = (recRes.items ?? [])
+            .filter((item) => !busy.has(item.path))
+            .map((item) => ({ ...item, auto_filtered: false }));
+          loadedRef.current = true;
+          latestRecRef.current = recRes;
+          setErrorState(null);
+          setRecData(recRes);
+          setRecItems((prev) => mergeQueue(prev, nextRec));
+          setRecLoading(false);
+          onSnapshotChangeRef.current?.({
+            scopeKey: scope.scopeKey,
+            held: latestHeldRef.current,
+            recommended: recRes,
+          });
+          if (!autoLaneInitializedRef.current && resolvedHeldCount !== null) {
+            autoLaneInitializedRef.current = true;
+            setAutoLaneDone(true);
+            if (resolvedHeldCount === 0 && nextRec.length > 0) {
+              onLaneChange("recommended");
+            } else if (resolvedHeldCount > 0) {
+              onLaneChange("held");
+            }
+          }
+        })
+        .catch((err) => {
+          if (seq !== seqRef.current) return;
+          failures += 1;
+          lastError = err;
+          setRecLoading(false);
+        });
+
+      await Promise.all([heldTask, recTask]);
+      if (seq !== seqRef.current) return;
+
+      if (!autoLaneInitializedRef.current) {
+        autoLaneInitializedRef.current = true;
+        setAutoLaneDone(true);
+        const finalHeld = latestHeldRef.current?.items?.length ?? 0;
+        const finalRec = latestRecRef.current?.items?.length ?? 0;
+        if (finalHeld === 0 && finalRec > 0) {
+          onLaneChange("recommended");
+        } else if (finalHeld > 0) {
+          onLaneChange("held");
         }
-      } catch (err) {
-        if (seq !== seqRef.current) return;
-        console.error("Failed loading review workspace:", err);
+      }
+
+      if (failures === 2) {
+        console.error("Failed loading review workspace:", lastError);
         if (!silent) {
-          setErrorState(err instanceof Error ? err.message : "Failed to load review queue");
-        }
-      } finally {
-        if (seq === seqRef.current) {
-          setLoading(false);
+          setErrorState(
+            lastError instanceof Error ? lastError.message : "Failed to load review queue",
+          );
         }
       }
     }, [onLaneChange]);
 
     useEffect(() => {
-      loadedRef.current = false;
-      autoLaneInitializedRef.current = false;
-      setHeldItems([]);
-      setRecItems([]);
+      const snap = snapshotRef.current?.scopeKey === scopeKey ? snapshotRef.current : null;
+      const seededHeld = (snap?.held?.items ?? []).map((item) => ({
+        ...item,
+        auto_filtered: true,
+      }));
+      const seededRec = (snap?.recommended?.items ?? []).map((item) => ({
+        ...item,
+        auto_filtered: false,
+      }));
+      latestHeldRef.current = snap?.held ?? null;
+      latestRecRef.current = snap?.recommended ?? null;
+      loadedRef.current = Boolean(snap?.held || snap?.recommended);
+      setHeldData(snap?.held ?? null);
+      setRecData(snap?.recommended ?? null);
+      setHeldItems(seededHeld);
+      setRecItems(seededRec);
+      setHeldLoading(!snap?.held);
+      setRecLoading(!snap?.recommended);
+      setErrorState(null);
+
+      if (seededHeld.length > 0) {
+        autoLaneInitializedRef.current = true;
+        setAutoLaneDone(true);
+        onLaneChange("held");
+      } else if (snap?.held && snap?.recommended) {
+        autoLaneInitializedRef.current = true;
+        setAutoLaneDone(true);
+        if (seededRec.length > 0) {
+          onLaneChange("recommended");
+        }
+      } else {
+        autoLaneInitializedRef.current = false;
+        setAutoLaneDone(false);
+      }
+
       void fetchBothLanes();
-    }, [purityKey, orientation, fetchBothLanes]);
+    }, [scopeKey, fetchBothLanes, onLaneChange]);
 
     const seenRefreshTokenRef = useRef(refreshToken);
     useEffect(() => {
@@ -585,69 +754,84 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
     const otherLane: ReviewLane = lane === "held" ? "recommended" : "held";
     const otherLaneCount = otherLane === "held" ? heldItems.length : recItems.length;
 
-    // Aspect ratio and ambient colour come from the thumbnail, and upcoming
-    // previews are decoded ahead of time, so a card never resizes or decodes
-    // while it is animating.
-    const [probes, setProbes] = useState<Record<string, MediaProbe>>({});
-    const probeRequestedRef = useRef<Set<string>>(new Set());
-    const previewKeepAliveRef = useRef<Map<string, HTMLImageElement>>(new Map());
-    useEffect(() => {
-      const upcoming = activeItems.slice(selectedIndex, selectedIndex + 4);
-      const previous = selectedIndex > 0 ? activeItems[selectedIndex - 1] : undefined;
-      if (previous) upcoming.push(previous);
-      const keepAlive = previewKeepAliveRef.current;
-      for (const item of upcoming) {
-        if (!probeRequestedRef.current.has(item.path)) {
-          probeRequestedRef.current.add(item.path);
-          const probe = new Image();
-          const finish = (aspect: number, ambient: string | null) =>
-            setProbes((prev) => ({ ...prev, [item.path]: { aspect, ambient } }));
-          probe.crossOrigin = "anonymous";
-          probe.decoding = "async";
-          probe.onload = () =>
-            finish(
-              probe.naturalWidth > 0 && probe.naturalHeight > 0
-                ? probe.naturalWidth / probe.naturalHeight
-                : guessAspect(item),
-              renderAmbient(probe),
-            );
-          probe.onerror = () => finish(guessAspect(item), null);
-          probe.src = thumbUrl(item.path);
-        }
-        const alive = keepAlive.get(item.path);
-        if (alive) {
-          keepAlive.delete(item.path);
-          keepAlive.set(item.path, alive);
-        } else {
-          const preview = new Image();
-          preview.decoding = "async";
-          preview.src = previewUrl(item.path);
-          void preview.decode().catch(() => undefined);
-          keepAlive.set(item.path, preview);
-        }
-      }
-      while (keepAlive.size > 10) {
-        const oldest = keepAlive.keys().next().value;
-        if (oldest === undefined) break;
-        keepAlive.delete(oldest);
-      }
-    }, [activeItems, selectedIndex]);
+    const [measuredAspects, setMeasuredAspects] = useState<Record<string, number>>({});
+    const recordNaturalSize = useCallback((itemPath: string, width: number, height: number) => {
+      if (width <= 0 || height <= 0) return;
+      const ratio = width / height;
+      setMeasuredAspects((prev) => (prev[itemPath] === ratio ? prev : { ...prev, [itemPath]: ratio }));
+    }, []);
 
+    // Decode the visible card first so nothing competes with it; only then
+    // decode upcoming cards one by one and prewarm the high-DPI lightbox image.
     useEffect(() => {
       if (!currentItem) return;
-      prewarmLightboxPreview(currentItem, "review");
-      const nextItem = activeItems[selectedIndex + 1];
-      if (!nextItem) return;
-      const timer = window.setTimeout(() => {
-        prewarmLightboxPreview(nextItem, "review", false);
-      }, 120);
-      return () => window.clearTimeout(timer);
-    }, [currentItem, activeItems, selectedIndex]);
+      let cancelled = false;
+      let lightboxTimer: number | null = null;
+
+      const run = async () => {
+        const topDecoded = await decodeImage(previewUrl(currentItem.path));
+        if (cancelled) return;
+        if (topDecoded && (!currentItem.width || !currentItem.height)) {
+          recordNaturalSize(currentItem.path, topDecoded.width, topDecoded.height);
+        }
+
+        const neighbors: ReviewCandidateItem[] = [];
+        for (let offset = 1; offset <= 3; offset += 1) {
+          const candidate = activeItems[selectedIndex + offset];
+          if (candidate) neighbors.push(candidate);
+        }
+        if (selectedIndex > 0 && activeItems[selectedIndex - 1]) {
+          neighbors.push(activeItems[selectedIndex - 1]);
+        }
+
+        for (let index = 0; index < neighbors.length; index += 1) {
+          if (cancelled) return;
+          const neighbor = neighbors[index];
+          if (index === 0) {
+            void preloadAmbient(thumbUrl(neighbor.path));
+          }
+          const decoded = await decodeImage(previewUrl(neighbor.path));
+          if (cancelled) return;
+          if (decoded && (!neighbor.width || !neighbor.height)) {
+            recordNaturalSize(neighbor.path, decoded.width, decoded.height);
+          }
+          if (index === 0) {
+            lightboxTimer = window.setTimeout(() => {
+              if (!cancelled) {
+                prewarmLightboxPreview(currentItem, "review", false);
+              }
+            }, 150);
+          }
+        }
+
+        if (neighbors.length === 0) {
+          lightboxTimer = window.setTimeout(() => {
+            if (!cancelled) {
+              prewarmLightboxPreview(currentItem, "review", false);
+            }
+          }, 150);
+        }
+      };
+
+      void run();
+      return () => {
+        cancelled = true;
+        if (lightboxTimer !== null) {
+          window.clearTimeout(lightboxTimer);
+        }
+      };
+    }, [currentItem, activeItems, selectedIndex, recordNaturalSize]);
+
+    const laneLoading =
+      lane === "held"
+        ? heldLoading || (heldItems.length === 0 && !autoLaneDone && recLoading)
+        : recLoading;
+    const loading = activeItems.length === 0 && laneLoading;
 
     const stageRef = useRef<HTMLDivElement | null>(null);
     const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
     const hasDeck = Boolean(currentItem) && !loading && !errorState;
-    useEffect(() => {
+    useLayoutEffect(() => {
       const node = stageRef.current;
       if (!node) return;
       const measure = () => setStageSize({ width: node.clientWidth, height: node.clientHeight });
@@ -659,19 +843,15 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
 
     const changeLane = (value: ReviewLane) => {
       if (value === lane) return;
+      autoLaneInitializedRef.current = true;
+      setAutoLaneDone(true);
       setExitIntent("fade");
       onLaneChange(value);
     };
 
-    const topProbe = currentItem ? probes[currentItem.path] : undefined;
     const upNext = activeItems[selectedIndex + 1];
-    const deck =
-      currentItem && topProbe
-        ? upNext && probes[upNext.path]
-          ? [currentItem, upNext]
-          : [currentItem]
-        : [];
-    const ambient = topProbe?.ambient ?? null;
+    const deck = currentItem ? (upNext ? [currentItem, upNext] : [currentItem]) : [];
+    const ambientLight = useAmbient(hasDeck && currentItem ? thumbUrl(currentItem.path) : null);
     const score = currentItem ? (currentItem.decision_score ?? currentItem.score ?? 0) : 0;
     const threshold = currentItem?.threshold ?? recData?.decision_threshold;
     const overThreshold = typeof threshold === "number" && score >= threshold;
@@ -757,10 +937,10 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
         {/* Ambient light: a pre-blurred miniature of the candidate fills the window. */}
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
           <AnimatePresence initial={false}>
-            {hasDeck && currentItem && ambient && (
+            {hasDeck && ambientLight && (
               <motion.img
-                key={`ambient-${currentItem.path}`}
-                src={ambient}
+                key={`ambient-${ambientLight.source}`}
+                src={ambientLight.url}
                 alt=""
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 0.72 }}
@@ -938,13 +1118,14 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
                       item={item}
                       isTop={item.path === currentItem.path}
                       intent={exitIntent}
-                      aspect={probes[item.path]?.aspect ?? guessAspect(item)}
+                      aspect={resolveItemAspect(item, measuredAspects)}
                       stageWidth={stageSize.width}
                       stageHeight={stageSize.height}
                       keepLabel={t("Keep")}
                       dropLabel={t("Dislike")}
                       onDecide={(action) => void decideItem(item, action)}
                       onOpen={() => onOpenReviewLightbox(item, activeItems, lane)}
+                      onNaturalSize={recordNaturalSize}
                     />
                   ))}
                 </AnimatePresence>

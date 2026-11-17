@@ -7,6 +7,7 @@ import {
   trySendControlAction,
 } from "../src/core/control-ipc";
 import { ServiceError, WayperService } from "../src/core/service";
+import { queueModelReviewItem } from "../src/core/preference/review";
 import { listBlacklist, readMode } from "../src/core/state";
 import type { WayperPushEvent } from "../src/shared/types";
 import { createSandbox, type Sandbox } from "./helpers/sandbox";
@@ -175,6 +176,67 @@ describe("desktop service", () => {
     expect(payload).toMatchObject({ safe_mode: true, quota_mb: 1234, language: "zh" });
     expect(await service.setMode(["nsfw"])).toEqual({ status: "ok", purities: ["sfw"] });
     expect(events.some((event) => event.type === "config")).toBe(true);
+  });
+
+  it("includes dimensions on auto-held review items and migrates derivatives on keep", async () => {
+    const quarantineDir = path.join(sandbox.downloadDir, ".model-review", "sfw", "landscape");
+    fs.mkdirSync(quarantineDir, { recursive: true });
+    const heldFile = path.join(quarantineDir, "wallhaven-hld001.png");
+    fs.copyFileSync(sandbox.addImage("sfw", "landscape", "seed.png"), heldFile);
+    fs.unlinkSync(path.join(sandbox.downloadDir, "sfw", "landscape", "seed.png"));
+
+    await queueModelReviewItem(sandbox.config(), heldFile, {
+      purity: "sfw",
+      orientation: "landscape",
+      strategy: "model",
+      prediction: { score: 0.91, decision_score: 0.88, probability: 0.89 },
+    });
+
+    const thumbSrc = path.join(
+      sandbox.downloadDir,
+      ".thumbnails",
+      ".model-review",
+      "sfw",
+      "landscape",
+      "wallhaven-hld001.jpg",
+    );
+    const prevSrc = path.join(
+      sandbox.downloadDir,
+      ".previews",
+      ".model-review",
+      "sfw",
+      "landscape",
+      "wallhaven-hld001.jpg",
+    );
+    fs.mkdirSync(path.dirname(thumbSrc), { recursive: true });
+    fs.mkdirSync(path.dirname(prevSrc), { recursive: true });
+    fs.writeFileSync(thumbSrc, "thumb");
+    fs.writeFileSync(prevSrc, "preview");
+
+    const list = service.getModelReview({ purities: ["sfw"], orient: "landscape", limit: 20 });
+    const items = list.items as Array<Record<string, unknown>>;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      path: ".model-review/sfw/landscape/wallhaven-hld001.png",
+      width: 1,
+      height: 1,
+    });
+
+    await service.resolveModelReview(
+      ".model-review/sfw/landscape/wallhaven-hld001.png",
+      "keep",
+    );
+    expect(fs.existsSync(thumbSrc)).toBe(false);
+    expect(
+      fs.existsSync(
+        path.join(sandbox.downloadDir, ".thumbnails", "sfw", "landscape", "wallhaven-hld001.jpg"),
+      ),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(sandbox.downloadDir, ".previews", "sfw", "landscape", "wallhaven-hld001.jpg"),
+      ),
+    ).toBe(true);
   });
 });
 

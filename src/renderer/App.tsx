@@ -18,18 +18,21 @@ import { normalizeTag, wallhavenUrl } from "../shared/tags";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { NowDock } from "./components/NowDock";
 import { NowStage } from "./components/NowStage";
-import { useAmbient } from "./lib/ambient";
+import { preloadAmbient, useAmbient } from "./lib/ambient";
+import { decodeImage } from "./lib/decoded-image";
 import {
   getReadyLightboxPreview,
   prepareLightboxPreview,
 } from "./lib/lightbox-preview";
-import { thumbUrl } from "./lib/media";
+import { previewUrl, thumbUrl } from "./lib/media";
 import { motionCssVariables, motionTransition } from "./lib/motion";
 import { TopBar, type TopBarHandle } from "./components/TopBar";
 import { WallpaperGrid, type WallpaperGridHandle } from "./components/WallpaperGrid";
 import {
+  reviewScopeKey,
   ReviewWorkspace,
   type ReviewLane,
+  type ReviewPrefetchSnapshot,
   type ReviewWorkspaceHandle,
 } from "./components/ReviewWorkspace";
 import {
@@ -84,6 +87,7 @@ export const App: React.FC = () => {
   const [reviewLane, setReviewLane] = useState<ReviewLane>("held");
   const [heldCount, setHeldCount] = useState<number>(0);
   const [recommendedCount, setRecommendedCount] = useState<number>(0);
+  const [reviewSnapshot, setReviewSnapshot] = useState<ReviewPrefetchSnapshot | null>(null);
   const [clearingAutoHeld, setClearingAutoHeld] = useState<boolean>(false);
 
   const [previewLang, setPreviewLang] = useState<LanguagePreference | null>(null);
@@ -112,6 +116,9 @@ export const App: React.FC = () => {
   const toastSeqRef = useRef(0);
   const lightboxRequestRef = useRef(0);
   const pendingLightboxRef = useRef(false);
+  const reviewPrefetchSeqRef = useRef(0);
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
 
   const effectiveLangPref = previewLang ?? normalizeLanguagePreference(config?.language ?? "auto");
   const locale = useMemo(() => resolveLocale(effectiveLangPref), [effectiveLangPref]);
@@ -191,20 +198,57 @@ export const App: React.FC = () => {
 
   const refreshReviewCountsBackground = useCallback(
     async (puritiesArg: Purity[], orientArg: Orientation) => {
-      try {
-        const [heldRes, recRes] = await Promise.all([
-          window.wayper.getModelReview({ purities: puritiesArg, orient: orientArg, limit: 80 }),
-          window.wayper.getPreferenceSuggestions({
-            purities: puritiesArg,
-            orient: orientArg,
-            limit: 60,
-          }),
-        ]);
-        setHeldCount(heldRes.items?.length ?? heldRes.pending_count ?? 0);
-        setRecommendedCount(recRes.items?.length ?? 0);
-      } catch {
-        // ignore background count errors
-      }
+      const seq = ++reviewPrefetchSeqRef.current;
+      const scopeKey = reviewScopeKey(puritiesArg, orientArg);
+      const prewarmTopCandidate = (item: ReviewCandidateItem | undefined) => {
+        if (!item || modeRef.current === "model-review") return;
+        window.setTimeout(() => {
+          if (reviewPrefetchSeqRef.current !== seq) return;
+          void decodeImage(previewUrl(item.path));
+          void preloadAmbient(thumbUrl(item.path));
+        }, 60);
+      };
+
+      const heldPromise = window.wayper
+        .getModelReview({ purities: puritiesArg, orient: orientArg, limit: 80 })
+        .then((heldRes) => {
+          if (reviewPrefetchSeqRef.current !== seq) return null;
+          setHeldCount(heldRes.items?.length ?? heldRes.pending_count ?? 0);
+          setReviewSnapshot((prev) => ({
+            scopeKey,
+            held: heldRes,
+            recommended: prev?.scopeKey === scopeKey ? prev.recommended : null,
+          }));
+          if (heldRes.items?.[0]) {
+            prewarmTopCandidate(heldRes.items[0]);
+          }
+          return heldRes;
+        })
+        .catch(() => null);
+
+      const recPromise = window.wayper
+        .getPreferenceSuggestions({
+          purities: puritiesArg,
+          orient: orientArg,
+          limit: 60,
+        })
+        .then(async (recRes) => {
+          if (reviewPrefetchSeqRef.current !== seq) return;
+          setRecommendedCount(recRes.items?.length ?? 0);
+          setReviewSnapshot((prev) => ({
+            scopeKey,
+            held: prev?.scopeKey === scopeKey ? prev.held : null,
+            recommended: recRes,
+          }));
+          const heldRes = await heldPromise;
+          if (reviewPrefetchSeqRef.current !== seq) return;
+          if ((heldRes?.items?.length ?? 0) === 0 && recRes.items?.[0]) {
+            prewarmTopCandidate(recRes.items[0]);
+          }
+        })
+        .catch(() => undefined);
+
+      await Promise.all([heldPromise, recPromise]);
     },
     [],
   );
@@ -259,7 +303,9 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (!config) return;
     void refreshStatusAndCounts(activeOrientation, activeMonitor?.name ?? null);
-    void refreshReviewCountsBackground(purities, activeOrientation);
+    if (modeRef.current !== "model-review") {
+      void refreshReviewCountsBackground(purities, activeOrientation);
+    }
   }, [
     activeOrientation,
     activeMonitor?.name,
@@ -278,7 +324,9 @@ export const App: React.FC = () => {
           break;
         case "library":
           void refreshStatusAndCounts();
-          void refreshReviewCountsBackground(purities, activeOrientation);
+          if (modeRef.current !== "model-review") {
+            void refreshReviewCountsBackground(purities, activeOrientation);
+          }
           setRefreshToken((n) => n + 1);
           break;
         case "wallpaper":
@@ -305,7 +353,9 @@ export const App: React.FC = () => {
           break;
         case "model-updated":
           void refreshStatusAndCounts();
-          void refreshReviewCountsBackground(purities, activeOrientation);
+          if (modeRef.current !== "model-review") {
+            void refreshReviewCountsBackground(purities, activeOrientation);
+          }
           setRefreshToken((n) => n + 1);
           break;
       }
@@ -1160,6 +1210,8 @@ export const App: React.FC = () => {
                 lane={reviewLane}
                 onLaneChange={setReviewLane}
                 refreshToken={refreshToken}
+                initialSnapshot={reviewSnapshot}
+                onSnapshotChange={setReviewSnapshot}
                 onCountsChange={(held, rec) => {
                   setHeldCount(held);
                   setRecommendedCount(rec);

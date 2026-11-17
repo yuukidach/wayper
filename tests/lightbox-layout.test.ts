@@ -12,6 +12,7 @@ import {
   previewDimension,
 } from "../src/renderer/lib/lightbox-layout";
 import {
+  estimateItemAspect,
   lightboxPreviewUrls,
   waitForFirstReadyPreview,
 } from "../src/renderer/lib/lightbox-preview";
@@ -30,6 +31,23 @@ describe("lightbox image geometry", () => {
     expect(fitImage(9 / 16, bounds)).toEqual({ width: 675, height: 1200 });
     expect(fitImage(4, bounds)).toEqual({ width: 2400, height: 600 });
     expect(fitImage(0, bounds)).toEqual({ width: 1200, height: 1200 });
+  });
+
+  it("uses candidate dimensions directly before falling back to orientation guesses", () => {
+    expect(
+      estimateItemAspect({
+        path: "sfw/landscape/wide.jpg",
+        orientation: "landscape",
+        width: 3440,
+        height: 1440,
+      }),
+    ).toBeCloseTo(3440 / 1440, 5);
+    expect(
+      estimateItemAspect({
+        path: "sfw/portrait/tall.jpg",
+        orientation: "portrait",
+      }),
+    ).toBeCloseTo(9 / 16, 5);
   });
 
   it("maps the fitted image back to the tile center with a uniform scale", () => {

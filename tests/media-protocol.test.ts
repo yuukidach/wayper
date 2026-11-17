@@ -10,6 +10,7 @@ const media = vi.hoisted(() => ({
   handler: null as ((request: Request) => Promise<Response>) | null,
   trashed: "",
   resize: vi.fn(),
+  beforeWrite: null as ((target: string, dimension: number) => Promise<void>) | null,
 }));
 
 vi.mock("electron", () => ({
@@ -40,7 +41,12 @@ vi.mock("sharp", () => ({
       },
       flatten: () => decoder,
       jpeg: () => decoder,
-      toFile: (target: string) => fs.writeFile(target, `preview:${dimension}`),
+      toFile: async (target: string) => {
+        if (media.beforeWrite) {
+          await media.beforeWrite(target, dimension);
+        }
+        await fs.writeFile(target, `preview:${dimension}`);
+      },
     };
     return decoder;
   },
@@ -58,6 +64,7 @@ beforeEach(async () => {
   await fs.writeFile(source, "original");
   media.trashed = source;
   media.resize.mockClear();
+  media.beforeWrite = null;
   installWayperMediaProtocol(() => ({ download_dir: library }) as WayperConfig);
 });
 
@@ -124,5 +131,49 @@ describe("bounded media previews", () => {
     expect(await imageBody(`wayper://media/preview?path=${encoded}&size=3840&cached=1`))
       .toBe("preview:2560");
     expect(media.resize).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs queued previews in FIFO order ahead of queued thumbnails", async () => {
+    const names = ["a.png", "b.png", "c.png", "d.png", "e.png"];
+    for (const name of names) {
+      const full = path.join(library, "sfw/landscape", name);
+      await fs.mkdir(path.dirname(full), { recursive: true });
+      await fs.writeFile(full, `img:${name}`);
+    }
+
+    const startedOrder: string[] = [];
+    const gates: Array<() => void> = [];
+    media.beforeWrite = async (target, dimension) => {
+      const base = path.basename(target).split(".")[0];
+      startedOrder.push(`${base}:${dimension}`);
+      if (gates.length < 2) {
+        await new Promise<void>((resolve) => {
+          gates.push(resolve);
+        });
+      }
+    };
+
+    const pA = imageBody("wayper://media/thumb?path=sfw%2Flandscape%2Fa.png");
+    const pB = imageBody("wayper://media/thumb?path=sfw%2Flandscape%2Fb.png");
+    while (gates.length < 2) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 2));
+    }
+
+    // Slot capacity (2) is full: queue one normal thumb, then two high-priority previews.
+    const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 25));
+    const pThumbC = imageBody("wayper://media/thumb?path=sfw%2Flandscape%2Fc.png");
+    await settle();
+    const pPrevD = imageBody("wayper://media/preview?path=sfw%2Flandscape%2Fd.png&size=1920");
+    await settle();
+    const pPrevE = imageBody("wayper://media/preview?path=sfw%2Flandscape%2Fe.png&size=1920");
+    await settle();
+
+    // Free one slot so queued jobs drain strictly one at a time without fs.mkdir races.
+    gates[0]();
+    await Promise.all([pA, pThumbC, pPrevD, pPrevE]);
+    gates[1]();
+    await pB;
+
+    expect(startedOrder.slice(2)).toEqual(["d:1920", "e:1920", "c:420"]);
   });
 });
