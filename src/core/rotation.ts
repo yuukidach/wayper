@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import { ensureReady, GreeterError, installGreeterImage, isLocked } from "./backend";
 import { loadConfig, type WayperConfig } from "./config";
-import { setAllWallpapers } from "./core";
+import { purgeBlacklistedFavorites, setAllWallpapers } from "./core";
 import { getDefaultLockPath, withFileLock } from "./lock";
 import { getLogger } from "./logging";
 import { getConfigFile, poolDir } from "./paths";
 import { enforceQuota, ensureDirectories, listImagesInDir } from "./pool";
 import { pruneBlacklist, readMode, secondsUntilNextRotation } from "./state";
 import { prepareWallhavenClient, refillPool, type WallhavenClient } from "./wallhaven";
-import { pushLocalFavorites } from "./wallhaven-web";
+import { pushLocalFavorites, removeBlacklistedRemoteFavorites } from "./wallhaven-web";
 
 const log = getLogger("rotation");
 
@@ -179,6 +179,8 @@ export class AutoRotationService {
     this.configMtime = mtime;
     const config = this.configLoader();
     ensureDirectories(config);
+    const purged = await purgeBlacklistedFavorites(config);
+    if (purged > 0) this.onEvent("library");
     this.config = config;
     this.client = await this.prepareClient(config);
     log.info("Automatic rotation configuration reloaded");
@@ -223,6 +225,8 @@ export class AutoRotationService {
       this.config = this.configLoader();
       ensureDirectories(this.config);
       ensureReady();
+      const purgedAtStart = await purgeBlacklistedFavorites(this.config);
+      if (purgedAtStart > 0) this.onEvent("library");
       this.configMtime = fileMtime(getConfigFile());
       this.client = await this.prepareClient(this.config);
       log.info("Automatic rotation service started");
@@ -255,9 +259,11 @@ export class AutoRotationService {
             const client = this.client as WallhavenClient;
             syncTask = (async () => {
               try {
+                const purged = await purgeBlacklistedFavorites(config);
                 const [synced, remoteFiles] = await client.syncRemoteFavorites();
+                await removeBlacklistedRemoteFavorites(config, remoteFiles);
                 await pushLocalFavorites(config, remoteFiles);
-                if (synced > 0) this.onEvent("library");
+                if (synced > 0 || purged > 0) this.onEvent("library");
               } catch (error) {
                 log.warn("Background favorites sync failed", error);
               }

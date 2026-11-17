@@ -4,8 +4,8 @@ import type { FilterStrategy } from "../../shared/types";
 import { normalizeFilterStrategy } from "../config";
 import { atomicWrite } from "../image-probe";
 import { getDefaultLockPath, withFileLock } from "../lock";
-import { ALL_ORIENTATIONS, ALL_PURITIES, favoritesDir, isOrientation, isPurity, poolDir } from "../paths";
-import { listImagesInDir, loadMetadata } from "../pool";
+import { ALL_ORIENTATIONS, ALL_PURITIES, isOrientation, isPurity, poolDir } from "../paths";
+import { favoriteFilenames, listImagesInDir, loadMetadata } from "../pool";
 import { addToBlacklist, listBlacklist, type ConfigOrDir } from "../state";
 import { trashAndRecordUndo } from "../trash";
 import {
@@ -693,14 +693,7 @@ export async function preferenceDeletionSuggestions(
     Record<string, unknown>
   >;
   const blacklisted = new Set(listBlacklist(config).map((entry) => entry.filename));
-  const favorites = new Set<string>();
-  for (const purity of ALL_PURITIES) {
-    for (const orient of ALL_ORIENTATIONS) {
-      for (const image of listImagesInDir(favoritesDir(downloadDir, purity, orient))) {
-        favorites.add(path.basename(image));
-      }
-    }
-  }
+  const favorites = favoriteFilenames(config);
   const latestFeedback = latestFeedbackByFilename(loadPreferenceFeedback(config).events);
   const records: Array<{ image: string; name: string; meta: Record<string, unknown> }> = [];
   let poolImages = 0;

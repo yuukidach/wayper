@@ -5,10 +5,12 @@ import { saveConfig, type WayperConfig } from "./config";
 import { httpFetch, httpGetJson, USER_AGENT } from "./http";
 import { getConfigDir } from "./paths";
 import { favoriteFilenames } from "./pool";
+import { listBlacklist } from "./state";
 
 const BASE_URL = "https://wallhaven.cc";
-const COOKIE_MAX_AGE_SEC = 86_400;
+const SESSION_VERIFY_TTL_MS = 15 * 60 * 1000;
 const LOGIN_RETRY_DELAY_MS = 60_000;
+const ATTR_RE = /([\w:-]+)\s*=\s*(["'])([\s\S]*?)\2/g;
 export const PUSH_BATCH_SIZE = 5;
 
 export interface StoredCookie {
@@ -120,10 +122,6 @@ function loadCachedSession(expectedUsername: string): StoredCookie[] | null {
       username?: string;
     };
     if (!Array.isArray(data.cookies) || !data.cookies.length) return null;
-    const nowSec = Date.now() / 1000;
-    if (typeof data.timestamp === "number" && nowSec - data.timestamp > COOKIE_MAX_AGE_SEC) {
-      return null;
-    }
     if (
       expectedUsername &&
       data.username &&
@@ -141,9 +139,11 @@ function saveCachedSession(username: string, cookies: StoredCookie[]): void {
   if (!cookies.length) return;
   try {
     const file = sessionFilePath();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const dir = path.dirname(file);
+    fs.mkdirSync(dir, { recursive: true });
+    const tempFile = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(
-      file,
+      tempFile,
       JSON.stringify(
         {
           cookies,
@@ -155,6 +155,7 @@ function saveCachedSession(username: string, cookies: StoredCookie[]): void {
       ),
       { encoding: "utf-8", mode: 0o600 },
     );
+    fs.renameSync(tempFile, file);
   } catch {
     // Best-effort session persistence
   }
@@ -175,12 +176,52 @@ function extractCsrfToken(html: string): string | null {
   return inputMatch?.[1] ?? null;
 }
 
+function isAuthenticatedHtml(html: string): boolean {
+  return html.includes("Logout") || /\/auth\/logout\b/i.test(html);
+}
+
+function isUnauthenticatedHtml(finalUrl: string, html: string): boolean {
+  return (
+    finalUrl.endsWith("/login") ||
+    /<form[^>]+(?:id=["']login["']|action=["'][^"']*\/auth\/login)/i.test(html) ||
+    /href=["'](?:https?:\/\/wallhaven\.cc)?\/login(?:[?'"#]|$)/i.test(html)
+  );
+}
+
+function resolveWallhavenUrl(rawUrl: string): string {
+  if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+    return rawUrl;
+  }
+  if (rawUrl.startsWith("//")) {
+    return `https:${rawUrl}`;
+  }
+  if (rawUrl.startsWith("/")) {
+    return `${BASE_URL}${rawUrl}`;
+  }
+  return `${BASE_URL}/${rawUrl}`;
+}
+
 export class WallhavenWebSession {
   private jar = new CookieJar();
   private loggedIn = false;
+  private lastVerifiedAt = 0;
   private loginRetryAfter = 0;
+  private sessionUsername = "";
 
-  constructor(private readonly config: WayperConfig) {}
+  constructor(private config: WayperConfig) {}
+
+  updateConfig(nextConfig: WayperConfig): void {
+    this.config = nextConfig;
+  }
+
+  private persistSession(usernameOverride?: string): void {
+    const effectiveUser = (
+      usernameOverride ||
+      this.sessionUsername ||
+      this.config.wallhaven_username
+    ).trim();
+    saveCachedSession(effectiveUser, this.jar.toArray());
+  }
 
   private async fetchWithJar(
     url: string,
@@ -227,15 +268,11 @@ export class WallhavenWebSession {
         return "unavailable";
       }
       const html = await res.text();
-      if (html.includes("Logout")) {
+      if (isAuthenticatedHtml(html)) {
         this.jar.load(tempJar.toArray());
         return "authenticated";
       }
-      if (
-        res.url.endsWith("/login") ||
-        /<form[^>]+(?:id="login"|action="[^"]*\/auth\/login")/i.test(html) ||
-        /href="\/login[?'"]/i.test(html)
-      ) {
+      if (isUnauthenticatedHtml(res.url, html)) {
         return "unauthenticated";
       }
       return "unavailable";
@@ -246,7 +283,13 @@ export class WallhavenWebSession {
 
   async login(options: { allowBrowser?: boolean; force?: boolean } = {}): Promise<boolean> {
     const { allowBrowser = false, force = false } = options;
-    if (this.loggedIn && !force) return true;
+    if (
+      this.loggedIn &&
+      !force &&
+      performance.now() - this.lastVerifiedAt < SESSION_VERIFY_TTL_MS
+    ) {
+      return true;
+    }
     if (!force && performance.now() < this.loginRetryAfter) return false;
 
     const username = this.config.wallhaven_username.trim();
@@ -254,12 +297,17 @@ export class WallhavenWebSession {
 
     // Stage 1: Cached .wh_session.json cookies
     const cached = loadCachedSession(username);
-    if (cached) {
+    if (!this.loggedIn && cached) {
       this.jar.load(cached);
+    }
+    if (this.jar.toArray().length > 0) {
       const state = await this.verifySession();
       if (state === "authenticated") {
         this.loggedIn = true;
-        saveCachedSession(username, this.jar.toArray());
+        this.lastVerifiedAt = performance.now();
+        this.loginRetryAfter = 0;
+        this.sessionUsername = username || this.sessionUsername;
+        this.persistSession(username);
         return true;
       }
       if (state === "unavailable" && !allowBrowser) {
@@ -267,6 +315,7 @@ export class WallhavenWebSession {
         return false;
       }
       if (state === "unauthenticated") {
+        this.loggedIn = false;
         clearCachedSession();
         this.jar.clear();
       }
@@ -303,7 +352,10 @@ export class WallhavenWebSession {
               const verify = await this.verifySession();
               if (verify === "authenticated") {
                 this.loggedIn = true;
-                saveCachedSession(username, this.jar.toArray());
+                this.lastVerifiedAt = performance.now();
+                this.loginRetryAfter = 0;
+                this.sessionUsername = username;
+                this.persistSession(username);
                 return true;
               }
             }
@@ -322,7 +374,10 @@ export class WallhavenWebSession {
         const verify = await this.verifySession();
         if (verify === "authenticated") {
           this.loggedIn = true;
-          saveCachedSession(interactive.username || username, this.jar.toArray());
+          this.lastVerifiedAt = performance.now();
+          this.loginRetryAfter = 0;
+          this.sessionUsername = (interactive.username || username).trim();
+          this.persistSession(this.sessionUsername);
           return true;
         }
       }
@@ -332,6 +387,7 @@ export class WallhavenWebSession {
   }
 
   async setFavoriteState(whId: string, wantFav: boolean): Promise<boolean> {
+    if (!whId) return false;
     if (!(await this.login())) return false;
 
     const attemptToggle = async (): Promise<"ok" | "retry" | "fail"> => {
@@ -344,11 +400,13 @@ export class WallhavenWebSession {
       if (!res.ok) return "fail";
 
       const html = await res.text();
-      const csrf = extractCsrfToken(html);
-      if (!csrf) return "fail";
+      if (!isAuthenticatedHtml(html) && isUnauthenticatedHtml(res.url, html)) {
+        return "retry";
+      }
 
       const parsed = parseFavButtonState(html);
       if (parsed.isFaved !== null && parsed.isFaved === wantFav) {
+        this.persistSession();
         return "ok";
       }
       if (parsed.isFaved === null && !wantFav) {
@@ -356,9 +414,10 @@ export class WallhavenWebSession {
       }
       if (!parsed.actionUrl) return "fail";
 
-      const targetUrl = parsed.actionUrl.startsWith("http")
-        ? parsed.actionUrl
-        : `${BASE_URL}${parsed.actionUrl.startsWith("/") ? "" : "/"}${parsed.actionUrl}`;
+      const csrf = extractCsrfToken(html);
+      if (!csrf) return "fail";
+
+      const targetUrl = resolveWallhavenUrl(parsed.actionUrl);
 
       const postRes = await this.fetchWithJar(targetUrl, {
         method: "POST",
@@ -369,9 +428,14 @@ export class WallhavenWebSession {
           Accept: "application/json",
         },
       });
-      if (!postRes.ok) return "retry";
+      if (isCfChallenge(postRes)) return "fail";
+      if (!postRes.ok || postRes.url.endsWith("/login")) return "retry";
       const payload = (await postRes.json().catch(() => null)) as { status?: boolean } | null;
-      return payload?.status === true ? "ok" : "fail";
+      if (payload?.status === true) {
+        this.persistSession();
+        return "ok";
+      }
+      return "fail";
     };
 
     const first = await attemptToggle();
@@ -390,70 +454,165 @@ export class WallhavenWebSession {
     items: string[],
   ): Promise<boolean> {
     if (!(await this.login())) return false;
-    try {
-      const pageUrl = `${BASE_URL}/settings/browsing`;
-      const res = await this.fetchWithJar(pageUrl, { redirect: "follow" });
-      if (!res.ok || res.url.endsWith("/login")) return false;
-      const html = await res.text();
-      const token = extractCsrfToken(html);
-      if (!token) return false;
-
-      const formParams = scrapeFormFields(html);
-      formParams.set("_token", token);
-
-      const existingRaw = formParams.get(fieldName) ?? "";
-      const mergedMap = new Map<string, string>();
-      for (const line of existingRaw.split(/\r?\n/)) {
-        const trimmed = line.trim();
-        if (trimmed) mergedMap.set(trimmed.toLowerCase(), trimmed);
-      }
-      for (const item of items) {
-        const trimmed = item.trim();
-        if (trimmed && !mergedMap.has(trimmed.toLowerCase())) {
-          mergedMap.set(trimmed.toLowerCase(), trimmed);
+    const attemptSync = async (): Promise<"ok" | "retry" | "fail"> => {
+      try {
+        const pageUrl = `${BASE_URL}/settings/browsing`;
+        const res = await this.fetchWithJar(pageUrl, { redirect: "follow" });
+        if (isCfChallenge(res)) return "fail";
+        if (res.status === 401 || res.status === 403 || res.url.endsWith("/login")) {
+          return "retry";
         }
-      }
-      const sortedLines = [...mergedMap.values()].sort((a, b) => a.localeCompare(b));
-      formParams.set(fieldName, sortedLines.join("\n"));
+        if (!res.ok) return "fail";
+        const html = await res.text();
+        if (!isAuthenticatedHtml(html) && isUnauthenticatedHtml(res.url, html)) {
+          return "retry";
+        }
+        const token = extractCsrfToken(html);
+        if (!token) return "fail";
 
-      const postRes = await this.fetchWithJar(pageUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Referer: pageUrl,
-        },
-        body: formParams.toString(),
-        redirect: "manual",
-      });
-      return postRes.status === 200 || postRes.status === 302;
-    } catch {
-      return false;
+        const formParams = scrapeFormFields(html);
+        formParams.set("_token", token);
+
+        const existingRaw = formParams.get(fieldName) ?? "";
+        const mergedMap = new Map<string, string>();
+        for (const line of existingRaw.split(/\r?\n/)) {
+          const trimmed = line.trim();
+          if (trimmed) mergedMap.set(trimmed.toLowerCase(), trimmed);
+        }
+        for (const item of items) {
+          const trimmed = item.trim();
+          if (trimmed && !mergedMap.has(trimmed.toLowerCase())) {
+            mergedMap.set(trimmed.toLowerCase(), trimmed);
+          }
+        }
+        const sortedLines = [...mergedMap.values()].sort((left, right) =>
+          left.localeCompare(right),
+        );
+        formParams.set(fieldName, sortedLines.join("\n"));
+
+        const postRes = await this.fetchWithJar(pageUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Referer: pageUrl,
+          },
+          body: formParams.toString(),
+          redirect: "manual",
+        });
+        if (postRes.status === 200 || postRes.status === 302) {
+          this.persistSession();
+          return "ok";
+        }
+        return postRes.status === 401 || postRes.status === 403 || postRes.status === 419
+          ? "retry"
+          : "fail";
+      } catch {
+        return "fail";
+      }
+    };
+
+    const first = await attemptSync();
+    if (first === "ok") return true;
+    if (first === "retry") {
+      this.loggedIn = false;
+      if (await this.login({ force: true })) {
+        return (await attemptSync()) === "ok";
+      }
     }
+    return false;
   }
 }
 
-function parseFavButtonState(html: string): {
+function decodeHtmlEntities(raw: string): string {
+  return raw
+    .replace(/&#(\d+);/g, (_match, dec: string) => {
+      const code = Number.parseInt(dec, 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : _match;
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => {
+      const code = Number.parseInt(hex, 16);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : _match;
+    })
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&");
+}
+
+function parseTagAttributes(openTag: string): Map<string, string> {
+  const attrs = new Map<string, string>();
+  ATTR_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = ATTR_RE.exec(openTag)) !== null) {
+    attrs.set(match[1].toLowerCase(), decodeHtmlEntities(match[3]));
+  }
+  return attrs;
+}
+
+function usableActionUrl(candidate: string | undefined): string | null {
+  if (!candidate) return null;
+  const trimmed = candidate.trim();
+  if (!trimmed || trimmed === "#" || /^javascript:/i.test(trimmed)) return null;
+  if (/\/login(?:[?#"']|$)/i.test(trimmed)) return null;
+  return trimmed;
+}
+
+function extractActionUrl(attrs: Map<string, string>): string | null {
+  return usableActionUrl(attrs.get("href")) ?? usableActionUrl(attrs.get("data-href"));
+}
+
+function findInnerActionUrl(fragment: string, classToken?: string): string | null {
+  const tagRe = classToken
+    ? new RegExp(
+        `<[\\w:-]+\\b(?=[^>]*\\bclass\\s*=\\s*["'][^"']*\\b${classToken}\\b)[^>]*>`,
+        "gi",
+      )
+    : /<[\w:-]+\b[^>]*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = tagRe.exec(fragment)) !== null) {
+    const candidate = extractActionUrl(parseTagAttributes(match[0]));
+    if (!candidate) continue;
+    if (classToken || /wallpaper\/fav/i.test(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+export function parseFavButtonState(html: string): {
   isFaved: boolean | null;
   actionUrl: string | null;
 } {
-  const tagMatch = html.match(/<([a-z0-9]+)\b[^>]*\bid=["']fav-button["'][^>]*>/i);
+  const tagMatch = html.match(/<([\w:-]+)\b(?=[^>]*\bid\s*=\s*["']fav-button["'])[^>]*>/i);
   if (tagMatch && tagMatch.index !== undefined) {
     const openTag = tagMatch[0];
-    const classMatch = openTag.match(/\bclass=["']([^"']*)["']/i);
-    const hrefMatch = openTag.match(/\bhref=["']([^"']+)["']/i);
-    const classes = (classMatch?.[1] ?? "").split(/\s+/).filter(Boolean);
+    const tagName = tagMatch[1];
+    const attrs = parseTagAttributes(openTag);
+    const classes = (attrs.get("class") ?? "").split(/\s+/).filter(Boolean);
     const isFaved = classes.length > 0 ? !classes.includes("add-button") : true;
-    let actionUrl = hrefMatch?.[1] ?? null;
-    if (!actionUrl && classes.includes("add-button")) {
-      const slice = html.slice(tagMatch.index, tagMatch.index + 2000);
-      const innerHref = slice.match(/class=["'][^"']*\badd-fav\b[^"']*["'][^>]*\bhref=["']([^"']+)["']|\bhref=["']([^"']+)["'][^>]*class=["'][^"']*\badd-fav\b/i);
-      actionUrl = innerHref?.[1] ?? innerHref?.[2] ?? null;
+    let actionUrl = extractActionUrl(attrs);
+    if (!actionUrl) {
+      const bodyStart = tagMatch.index + openTag.length;
+      const closeTag = `</${tagName}>`;
+      const closeIdx = html.toLowerCase().indexOf(closeTag.toLowerCase(), bodyStart);
+      const body = html.slice(bodyStart, closeIdx !== -1 ? closeIdx : bodyStart + 2500);
+      if (!isFaved) {
+        actionUrl = findInnerActionUrl(body, "add-fav") ?? findInnerActionUrl(body);
+      } else {
+        actionUrl = findInnerActionUrl(body, "rm-fav") ?? findInnerActionUrl(body);
+      }
     }
-    return { isFaved, actionUrl };
+    return { isFaved, actionUrl: actionUrl ? resolveWallhavenUrl(actionUrl) : null };
   }
-  const globalAdd = html.match(/class=["'][^"']*\badd-fav\b[^"']*["'][^>]*\bhref=["']([^"']+)["']|\bhref=["']([^"']+)["'][^>]*class=["'][^"']*\badd-fav\b/i);
+
+  const globalAdd = findInnerActionUrl(html, "add-fav");
   if (globalAdd) {
-    return { isFaved: false, actionUrl: globalAdd[1] ?? globalAdd[2] ?? null };
+    return { isFaved: false, actionUrl: resolveWallhavenUrl(globalAdd) };
+  }
+  const globalRemove = findInnerActionUrl(html, "rm-fav");
+  if (globalRemove) {
+    return { isFaved: true, actionUrl: resolveWallhavenUrl(globalRemove) };
   }
   return { isFaved: null, actionUrl: null };
 }
@@ -496,57 +655,124 @@ function scrapeFormFields(html: string): URLSearchParams {
   return params;
 }
 
+interface SharedSessionEntry {
+  session: WallhavenWebSession;
+  queue: Promise<void>;
+}
+
+const sharedSessions = new Map<string, SharedSessionEntry>();
+
+function sharedSessionKey(config: WayperConfig): string {
+  return [
+    path.resolve(getConfigDir()),
+    config.wallhaven_username.trim().toLowerCase(),
+    config.wallhaven_password,
+    config.proxy ?? "",
+  ].join("|");
+}
+
+function withSharedWebSession<T>(
+  config: WayperConfig,
+  task: (session: WallhavenWebSession) => Promise<T>,
+): Promise<T> {
+  const key = sharedSessionKey(config);
+  let entry = sharedSessions.get(key);
+  if (!entry) {
+    entry = { session: new WallhavenWebSession(config), queue: Promise.resolve() };
+    sharedSessions.set(key, entry);
+  } else {
+    entry.session.updateConfig(config);
+  }
+  const activeSession = entry.session;
+  const run = entry.queue.then(() => task(activeSession));
+  entry.queue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 export async function wallhavenWebFav(config: WayperConfig, filenameOrId: string): Promise<boolean> {
   if (!config.wallhaven_username) return false;
-  const session = new WallhavenWebSession(config);
-  return session.setFavoriteState(wallhavenId(filenameOrId), true);
+  const whId = wallhavenId(filenameOrId);
+  if (!whId) return false;
+  return withSharedWebSession(config, (session) => session.setFavoriteState(whId, true));
 }
 
 export async function wallhavenWebUnfav(config: WayperConfig, filenameOrId: string): Promise<boolean> {
   if (!config.wallhaven_username) return false;
-  const session = new WallhavenWebSession(config);
-  return session.setFavoriteState(wallhavenId(filenameOrId), false);
+  const whId = wallhavenId(filenameOrId);
+  if (!whId) return false;
+  return withSharedWebSession(config, (session) => session.setFavoriteState(whId, false));
 }
 
 export async function reconnectWallhaven(
   config: WayperConfig,
   options: { allowBrowser?: boolean } = {},
 ): Promise<boolean> {
-  const session = new WallhavenWebSession(config);
-  return session.login({ allowBrowser: options.allowBrowser ?? true, force: true });
+  return withSharedWebSession(config, (session) =>
+    session.login({ allowBrowser: options.allowBrowser ?? true, force: true }),
+  );
 }
 
 export async function syncCloudTagBlacklist(config: WayperConfig): Promise<boolean> {
   if (!config.wallhaven_username || !config.wallhaven.exclude_tags.length) return false;
-  const session = new WallhavenWebSession(config);
-  return session.syncBrowsingBlacklistField("blacklist", config.wallhaven.exclude_tags);
+  return withSharedWebSession(config, (session) =>
+    session.syncBrowsingBlacklistField("blacklist", config.wallhaven.exclude_tags),
+  );
 }
 
 export async function syncCloudUserBlacklist(config: WayperConfig): Promise<boolean> {
   if (!config.wallhaven_username || !config.wallhaven.exclude_uploaders.length) return false;
-  const session = new WallhavenWebSession(config);
-  return session.syncBrowsingBlacklistField("blacklist_users", config.wallhaven.exclude_uploaders);
+  return withSharedWebSession(config, (session) =>
+    session.syncBrowsingBlacklistField("blacklist_users", config.wallhaven.exclude_uploaders),
+  );
 }
 
 export async function pushLocalFavorites(
   config: WayperConfig,
-  remoteFiles: Set<string>,
+  remoteFiles: ReadonlySet<string>,
 ): Promise<number> {
   if (!config.wallhaven_username) return 0;
   const localFavs = [...favoriteFilenames(config)].sort();
-  const missing = localFavs.filter((fn) => !remoteFiles.has(fn)).slice(0, PUSH_BATCH_SIZE);
+  const missing = localFavs
+    .filter((filename) => !remoteFiles.has(filename))
+    .slice(0, PUSH_BATCH_SIZE);
   if (!missing.length) return 0;
 
-  const session = new WallhavenWebSession(config);
-  if (!(await session.login())) return 0;
-
-  let pushed = 0;
-  for (const fn of missing) {
-    if (await session.setFavoriteState(wallhavenId(fn), true)) {
-      pushed += 1;
+  return withSharedWebSession(config, async (session) => {
+    if (!(await session.login())) return 0;
+    let pushed = 0;
+    for (const filename of missing) {
+      if (await session.setFavoriteState(wallhavenId(filename), true)) {
+        pushed += 1;
+      }
     }
-  }
-  return pushed;
+    return pushed;
+  });
+}
+
+export async function removeBlacklistedRemoteFavorites(
+  config: WayperConfig,
+  remoteFiles: ReadonlySet<string>,
+): Promise<number> {
+  if (!config.wallhaven_username || remoteFiles.size === 0) return 0;
+  const stale = listBlacklist(config)
+    .map((entry) => entry.filename)
+    .filter((filename) => remoteFiles.has(filename))
+    .slice(0, PUSH_BATCH_SIZE);
+  if (stale.length === 0) return 0;
+
+  return withSharedWebSession(config, async (session) => {
+    if (!(await session.login())) return 0;
+    let removed = 0;
+    for (const filename of stale) {
+      if (await session.setFavoriteState(wallhavenId(filename), false)) {
+        removed += 1;
+      }
+    }
+    return removed;
+  });
 }
 
 async function fetchCloudSettings(config: WayperConfig): Promise<Record<string, unknown>> {

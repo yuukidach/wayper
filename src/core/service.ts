@@ -38,6 +38,7 @@ import {
   doUnfav,
   isFavoritePath,
   libraryCounts,
+  purgeBlacklistedFavorites,
   scheduleRetrain,
   type CoreResult,
 } from "./core";
@@ -75,7 +76,7 @@ import {
   resolveModelReviewItem,
 } from "./preference/review";
 import type { AutoRotationService } from "./rotation";
-import { listBlacklist, readMode, removeFromBlacklist, writeMode } from "./state";
+import { isBlacklisted, listBlacklist, readMode, removeFromBlacklist, writeMode } from "./state";
 import {
   checkTrashAccess,
   findTrashImage,
@@ -217,6 +218,13 @@ export class WayperService {
     this.imageDirCache.clear();
     this.cachedMetadata = null;
     this.cachedMetadataToken = "";
+    this.blocklistCache = null;
+    this.suggestionCache.clear();
+    this.ruleSuggestionCache.clear();
+  }
+
+  private invalidateMutationCaches(): void {
+    this.imageDirCache.clear();
     this.blocklistCache = null;
     this.suggestionCache.clear();
     this.ruleSuggestionCache.clear();
@@ -423,7 +431,10 @@ export class WayperService {
       config,
       purities,
       orientation ? [orientation] : ALL_ORIENTATIONS,
-      (directory) => this.cachedDirImages(directory).length,
+      (directory) =>
+        this.cachedDirImages(directory).filter(
+          (entry) => !isBlacklisted(config, path.basename(entry.file)),
+        ).length,
     );
     const blocklistCount = listBlacklist(config).length;
     const recoverableCount =
@@ -501,27 +512,35 @@ export class WayperService {
     monitor: string | null,
     openUrl: boolean,
   ): Promise<CoreResult> {
+    let outcome: CoreResult;
     switch (action) {
       case "next": {
-        const result = await doNext(config, monitor);
-        if (result.ok) this.rotation?.requestRefill(config);
-        return result;
+        outcome = await doNext(config, monitor);
+        if (outcome.ok) this.rotation?.requestRefill(config);
+        return outcome;
       }
       case "prev":
         return doPrev(config, monitor);
       case "unban":
-        return doUnban(config, monitor);
+        outcome = await doUnban(config, monitor);
+        break;
       case "ban":
-        return doBan(config, { monitor, waitRemote: false });
+        outcome = await doBan(config, { monitor, waitRemote: false });
+        break;
       case "dislike":
-        return doDislike(config, { monitor, waitRemote: false });
+        outcome = await doDislike(config, { monitor, waitRemote: false });
+        break;
       case "fav":
-        return doFav(config, { monitor, openUrl, waitRemote: false });
+        outcome = await doFav(config, { monitor, openUrl, waitRemote: false });
+        break;
       case "unfav":
-        return doUnfav(config, { monitor, waitRemote: false });
+        outcome = await doUnfav(config, { monitor, waitRemote: false });
+        break;
       default:
         throw new ServiceError(400, `Unknown action: ${action}`);
     }
+    if (outcome.ok) this.invalidateMutationCaches();
+    return outcome;
   }
 
   async controlAction(
@@ -622,6 +641,7 @@ export class WayperService {
         ? await doUnfav(config, { image, waitRemote: false })
         : await doFav(config, { image, waitRemote: false }),
     );
+    this.invalidateMutationCaches();
     const moved = result.image ?? image;
     return {
       status: "ok",
@@ -651,6 +671,7 @@ export class WayperService {
           : {}),
       }),
     );
+    this.invalidateMutationCaches();
     const response: JsonRecord = {
       status: "ok",
       replacement_images: this.relativeImageMap(config, result.extra.replacement_images),
@@ -663,6 +684,7 @@ export class WayperService {
     const config = this.getConfig();
     const image = this.resolveImage(config, imagePath);
     const result = this.requireOk(await doDislike(config, { image, waitRemote: false }));
+    this.invalidateMutationCaches();
     return {
       status: "ok",
       replacement_images: this.relativeImageMap(config, result.extra.replacement_images),
@@ -753,7 +775,11 @@ export class WayperService {
         const directory = favorites
           ? favoritesDir(config.download_dir, purity, orientation)
           : poolDir(config.download_dir, purity, orientation);
-        records.push(...this.cachedDirImages(directory));
+        for (const entry of this.cachedDirImages(directory)) {
+          if (!isBlacklisted(config, path.basename(entry.file))) {
+            records.push(entry);
+          }
+        }
       }
     }
     records.sort((left, right) => right.mtimeMs - left.mtimeMs);
@@ -801,6 +827,7 @@ export class WayperService {
       this.recordFeedbackLocked(config, "unban", filename, "api_restore");
       return dest;
     });
+    this.invalidateMutationCaches();
     await scheduleRetrain(config);
     return { status: "ok", new_path: this.relativeImage(config, restored) as string };
   }
@@ -826,6 +853,7 @@ export class WayperService {
       }
       return exists;
     });
+    if (removed) this.invalidateMutationCaches();
     if (removed) await scheduleRetrain(config);
     return { status: "ok", removed };
   }
@@ -1125,6 +1153,7 @@ export class WayperService {
     }
     const config = this.getConfig();
     const review = await this.resolveReview(config, rawPath, action, 409);
+    this.invalidateMutationCaches();
     return { status: "ok", action, review, learning: this.learningPayload(config, true) };
   }
 
@@ -1145,6 +1174,7 @@ export class WayperService {
       purities: purities.length > 0 ? [...purities].sort() : null,
       orientation,
     });
+    this.invalidateMutationCaches();
     return { status: "ok", ...result };
   }
 
@@ -1211,6 +1241,16 @@ export class WayperService {
   startWatching(): void {
     if (this.watchTimer !== null) return;
     let config = this.getConfig(false);
+    void purgeBlacklistedFavorites(config)
+      .then((purged) => {
+        if (purged > 0) {
+          this.invalidateMutationCaches();
+          this.emit({ type: "library" });
+        }
+      })
+      .catch((error: unknown) => {
+        log.debug("Initial blacklisted favorite cleanup failed", error);
+      });
     let configToken = this.cachedConfigToken;
     let modeToken = statToken(path.join(config.download_dir, ".mode"));
     let mode = readMode(config).join(",");
@@ -1238,6 +1278,7 @@ export class WayperService {
         const libraryChanged = nextLibrary !== library;
         if (libraryChanged) {
           library = nextLibrary;
+          this.invalidateMutationCaches();
           this.emit({ type: "library" });
         }
         const nextWallpaper = this.wallpaperToken(config);

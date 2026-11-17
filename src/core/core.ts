@@ -25,7 +25,6 @@ import {
 } from "./paths";
 import {
   clearImageDerivatives,
-  countImagesInDir,
   diskUsageMb,
   hydrateTagDetails,
   listImagesInDir,
@@ -43,6 +42,7 @@ import {
   addToBlacklist,
   goNext,
   goPrev,
+  isBlacklisted,
   popUndo,
   pushHistory,
   pushManyHistory,
@@ -50,7 +50,7 @@ import {
   removeFromBlacklist,
   writeLastRotation,
 } from "./state";
-import { restoreFromTrash, trashAndRecordUndo } from "./trash";
+import { findTrashImage, moveToSystemTrash, restoreFromTrash, trashAndRecordUndo } from "./trash";
 import { WallhavenClient } from "./wallhaven";
 import { wallhavenWebFav, wallhavenWebUnfav } from "./wallhaven-web";
 
@@ -196,7 +196,7 @@ function updateMonitorsForMovedImage(config: WayperConfig, oldPath: string, newP
 
 function replaceOnAllMonitors(
   config: WayperConfig,
-  bannedImage: string,
+  bannedImages: string | readonly string[],
   purities: Iterable<Purity>,
   exclude: string,
 ): Record<string, string> {
@@ -207,10 +207,11 @@ function replaceOnAllMonitors(
   } catch {
     return replacements;
   }
+  const targets = typeof bannedImages === "string" ? [bannedImages] : bannedImages;
   const active = [...purities];
   for (const monitor of config.monitors) {
     const shown = current[monitor.name];
-    if (!shown || !samePath(shown, bannedImage)) continue;
+    if (!shown || !targets.some((target) => samePath(shown, target))) continue;
     const next = pickRandomWallpaper(config, active, monitor.orientation, exclude);
     if (!next) continue;
     setWallpaper(monitor.name, next, config.transition);
@@ -218,6 +219,28 @@ function replaceOnAllMonitors(
     replacements[monitor.name] = next;
   }
   return replacements;
+}
+
+function findLibraryCopies(downloadDir: string, filename: string): string[] {
+  const copies: string[] = [];
+  for (const purity of ALL_PURITIES) {
+    for (const orientation of ALL_ORIENTATIONS) {
+      for (const directory of [
+        poolDir(downloadDir, purity, orientation),
+        favoritesDir(downloadDir, purity, orientation),
+      ]) {
+        const candidate = path.join(directory, filename);
+        try {
+          if (fs.statSync(candidate).isFile()) {
+            copies.push(candidate);
+          }
+        } catch {
+          // Ignore missing entries
+        }
+      }
+    }
+  }
+  return copies;
 }
 
 async function syncRemoteFavorite(
@@ -356,7 +379,15 @@ async function moveBetweenLibraries(
       : poolDir(config.download_dir, purity, orientation);
     fs.mkdirSync(destDir, { recursive: true });
     const dest = path.join(destDir, path.basename(image));
+    if (!samePath(image, dest) && fs.existsSync(dest)) {
+      clearImageDerivatives(config, dest);
+      fs.rmSync(dest, { force: true });
+    }
     fs.renameSync(image, dest);
+    clearImageDerivatives(config, image);
+    if (toFavorites) {
+      removeFromBlacklist(config, path.basename(dest));
+    }
 
     if (options.image) {
       updateMonitorsForMovedImage(config, image, dest);
@@ -429,6 +460,7 @@ async function doBlock(
     if (!isFile) return failure(action, "Image is no longer available");
 
     const shownImage = image;
+    const filename = path.basename(image);
     if (isFavoritePath(config, image)) {
       const destDir = poolDir(
         config.download_dir,
@@ -436,15 +468,30 @@ async function doBlock(
         orientationFromPath(config.download_dir, image),
       );
       fs.mkdirSync(destDir, { recursive: true });
-      const dest = path.join(destDir, path.basename(image));
-      fs.renameSync(image, dest);
-      image = dest;
+      const dest = path.join(destDir, filename);
+      if (!samePath(image, dest)) {
+        if (fs.existsSync(dest)) {
+          clearImageDerivatives(config, dest);
+          fs.rmSync(dest, { force: true });
+        }
+        fs.renameSync(image, dest);
+        image = dest;
+      }
+    }
+
+    addToBlacklist(config, filename);
+    const removedPaths = [shownImage];
+    for (const duplicate of findLibraryCopies(config.download_dir, filename)) {
+      if (samePath(duplicate, image)) continue;
+      fs.rmSync(duplicate, { force: true });
+      clearImageDerivatives(config, duplicate);
+      removedPaths.push(duplicate);
     }
 
     const extra: Record<string, unknown> = {};
     const purities = readMode(config);
     if (options.image) {
-      const replacements = replaceOnAllMonitors(config, shownImage, purities, image);
+      const replacements = replaceOnAllMonitors(config, removedPaths, purities, image);
       if (Object.keys(replacements).length > 0) {
         writeLastRotation(config);
         extra.replacement_images = replacements;
@@ -459,10 +506,11 @@ async function doBlock(
       }
     }
 
-    const filename = path.basename(image);
-    addToBlacklist(config, filename);
     await trashAndRecordUndo(config, image);
     clearImageDerivatives(config, image);
+    if (!samePath(shownImage, image)) {
+      clearImageDerivatives(config, shownImage);
+    }
     recordFeedbackLocked(config, feedbackAction, filename, {
       context: options.preferenceContext ?? "core",
       model: options.preferenceModel ?? null,
@@ -548,18 +596,78 @@ export function libraryCounts(
   config: Pick<WayperConfig, "download_dir">,
   purities: Iterable<string>,
   orientations: Iterable<string>,
-  count: (directory: string) => number = countImagesInDir,
+  count?: (directory: string) => number,
 ): [number, number] {
+  const countDirectory =
+    count ??
+    ((directory: string) =>
+      listImagesInDir(directory).filter((image) => !isBlacklisted(config, path.basename(image)))
+        .length);
   const orientationList = [...orientations];
   let poolCount = 0;
   let favoriteCount = 0;
   for (const purity of purities) {
     for (const orientation of orientationList) {
-      poolCount += count(poolDir(config.download_dir, purity, orientation));
-      favoriteCount += count(favoritesDir(config.download_dir, purity, orientation));
+      poolCount += countDirectory(poolDir(config.download_dir, purity, orientation));
+      favoriteCount += countDirectory(favoritesDir(config.download_dir, purity, orientation));
     }
   }
   return [poolCount, favoriteCount];
+}
+
+function findBlacklistedFavoriteFiles(config: Pick<WayperConfig, "download_dir">): string[] {
+  const matches: string[] = [];
+  for (const purity of ALL_PURITIES) {
+    for (const orientation of ALL_ORIENTATIONS) {
+      const directory = favoritesDir(config.download_dir, purity, orientation);
+      for (const file of listImagesInDir(directory)) {
+        if (isBlacklisted(config, path.basename(file))) {
+          matches.push(file);
+        }
+      }
+    }
+  }
+  return matches;
+}
+
+export async function purgeBlacklistedFavorites(config: WayperConfig): Promise<number> {
+  if (findBlacklistedFavoriteFiles(config).length === 0) return 0;
+  const purged = await withStateLock(async () => {
+    const staleFiles = findBlacklistedFavoriteFiles(config);
+    if (staleFiles.length === 0) return 0;
+    const purities = readMode(config);
+    let removedCount = 0;
+    let rotated = false;
+    for (const favPath of staleFiles) {
+      if (!fs.existsSync(favPath)) continue;
+      const filename = path.basename(favPath);
+      const replacements = replaceOnAllMonitors(config, favPath, purities, favPath);
+      if (Object.keys(replacements).length > 0) {
+        rotated = true;
+      }
+      if (findTrashImage(config, filename) !== null) {
+        fs.rmSync(favPath, { force: true });
+      } else {
+        try {
+          await moveToSystemTrash(config, favPath);
+        } catch (error) {
+          log.warn(`Could not move blacklisted favorite ${filename} to system trash`, error);
+          continue;
+        }
+      }
+      clearImageDerivatives(config, favPath);
+      removedCount += 1;
+    }
+    if (rotated) {
+      writeLastRotation(config);
+    }
+    return removedCount;
+  });
+  if (purged > 0) {
+    log.info(`Purged ${purged} blacklisted wallpaper(s) from favorites`);
+    await scheduleRetrain(config);
+  }
+  return purged;
 }
 
 export function statusSnapshot(config: WayperConfig): Record<string, unknown> {

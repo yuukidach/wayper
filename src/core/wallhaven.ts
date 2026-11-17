@@ -8,7 +8,7 @@ import { validateImageFile } from "./image-probe";
 import { LockBusyError, withFileLock } from "./lock";
 import { getLogger } from "./logging";
 import { favoritesDir, isOrientation, isPurity, poolDir } from "./paths";
-import { extractTagNames, saveMetadataRecord, shouldDownload } from "./pool";
+import { extractTagNames, favoriteFilenames, saveMetadataRecord, shouldDownload } from "./pool";
 import {
   autoFilterPrediction,
   autoFilterStatus,
@@ -520,6 +520,7 @@ export class WallhavenClient {
     if (collections.length === 0) return [0, remoteFiles];
 
     const username = encodeURIComponent(config.wallhaven_username);
+    const existingFavorites = favoriteFilenames(config);
     let synced = 0;
     for (const collection of collections) {
       const collectionId = collection.id;
@@ -545,6 +546,7 @@ export class WallhavenClient {
           if (!url) continue;
           const filename = filenameFromUrl(url);
           remoteFiles.add(filename);
+          if (isBlacklisted(config, filename) || existingFavorites.has(filename)) continue;
           const purity: Purity = isPurity(listed.purity) ? listed.purity : "sfw";
           let width = 1920;
           let height = 1080;
@@ -557,11 +559,15 @@ export class WallhavenClient {
           const favDir = favoritesDir(config.download_dir, purity, orientation);
           const favDest = path.join(favDir, filename);
           const poolPath = path.join(poolDir(config.download_dir, purity, orientation), filename);
-          if (fs.existsSync(favDest)) continue;
+          if (fs.existsSync(favDest)) {
+            existingFavorites.add(filename);
+            continue;
+          }
 
           if (fs.existsSync(poolPath)) {
             fs.mkdirSync(favDir, { recursive: true });
             fs.renameSync(poolPath, favDest);
+            existingFavorites.add(filename);
             pageNew += 1;
             log.info(`sync: moved ${filename} from pool to favorites`);
             continue;
@@ -572,11 +578,17 @@ export class WallhavenClient {
             log.warn(`Skipping favorite ${filename} without complete metadata`);
             continue;
           }
+          if (isBlacklisted(config, filename)) continue;
           const item: JsonRecord = { ...listed, ...detail };
           url = typeof item.path === "string" && item.path ? item.path : url;
           fs.mkdirSync(favDir, { recursive: true });
           if (!(await this.downloadImage(url, favDest))) continue;
+          if (isBlacklisted(config, filename)) {
+            fs.rmSync(favDest, { force: true });
+            continue;
+          }
           saveMetadataRecord(config, filename, item, { complete: true });
+          existingFavorites.add(filename);
           pageNew += 1;
         }
         synced += pageNew;

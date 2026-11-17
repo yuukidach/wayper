@@ -7,7 +7,7 @@ import { atomicWrite } from "../image-probe";
 import { getDefaultLockPath, isPidAlive, withFileLock } from "../lock";
 import { ALL_ORIENTATIONS, ALL_PURITIES, favoritesDir, poolDir } from "../paths";
 import { listImagesInDir, loadMetadata } from "../pool";
-import { listBlacklist, type ConfigOrDir } from "../state";
+import { isBlacklisted, listBlacklist, type ConfigOrDir } from "../state";
 import {
   AUTO_RETRAIN_DELAY_SECONDS,
   AUTO_RETRAIN_MIN_CHANGED_EXAMPLES,
@@ -746,12 +746,17 @@ export function libraryFilenames(config: ConfigOrDir): {
   for (const purity of ALL_PURITIES) {
     for (const orientation of ALL_ORIENTATIONS) {
       for (const image of listImagesInDir(poolDir(downloadDir, purity, orientation))) {
-        retained.add(path.basename(image));
+        const filename = path.basename(image);
+        if (!isBlacklisted(config, filename)) {
+          retained.add(filename);
+        }
       }
       for (const image of listImagesInDir(favoritesDir(downloadDir, purity, orientation))) {
         const name = path.basename(image);
-        retained.add(name);
-        favorites.add(name);
+        if (!isBlacklisted(config, name)) {
+          retained.add(name);
+          favorites.add(name);
+        }
       }
     }
   }
