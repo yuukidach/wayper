@@ -170,9 +170,9 @@ describe("bounded media previews", () => {
 
     // Free one slot so queued jobs drain strictly one at a time without fs.mkdir races.
     gates[0]();
-    await Promise.all([pA, pThumbC, pPrevD, pPrevE]);
+    await Promise.all([pThumbC, pPrevD, pPrevE]);
     gates[1]();
-    await pB;
+    await Promise.all([pA, pB]);
 
     expect(startedOrder.slice(2)).toEqual(["d:1920", "e:1920", "c:420"]);
   });

@@ -48,7 +48,7 @@ export const NowDock: React.FC<NowDockProps> = ({
       : t("Pause Auto Rotation");
 
   return (
-    <div className="glass flex items-center gap-1 rounded-[20px] p-1.5">
+    <div className="dock-surface flex items-center gap-1 rounded-[20px] p-1.5">
       {monitors.length > 0 && (
         <>
           <MonitorTiles
@@ -115,7 +115,10 @@ export const NowDock: React.FC<NowDockProps> = ({
         ) : rotationPaused ? (
           <Play className="h-[17px] w-[17px]" strokeWidth={1.75} />
         ) : (
-          <Pause className="h-[17px] w-[17px]" strokeWidth={1.75} />
+          <>
+            <span className="live-dot h-1.5 w-1.5 rounded-full bg-keep" />
+            <Pause className="h-[15px] w-[15px]" strokeWidth={1.75} />
+          </>
         )}
         {!rotationOff && config?.interval_min ? <span>{config.interval_min}m</span> : null}
       </button>

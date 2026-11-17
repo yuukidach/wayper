@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import {
   ChevronDown,
@@ -201,24 +201,31 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onSaved,
   onNotify,
 }) => {
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [saving, setSaving] = useState(false);
 
-  const [intervalMin, setIntervalMin] = useState<number>(config.interval_min ?? 5);
+  const [intervalDraft, setIntervalDraft] = useState<string>(() =>
+    String(config.interval_min ?? 5),
+  );
   const [resizeMode, setResizeMode] = useState<ResizeMode>(config.transition?.resize ?? "crop");
   const [language, setLanguage] = useState<LanguagePreference>(
     normalizeLanguagePreference(config.language),
   );
-  const [quotaMb, setQuotaMb] = useState<number>(config.quota_mb ?? 4000);
-  const [batchSize, setBatchSize] = useState<number>(config.wallhaven?.batch_size ?? 5);
+  const [quotaDraft, setQuotaDraft] = useState<string>(() => String(config.quota_mb ?? 4000));
+  const [batchDraft, setBatchDraft] = useState<string>(() =>
+    String(config.wallhaven?.batch_size ?? 5),
+  );
   const [downloadDir, setDownloadDir] = useState<string>(config.download_dir ?? "");
   const [proxy, setProxy] = useState<string>(config.proxy ?? "");
   const [autostart, setAutostart] = useState<boolean>(Boolean(config.autostart));
   const [pauseOnLock, setPauseOnLock] = useState<boolean>(Boolean(config.pause_on_lock));
   const [safeMode, setSafeMode] = useState<boolean>(Boolean(config.safe_mode));
   const [neverExpire, setNeverExpire] = useState<boolean>((config.blacklist_ttl_days ?? 30) === 0);
-  const [blacklistTtl, setBlacklistTtl] = useState<number>(
-    config.blacklist_ttl_days && config.blacklist_ttl_days > 0 ? config.blacklist_ttl_days : 30,
+  const [blacklistTtlDraft, setBlacklistTtlDraft] = useState<string>(() =>
+    String(
+      config.blacklist_ttl_days && config.blacklist_ttl_days > 0 ? config.blacklist_ttl_days : 30,
+    ),
   );
 
   const [apiKey, setApiKey] = useState<string>("");
@@ -257,6 +264,98 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   useEffect(() => {
     setTab(initialTab);
   }, [initialTab]);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement;
+    const firstTab = rootRef.current?.querySelector<HTMLElement>('button[role="tab"]');
+    firstTab?.focus({ preventScroll: true });
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || !rootRef.current) return;
+      const focusables = Array.from(
+        rootRef.current.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      const outside = !active || !rootRef.current.contains(active);
+      if (e.shiftKey && (active === first || outside)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (active === last || outside)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) {
+        previousFocus.focus({ preventScroll: true });
+      }
+    };
+  }, []);
+
+  const isDirty = useMemo(() => {
+    const parsedInterval = Number(intervalDraft);
+    const parsedQuota = Number(quotaDraft);
+    const parsedBatch = Number(batchDraft);
+    const parsedTtl = neverExpire ? 0 : Number(blacklistTtlDraft);
+    const initialTags = dedupeTagsNormalized(config.wallhaven?.exclude_tags ?? []);
+    const initialCombos = dedupeCombos(config.wallhaven?.exclude_combos ?? []);
+    const initialUploaders = dedupeStringsCaseInsensitive(
+      config.wallhaven?.exclude_uploaders ?? [],
+    );
+    return (
+      parsedInterval !== (config.interval_min ?? 5) ||
+      parsedQuota !== (config.quota_mb ?? 4000) ||
+      parsedBatch !== (config.wallhaven?.batch_size ?? 5) ||
+      parsedTtl !== (config.blacklist_ttl_days ?? 30) ||
+      downloadDir.trim() !== (config.download_dir ?? "").trim() ||
+      proxy.trim() !== (config.proxy ?? "").trim() ||
+      autostart !== Boolean(config.autostart) ||
+      pauseOnLock !== Boolean(config.pause_on_lock) ||
+      safeMode !== Boolean(config.safe_mode) ||
+      language !== normalizeLanguagePreference(config.language) ||
+      resizeMode !== (config.transition?.resize ?? "crop") ||
+      whUsername.trim() !== (config.wallhaven_username ?? "").trim() ||
+      Boolean(apiKey.trim()) ||
+      Boolean(whPassword) ||
+      categories !== (config.wallhaven?.categories ?? "111").padEnd(3, "1").slice(0, 3) ||
+      topRange !== (config.wallhaven?.top_range ?? "1M") ||
+      sorting !== (config.wallhaven?.sorting ?? "toplist") ||
+      aiArtFilter !== (config.wallhaven?.ai_art_filter ?? 1) ||
+      JSON.stringify(excludeTags) !== JSON.stringify(initialTags) ||
+      JSON.stringify(excludeCombos) !== JSON.stringify(initialCombos) ||
+      JSON.stringify(excludeUploaders) !== JSON.stringify(initialUploaders)
+    );
+  }, [
+    intervalDraft,
+    quotaDraft,
+    batchDraft,
+    neverExpire,
+    blacklistTtlDraft,
+    downloadDir,
+    proxy,
+    autostart,
+    pauseOnLock,
+    safeMode,
+    language,
+    resizeMode,
+    whUsername,
+    apiKey,
+    whPassword,
+    categories,
+    topRange,
+    sorting,
+    aiArtFilter,
+    excludeTags,
+    excludeCombos,
+    excludeUploaders,
+    config,
+  ]);
 
   const handleLanguageChange = (nextRaw: string) => {
     const normalized = normalizeLanguagePreference(nextRaw);
@@ -355,6 +454,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     if (saving) return;
     setSaving(true);
     try {
+      const intervalMin = Number(intervalDraft);
+      const quotaMb = Number(quotaDraft);
+      const batchSize = Number(batchDraft);
+      const blacklistTtl = Number(blacklistTtlDraft);
       const clampedInterval = Math.max(0, Number.isFinite(intervalMin) ? Math.round(intervalMin) : 0);
       const clampedQuota = Math.max(100, Number.isFinite(quotaMb) ? Math.round(quotaMb) : 4000);
       const clampedBatch = Math.max(1, Number.isFinite(batchSize) ? Math.round(batchSize) : 5);
@@ -414,8 +517,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   ];
 
   return (
-    <div className="flex h-full w-full">
-      <aside className="flex w-[204px] shrink-0 flex-col bg-black/20 p-3">
+    <div ref={rootRef} className="flex h-full w-full">
+      <aside className="flex w-[204px] shrink-0 flex-col bg-black/22 p-3 shadow-[inset_-1px_0_0_var(--color-line)]">
         <h1 className="m-0 px-2.5 pt-2 pb-4 text-[15px] font-semibold tracking-[-0.015em] text-ink">
           {t("Settings")}
         </h1>
@@ -470,8 +573,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <input
                     type="number"
                     min={0}
-                    value={intervalMin}
-                    onChange={(e) => setIntervalMin(Number(e.target.value))}
+                    value={intervalDraft}
+                    onChange={(e) => setIntervalDraft(e.target.value)}
                     className={numberField}
                   />
                 </Row>
@@ -524,8 +627,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <input
                     type="number"
                     min={100}
-                    value={quotaMb}
-                    onChange={(e) => setQuotaMb(Number(e.target.value))}
+                    value={quotaDraft}
+                    onChange={(e) => setQuotaDraft(e.target.value)}
                     className={numberField}
                   />
                 </Row>
@@ -534,8 +637,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     type="number"
                     min={1}
                     max={50}
-                    value={batchSize}
-                    onChange={(e) => setBatchSize(Number(e.target.value))}
+                    value={batchDraft}
+                    onChange={(e) => setBatchDraft(e.target.value)}
                     className={numberField}
                   />
                 </Row>
@@ -549,8 +652,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       type="number"
                       min={1}
                       disabled={neverExpire}
-                      value={blacklistTtl}
-                      onChange={(e) => setBlacklistTtl(Number(e.target.value))}
+                      value={blacklistTtlDraft}
+                      onChange={(e) => setBlacklistTtlDraft(e.target.value)}
                       className={`${numberField} disabled:opacity-40`}
                     />
                   </div>
@@ -799,23 +902,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </motion.div>
       </div>
 
-        <footer className="flex shrink-0 items-center justify-end gap-2 px-8 py-4 shadow-[inset_0_1px_0_var(--color-line)]">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="h-8 rounded-lg px-3 text-[13px] font-medium text-ink-2 transition-colors hover:bg-white/[0.07] hover:text-ink"
-          >
-            {t("Cancel")}
-          </button>
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => void handleSave()}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3.5 text-[13px] font-medium text-on-accent transition-colors hover:bg-accent-hi disabled:opacity-50"
-          >
-            {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            <span>{saving ? t("Saving...") : t("Save Changes")}</span>
-          </button>
+        <footer className="flex shrink-0 items-center justify-between gap-4 px-8 py-4 shadow-[inset_0_1px_0_var(--color-line)]">
+          <div className="min-w-0">
+            {isDirty && (
+              <span className="inline-flex items-center gap-1.5 text-[12px] text-warn">
+                <span className="h-1.5 w-1.5 rounded-full bg-warn" />
+                {t("Unsaved changes")}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="h-8 rounded-lg px-3 text-[13px] font-medium text-ink-2 transition-colors hover:bg-white/[0.07] hover:text-ink"
+            >
+              {t("Cancel")}
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void handleSave()}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3.5 text-[13px] font-medium text-on-accent transition-colors hover:bg-accent-hi disabled:opacity-50"
+            >
+              {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              <span>{saving ? t("Saving...") : t("Save Changes")}</span>
+            </button>
+          </div>
         </footer>
       </div>
     </div>

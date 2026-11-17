@@ -10,21 +10,29 @@ import type {
   Orientation,
   Purity,
   ReviewCandidateItem,
+  SearchResponse,
   StatusResponse,
   UpdateCheckResponse,
 } from "../shared/types";
 import { createTranslator, normalizeLanguagePreference, resolveLocale } from "../shared/i18n";
 import { normalizeTag, wallhavenUrl } from "../shared/tags";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { CommandPalette } from "./components/CommandPalette";
 import { NowDock } from "./components/NowDock";
 import { NowStage } from "./components/NowStage";
 import { preloadAmbient, useAmbient } from "./lib/ambient";
 import { decodeImage } from "./lib/decoded-image";
 import {
+  loadGalleryPreferences,
+  saveGalleryPreferences,
+  type GalleryDensity,
+  type GalleryPreferences,
+} from "./lib/gallery-prefs";
+import {
   getReadyLightboxPreview,
   prepareLightboxPreview,
 } from "./lib/lightbox-preview";
-import { previewUrl, thumbUrl } from "./lib/media";
+import { basenameFromPath, previewUrl, thumbUrl } from "./lib/media";
 import { motionCssVariables, motionTransition } from "./lib/motion";
 import { TopBar, type TopBarHandle } from "./components/TopBar";
 import { WallpaperGrid, type WallpaperGridHandle } from "./components/WallpaperGrid";
@@ -102,6 +110,10 @@ export const App: React.FC = () => {
 
 
   const [lightbox, setLightbox] = useState<LightboxSession | null>(null);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState<boolean>(false);
+  const [galleryPrefs, setGalleryPrefs] = useState<GalleryPreferences>(() =>
+    loadGalleryPreferences(),
+  );
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [refreshToken, setRefreshToken] = useState<number>(0);
 
@@ -117,8 +129,43 @@ export const App: React.FC = () => {
   const lightboxRequestRef = useRef(0);
   const pendingLightboxRef = useRef(false);
   const reviewPrefetchSeqRef = useRef(0);
+  const bootCompletedRef = useRef(false);
   const modeRef = useRef(mode);
   modeRef.current = mode;
+
+  useEffect(
+    () => () => {
+      if (pendingGRef.current !== null) window.clearTimeout(pendingGRef.current);
+      if (purityHintTimerRef.current !== null) window.clearTimeout(purityHintTimerRef.current);
+    },
+    [],
+  );
+
+  const handleChangeGalleryPrefs = useCallback((next: GalleryPreferences) => {
+    setGalleryPrefs(next);
+    saveGalleryPreferences(next);
+  }, []);
+
+  const handleCycleDensity = useCallback(() => {
+    setGalleryPrefs((prev) => {
+      const order: GalleryDensity[] = ["compact", "standard", "gallery"];
+      const nextDensity = order[(order.indexOf(prev.density) + 1) % order.length];
+      const next = { ...prev, density: nextDensity };
+      saveGalleryPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const handleToggleFraming = useCallback(() => {
+    setGalleryPrefs((prev) => {
+      const next: GalleryPreferences = {
+        ...prev,
+        framing: prev.framing === "matte" ? "fill" : "matte",
+      };
+      saveGalleryPreferences(next);
+      return next;
+    });
+  }, []);
 
   const effectiveLangPref = previewLang ?? normalizeLanguagePreference(config?.language ?? "auto");
   const locale = useMemo(() => resolveLocale(effectiveLangPref), [effectiveLangPref]);
@@ -296,12 +343,13 @@ export const App: React.FC = () => {
           .then((u) => setUpdateInfo(u))
           .catch(() => null),
       ]);
+      bootCompletedRef.current = true;
     };
     void boot();
   }, [refreshConfig, refreshMonitors, refreshStatusAndCounts, refreshReviewCountsBackground]);
 
   useEffect(() => {
-    if (!config) return;
+    if (!config || !bootCompletedRef.current) return;
     void refreshStatusAndCounts(activeOrientation, activeMonitor?.name ?? null);
     if (modeRef.current !== "model-review") {
       void refreshReviewCountsBackground(purities, activeOrientation);
@@ -450,7 +498,7 @@ export const App: React.FC = () => {
   }, []);
 
   const handleCommitSearch = useCallback(
-    async (rawQuery: string) => {
+    async (rawQuery: string): Promise<SearchResponse | null> => {
       const trimmed = rawQuery.trim();
       if (!trimmed) {
         searchSeqRef.current += 1;
@@ -458,7 +506,7 @@ export const App: React.FC = () => {
         setSearchMatches(null);
         setMatchCount(null);
         setIsSearching(false);
-        return;
+        return null;
       }
 
       setSearchQuery(trimmed);
@@ -466,7 +514,7 @@ export const App: React.FC = () => {
 
       if (mode === "trash") {
         blocklistRef.current?.openDrilldownForSearch(trimmed);
-        return;
+        return null;
       }
       if (mode === "model-review") {
         setMode("pool");
@@ -485,10 +533,12 @@ export const App: React.FC = () => {
                   .filter(Boolean),
               })
             : await window.wayper.searchImages({ query: trimmed });
-        if (seq !== searchSeqRef.current) return;
+        if (seq !== searchSeqRef.current) return null;
         setSearchMatches(new Set(res.matches ?? []));
+        return res;
       } catch (err) {
         console.error("Search failed:", err);
+        return null;
       } finally {
         if (seq === searchSeqRef.current) setIsSearching(false);
       }
@@ -724,6 +774,46 @@ export const App: React.FC = () => {
     void window.wayper.openExternal(wallhavenUrl(filenameOrPath));
   }, []);
 
+  const handleCopyColor = useCallback(
+    (hex: string) => {
+      window.wayper.copyToClipboard(hex);
+      notify(`${t("Copied")} ${hex}`, "info");
+    },
+    [notify, t],
+  );
+
+  const handleInspectStageImage = useCallback(
+    (imagePath: string) => {
+      openLightboxSession({
+        context: "library",
+        index: 0,
+        items: [
+          {
+            path: imagePath,
+            name: basenameFromPath(imagePath),
+            is_favorite: imagePath.startsWith("favorites/"),
+            orientation: activeOrientation,
+          },
+        ],
+      });
+    },
+    [openLightboxSession, activeOrientation],
+  );
+
+  const handleRetrainFromPalette = useCallback(async () => {
+    try {
+      await window.wayper.retrainModelNow();
+      await Promise.all([
+        refreshStatusAndCounts(),
+        refreshReviewCountsBackground(purities, activeOrientation),
+      ]);
+      setRefreshToken((n) => n + 1);
+      notify(t("Model Ready"), "success");
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Retrain failed", "error");
+    }
+  }, [purities, activeOrientation, refreshStatusAndCounts, refreshReviewCountsBackground, notify, t]);
+
   const handleLightboxReviewDecision = useCallback(
     async (item: ReviewCandidateItem, lane: ReviewLane, action: "keep" | "ban") => {
       try {
@@ -782,6 +872,12 @@ export const App: React.FC = () => {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (lightbox) return;
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCommandPaletteOpen((open) => !open);
+        return;
+      }
+      if (commandPaletteOpen) return;
       if (pendingLightboxRef.current && e.key === "Escape") {
         e.preventDefault();
         pendingLightboxRef.current = false;
@@ -794,6 +890,12 @@ export const App: React.FC = () => {
       if (target) {
         if (target.tagName === "TEXTAREA" || target.tagName === "SELECT") return;
         if (target.tagName === "INPUT") return;
+      }
+
+      if (e.key === "?") {
+        e.preventDefault();
+        setCommandPaletteOpen(true);
+        return;
       }
 
       if (view === "settings") {
@@ -1044,6 +1146,7 @@ export const App: React.FC = () => {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     lightbox,
+    commandPaletteOpen,
     view,
     mode,
     monitors,
@@ -1124,10 +1227,17 @@ export const App: React.FC = () => {
       onUndo={() => void handleControl("unban")}
       onFavorite={(favorite) => void handleControl(favorite ? "fav" : "unfav")}
       onDislike={() => void handleControl("dislike")}
+      onInspectCurrent={handleInspectStageImage}
+      onSelectTag={(tg) => void handleSelectTagFilter(tg)}
+      onSelectUploader={(u) => void handleSelectUploaderFilter(u)}
+      onOpenWallhaven={handleOpenWallhaven}
+      onCopyColor={handleCopyColor}
     />
   ) : null, [
     stageVisible, t, monitors, activeMonitor?.name, handleSelectMonitor, status, config,
     handleRotationButton, handleControl, handleLocateCurrent,
+    handleInspectStageImage, handleSelectTagFilter, handleSelectUploaderFilter,
+    handleOpenWallhaven, handleCopyColor,
   ]);
 
   return (
@@ -1155,6 +1265,7 @@ export const App: React.FC = () => {
         t={t}
         view={view}
         immersive={mode === "model-review"}
+        overlayOpen={view === "settings" || commandPaletteOpen || Boolean(lightbox)}
         mode={mode}
         onSelectMode={(nextMode) => {
           if (view === "settings") closeSettingsRevertingPreview();
@@ -1186,10 +1297,13 @@ export const App: React.FC = () => {
         activeFilterLabel={searchMatches ? searchQuery : null}
         matchCount={matchCount}
         isSearching={isSearching}
-        onCommitSearch={(q) => void handleCommitSearch(q)}
+        onCommitSearch={handleCommitSearch}
         onSelectUploader={(u) => void handleSelectUploaderFilter(u)}
         onSelectTag={(tg) => void handleSelectTagFilter(tg)}
         onClearSearch={handleClearSearch}
+        galleryPrefs={galleryPrefs}
+        onChangeGalleryPrefs={handleChangeGalleryPrefs}
+        onOpenCommandPalette={() => setCommandPaletteOpen(true)}
       />
 
       <main
@@ -1230,6 +1344,8 @@ export const App: React.FC = () => {
                 }}
                 onBrowsePool={() => setMode("pool")}
                 onOpenWallhaven={handleOpenWallhaven}
+                onSelectTag={(tg) => void handleSelectTagFilter(tg)}
+                onSelectUploader={(u) => void handleSelectUploaderFilter(u)}
                 onNotify={notify}
               />
             ) : mode === "trash" ? (
@@ -1240,6 +1356,8 @@ export const App: React.FC = () => {
                 config={config}
                 purities={purities}
                 orientation={activeOrientation}
+                density={galleryPrefs.density}
+                framing={galleryPrefs.framing}
                 refreshToken={refreshToken}
                 onRefreshConfigAndStatus={async () => {
                   await Promise.all([refreshConfig(), refreshStatusAndCounts()]);
@@ -1271,6 +1389,8 @@ export const App: React.FC = () => {
                 mode={mode === "favorites" ? "favorites" : "pool"}
                 purities={purities}
                 orientation={activeOrientation}
+                density={galleryPrefs.density}
+                framing={galleryPrefs.framing}
                 activeImagePath={activeMonitor?.current_image ?? null}
                 searchQuery={searchQuery}
                 searchMatches={searchMatches}
@@ -1328,7 +1448,7 @@ export const App: React.FC = () => {
             onMouseDown={(event) => {
               if (event.target === event.currentTarget) closeSettingsRevertingPreview();
             }}
-            className="absolute inset-0 z-40 flex items-center justify-center bg-black/75 p-6"
+            className="sheet-scrim absolute inset-0 z-40 flex items-center justify-center p-6"
           >
             <motion.div
               initial={{ opacity: 0, transform: reducedMotion ? "none" : "translate3d(0, 12px, 0) scale(0.98)" }}
@@ -1402,7 +1522,36 @@ export const App: React.FC = () => {
         onNotify={notify}
       />
 
-      <ToastHost toasts={toasts} onDismiss={dismissToast} />
+      <CommandPalette
+        open={commandPaletteOpen}
+        t={t}
+        mode={mode}
+        density={galleryPrefs.density}
+        framing={galleryPrefs.framing}
+        rotationOff={
+          (config?.interval_min ?? 5) <= 0 ||
+          (!status?.auto_rotation && !status?.rotation_paused)
+        }
+        rotationPaused={Boolean(status?.rotation_paused)}
+        onClose={() => setCommandPaletteOpen(false)}
+        onSelectMode={(nextMode) => {
+          if (view === "settings") closeSettingsRevertingPreview();
+          setMode(nextMode);
+        }}
+        onOpenSettings={() => {
+          setPreviewLang(null);
+          setView("settings");
+        }}
+        onNextWallpaper={() => void handleControl("next")}
+        onPrevWallpaper={() => void handleControl("prev")}
+        onLocateCurrent={() => void handleLocateCurrent()}
+        onToggleRotation={() => void handleRotationButton()}
+        onCycleDensity={handleCycleDensity}
+        onToggleFraming={handleToggleFraming}
+        onRetrainModel={() => void handleRetrainFromPalette()}
+      />
+
+      <ToastHost t={t} toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 };
