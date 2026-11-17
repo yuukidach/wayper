@@ -21,6 +21,7 @@ import {
   animate,
   motion,
   useMotionValue,
+  useReducedMotion,
   useTransform,
   type PanInfo,
 } from "motion/react";
@@ -35,7 +36,9 @@ import type {
 } from "../../shared/types";
 import { NON_PREFERENCE_FEATURE_TAGS } from "../../shared/tags";
 import { renderAmbient } from "../lib/ambient";
+import { prewarmLightboxPreview } from "../lib/lightbox-preview";
 import { previewUrl, thumbUrl } from "../lib/media";
+import { motionTransition, prefersReducedMotion } from "../lib/motion";
 import { MonitorTiles } from "./MonitorTiles";
 
 export type ReviewLane = "held" | "recommended";
@@ -99,8 +102,6 @@ function evidenceLabel(feature: string): React.ReactNode {
 type ExitIntent = "keep" | "ban" | "next" | "prev" | "fade";
 
 const DECISION_COMMIT_DELAY_MS = 340;
-const DECK_SPRING = { type: "spring", stiffness: 440, damping: 40, mass: 0.7 } as const;
-const PILL_SPRING = { type: "spring", stiffness: 520, damping: 40, mass: 0.7 } as const;
 
 // Every deck transition touches only transform and opacity, so the compositor
 // can run it without repainting or re-laying out the wallpaper.
@@ -109,8 +110,8 @@ const deckVariants = {
     intent === "prev"
       ? { opacity: 0, x: -72, y: 0, scale: 1, zIndex: 2 }
       : { opacity: 0, x: 0, y: 26, scale: 0.9, zIndex: 1 },
-  top: { opacity: 1, x: 0, y: 0, scale: 1, zIndex: 2, transition: DECK_SPRING },
-  behind: { opacity: 1, x: 0, y: 18, scale: 0.94, zIndex: 1, transition: DECK_SPRING },
+  top: { opacity: 1, x: 0, y: 0, scale: 1, zIndex: 2, transition: motionTransition.reveal },
+  behind: { opacity: 1, x: 0, y: 18, scale: 0.94, zIndex: 1, transition: motionTransition.reveal },
   // A card that was decided or skipped leaves above the one taking its place.
   exit: (intent: ExitIntent) => {
     if (intent === "keep" || intent === "ban") {
@@ -197,8 +198,9 @@ const DeckCard: React.FC<DeckCardProps> = ({
   onDecide,
   onOpen,
 }) => {
+  const reducedMotion = useReducedMotion();
   const x = useMotionValue(0);
-  const rotate = useTransform(x, [-420, 420], [-7, 7]);
+  const rotate = useTransform(x, [-420, 420], reducedMotion ? [0, 0] : [-7, 7]);
   // Keep sits on the left and dislike on the right, like the A and D keys.
   const keepOpacity = useTransform(x, [-130, -28], [1, 0]);
   const dropOpacity = useTransform(x, [28, 130], [0, 1]);
@@ -219,12 +221,13 @@ const DeckCard: React.FC<DeckCardProps> = ({
     if (decided) {
       onDecide(decided);
     } else {
-      animate(x, 0, { type: "spring", stiffness: 520, damping: 34 });
+      animate(x, 0, reducedMotion ? { duration: 0 } : motionTransition.select);
     }
   };
 
   return (
     <motion.div
+      data-path={item.path}
       custom={intent}
       variants={deckVariants}
       initial="enter"
@@ -486,7 +489,9 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
 
         try {
           // Let the card finish leaving before the main process starts moving files.
-          await new Promise((resolve) => window.setTimeout(resolve, DECISION_COMMIT_DELAY_MS));
+          await new Promise((resolve) => window.setTimeout(
+            resolve, prefersReducedMotion() ? 0 : DECISION_COMMIT_DELAY_MS,
+          ));
           if (isHeld) {
             await window.wayper.resolveModelReview(item.path, action);
           } else if (action === "keep") {
@@ -628,6 +633,17 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
       }
     }, [activeItems, selectedIndex]);
 
+    useEffect(() => {
+      if (!currentItem) return;
+      prewarmLightboxPreview(currentItem, "review");
+      const nextItem = activeItems[selectedIndex + 1];
+      if (!nextItem) return;
+      const timer = window.setTimeout(() => {
+        prewarmLightboxPreview(nextItem, "review", false);
+      }, 120);
+      return () => window.clearTimeout(timer);
+    }, [currentItem, activeItems, selectedIndex]);
+
     const stageRef = useRef<HTMLDivElement | null>(null);
     const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
     const hasDeck = Boolean(currentItem) && !loading && !errorState;
@@ -674,7 +690,7 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
           <motion.span
             layoutId="review-lane-pill"
             className="absolute inset-0 rounded-full bg-white/[0.14]"
-            transition={PILL_SPRING}
+            transition={motionTransition.select}
           />
         )}
         <span className="relative">{label}</span>
@@ -749,7 +765,7 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 0.72 }}
                 exit={{ opacity: 0 }}
-                transition={{ duration: 0.45, ease: "linear" }}
+                transition={motionTransition.ambient}
                 className="absolute inset-0 h-full w-full object-cover"
               />
             )}
@@ -973,7 +989,7 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
             <motion.div
               initial={{ opacity: 0, y: 28, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ type: "spring", stiffness: 420, damping: 34, mass: 0.8 }}
+              transition={motionTransition.reveal}
               className="dock-surface flex items-center gap-1 rounded-[20px] p-1.5"
             >
               {monitors.length > 1 && (

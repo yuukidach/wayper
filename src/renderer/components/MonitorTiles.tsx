@@ -1,6 +1,7 @@
 import React from "react";
 import type { MonitorInfo } from "../../shared/types";
 import { thumbUrl } from "../lib/media";
+import { CrossfadeImage } from "./CrossfadeImage";
 
 interface MonitorTilesProps {
   t: (key: string) => string;
@@ -44,22 +45,14 @@ export const MonitorTiles: React.FC<MonitorTilesProps> = ({
           aria-label={mon.name}
           aria-pressed={isActive}
           style={{ width, height, borderRadius: Math.round(height / 4) }}
-          className={`shrink-0 overflow-hidden bg-white/[0.06] transition-all duration-200 ${
+          className={`shrink-0 overflow-hidden bg-white/[0.06] transition-[opacity,box-shadow] duration-200 ${
             isActive
               ? "shadow-[0_0_0_1.5px_rgb(255_255_255/0.95)]"
               : "opacity-50 hover:opacity-100"
           }`}
         >
           {mon.current_image && (
-            <img
-              key={mon.current_image}
-              src={thumbUrl(mon.current_image)}
-              alt=""
-              className="fade-in h-full w-full object-cover"
-              loading="eager"
-              decoding="async"
-              draggable={false}
-            />
+            <CrossfadeImage src={thumbUrl(mon.current_image)} />
           )}
         </button>
       );

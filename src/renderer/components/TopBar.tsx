@@ -19,6 +19,7 @@ import type {
   StatusResponse,
   UpdateCheckResponse,
 } from "../../shared/types";
+import { motionTransition } from "../lib/motion";
 
 interface SuggestionEntry {
   kind: "uploader" | "tag";
@@ -348,7 +349,7 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
                   <motion.span
                     layoutId="nav-pill"
                     className="absolute inset-0 rounded-full bg-white/[0.13] shadow-[inset_0_1px_0_rgb(255_255_255/0.09),0_1px_3px_rgb(0_0_0/0.35)]"
-                    transition={{ type: "spring", stiffness: 520, damping: 40, mass: 0.7 }}
+                    transition={motionTransition.select}
                   />
                 )}
                 <span className="relative">{item.label}</span>
@@ -425,9 +426,14 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
           )}
         </div>
 
+        <AnimatePresence>
         {openDropdown && suggestions.length > 0 && (
-          <div
+          <motion.div
             role="listbox"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={motionTransition.fast}
             className="absolute top-[calc(100%+6px)] left-1/2 z-40 max-h-[380px] w-full min-w-[300px] -translate-x-1/2 overflow-y-auto glass rounded-2xl p-1.5"
           >
             {suggestions.map((entry, idx) => {
@@ -458,8 +464,9 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
                 </button>
               );
             })}
-          </div>
+          </motion.div>
         )}
+        </AnimatePresence>
       </div>
 
         <div className="flex items-center gap-1 justify-self-end">
@@ -509,7 +516,7 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
                 initial={{ opacity: 0, y: -6, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -4, scale: 0.98 }}
-                transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                transition={motionTransition.fast}
                 style={{ transformOrigin: "top right" }}
                 className="glass absolute top-[calc(100%+8px)] right-0 z-40 flex w-[288px] flex-col gap-4 rounded-2xl p-4"
               >
@@ -581,7 +588,7 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
                             <motion.span
                               layoutId="strategy-pill"
                               className="absolute inset-0 rounded-[10px] bg-white/[0.13] shadow-[0_1px_2px_rgb(0_0_0/0.4)]"
-                              transition={{ type: "spring", stiffness: 520, damping: 40, mass: 0.7 }}
+                              transition={motionTransition.select}
                             />
                           )}
                           <span className="relative">{item.label}</span>

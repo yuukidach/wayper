@@ -39,7 +39,13 @@ import {
   type ExclusionRulesState,
 } from "../../shared/exclusion";
 import { casefold, normalizeTag } from "../../shared/tags";
+import {
+  prewarmLightboxPreview,
+  type LightboxPreviewContext,
+  type LightboxPreviewItem,
+} from "../lib/lightbox-preview";
 import { formatTimestamp, thumbUrl, trashThumbUrl } from "../lib/media";
+import { motionTransition } from "../lib/motion";
 
 export type BlocklistTab = "recoverable" | "blocked" | "rules";
 
@@ -240,6 +246,31 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
     const [ruleOverrides, setRuleOverrides] = useState<Record<string, boolean>>({});
     const savingRulesRef = useRef<Set<string>>(new Set());
     const suggestionSeqRef = useRef(0);
+    const prewarmTimerRef = useRef<number | null>(null);
+
+    const clearPrewarmTimer = useCallback(() => {
+      if (prewarmTimerRef.current !== null) {
+        window.clearTimeout(prewarmTimerRef.current);
+        prewarmTimerRef.current = null;
+      }
+    }, []);
+
+    const scheduleTilePrewarm = useCallback(
+      (item: LightboxPreviewItem, context: LightboxPreviewContext, delayMs: number) => {
+        clearPrewarmTimer();
+        if (delayMs <= 0) {
+          prewarmLightboxPreview(item, context);
+          return;
+        }
+        prewarmTimerRef.current = window.setTimeout(() => {
+          prewarmTimerRef.current = null;
+          prewarmLightboxPreview(item, context);
+        }, delayMs);
+      },
+      [clearPrewarmTimer],
+    );
+
+    useEffect(() => clearPrewarmTimer, [clearPrewarmTimer]);
 
     const [trashPermissionIssue, setTrashPermissionIssue] = useState<{
       forbidden: boolean;
@@ -746,7 +777,7 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
                       <motion.span
                         layoutId="blocklist-tab-pill"
                         className="absolute inset-0 rounded-full bg-white/[0.13]"
-                        transition={{ type: "spring", stiffness: 520, damping: 40, mass: 0.7 }}
+                        transition={motionTransition.select}
                       />
                     )}
                     <span className="relative">{label}</span>
@@ -932,8 +963,13 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
                     {drilldownMatches.map((img) => (
                       <div
                         key={`drill-img-${img.path}`}
+                        data-path={img.path}
                         role="button"
                         tabIndex={0}
+                        onPointerEnter={() => scheduleTilePrewarm(img, "library", 55)}
+                        onPointerLeave={clearPrewarmTimer}
+                        onPointerDown={() => scheduleTilePrewarm(img, "library", 0)}
+                        onFocus={() => scheduleTilePrewarm(img, "library", 40)}
                         onClick={() => onOpenLibraryLightbox(img, drilldownMatches)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
@@ -1016,8 +1052,13 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
                 {trashImages.slice(0, visibleTrashCount).map((item) => (
                   <div
                     key={`trash-${item.name}`}
+                    data-path={item.path}
                     role="button"
                     tabIndex={0}
+                    onPointerEnter={() => scheduleTilePrewarm(item, "trash", 55)}
+                    onPointerLeave={clearPrewarmTimer}
+                    onPointerDown={() => scheduleTilePrewarm(item, "trash", 0)}
+                    onFocus={() => scheduleTilePrewarm(item, "trash", 40)}
                     onClick={() => onOpenTrashLightbox(item, trashImages)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
@@ -1033,7 +1074,7 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
                       loading="lazy"
                       decoding="async"
                       onError={() => void handleTrashThumbError(item.name)}
-                      className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.025]"
+                      className="wallpaper-thumbnail h-full w-full object-cover"
                     />
                     <div className="card-actions absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/70 to-transparent px-2 pt-8 pb-2">
                       <button

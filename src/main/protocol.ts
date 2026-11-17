@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { nativeImage, net, protocol } from "electron";
 import type { WayperConfig } from "../core/config";
 import { findTrashImage } from "../core/trash";
+import { PREVIEW_DIMENSIONS, previewCacheDirectory } from "../shared/media";
 
 export function registerWayperSchemePrivileges(): void {
   protocol.registerSchemesAsPrivileged([
@@ -49,9 +50,15 @@ function loadSharp(): Promise<SharpFactory | null> {
   return sharpLoader;
 }
 
-async function withDerivativeSlot<T>(job: () => Promise<T>): Promise<T> {
+async function withDerivativeSlot<T>(job: () => Promise<T>, highPriority = false): Promise<T> {
   if (activeDerivativeJobs >= MAX_DERIVATIVE_JOBS) {
-    await new Promise<void>((resolve) => queuedDerivativeJobs.push(resolve));
+    await new Promise<void>((resolve) => {
+      if (highPriority) {
+        queuedDerivativeJobs.unshift(resolve);
+      } else {
+        queuedDerivativeJobs.push(resolve);
+      }
+    });
   }
   activeDerivativeJobs += 1;
   try {
@@ -130,6 +137,7 @@ async function ensureDerivative(
   targetPath: string,
   maxDimension: number,
   quality = 82,
+  highPriority = false,
 ): Promise<string> {
   try {
     const [srcStat, dstStat] = await Promise.all([
@@ -146,6 +154,7 @@ async function ensureDerivative(
   if (pending) return pending;
   const task = withDerivativeSlot(() =>
     renderDerivative(sourcePath, targetPath, maxDimension, quality),
+    highPriority,
   ).finally(() => {
     pendingDerivatives.delete(targetPath);
   });
@@ -178,8 +187,56 @@ function errorResponse(status: number, message: string): Response {
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-store",
     },
   });
+}
+
+function previewTargetPath(downloadDir: string, relativePath: string, size: number): string {
+  return path.join(
+    downloadDir,
+    previewCacheDirectory(size),
+    path.dirname(relativePath),
+    `${path.parse(relativePath).name}.jpg`,
+  );
+}
+
+async function findCachedPreview(
+  sourcePath: string,
+  downloadDir: string,
+  relativePath: string,
+  maxSize: number,
+): Promise<string | null> {
+  const sourceStat = await fs.promises.stat(sourcePath).catch(() => null);
+  if (!sourceStat) return null;
+  const candidates = PREVIEW_DIMENSIONS.filter((dimension) => dimension <= maxSize).reverse();
+  for (const dimension of candidates) {
+    const candidate = previewTargetPath(downloadDir, relativePath, dimension);
+    const candidateStat = await fs.promises.stat(candidate).catch(() => null);
+    if (candidateStat && candidateStat.size > 0 && candidateStat.mtimeMs >= sourceStat.mtimeMs) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+async function servePreview(
+  sourcePath: string,
+  downloadDir: string,
+  relativePath: string,
+  url: URL,
+): Promise<Response> {
+  const requestedSize = Number(url.searchParams.get("size"));
+  const size = PREVIEW_DIMENSIONS.find((dimension) => dimension === requestedSize) ?? PREVIEW_DIMENSIONS[0];
+  if (url.searchParams.get("cached") === "1") {
+    const cached = await findCachedPreview(sourcePath, downloadDir, relativePath, size);
+    if (!cached) {
+      return errorResponse(404, "Cached preview not found");
+    }
+    return serveLocalFile(cached, true);
+  }
+  const target = previewTargetPath(downloadDir, relativePath, size);
+  return serveLocalFile(await ensureDerivative(sourcePath, target, size, 86, true), true);
 }
 
 export function installWayperMediaProtocol(getConfig: () => WayperConfig): void {
@@ -190,7 +247,7 @@ export function installWayperMediaProtocol(getConfig: () => WayperConfig): void 
       const config = getConfig();
       const downloadDir = config.download_dir;
 
-      if (route === "trash" || route === "trash-thumb") {
+      if (route === "trash" || route === "trash-thumb" || route === "trash-preview") {
         const rawName = url.searchParams.get("name") || "";
         const safeName = path.basename(rawName);
         if (!safeName || safeName !== rawName || safeName === "." || safeName === "..") {
@@ -213,6 +270,9 @@ export function installWayperMediaProtocol(getConfig: () => WayperConfig): void 
         if (route === "trash") {
           return serveLocalFile(trashed, false);
         }
+        if (route === "trash-preview") {
+          return servePreview(trashed, downloadDir, path.join("__trash", safeName), url);
+        }
         const stem = path.parse(safeName).name;
         const thumbTarget = path.join(downloadDir, ".thumbnails", "__trash", `${stem}.jpg`);
         return serveLocalFile(await ensureDerivative(trashed, thumbTarget, 420, 80), true);
@@ -227,6 +287,9 @@ export function installWayperMediaProtocol(getConfig: () => WayperConfig): void 
           const stem = path.parse(fname).name;
           const thumbTarget = path.join(downloadDir, ".thumbnails", "__trash", `${stem}.jpg`);
           return serveLocalFile(await ensureDerivative(trashed, thumbTarget, 420, 80), true);
+        }
+        if (route === "preview") {
+          return servePreview(trashed, downloadDir, path.join("__trash", fname), url);
         }
         return serveLocalFile(trashed, false);
       }
@@ -254,8 +317,7 @@ export function installWayperMediaProtocol(getConfig: () => WayperConfig): void 
       }
 
       if (route === "preview") {
-        const previewTarget = path.join(downloadDir, ".previews", relDir, `${stem}.jpg`);
-        return serveLocalFile(await ensureDerivative(resolved, previewTarget, 1920, 86), true);
+        return servePreview(resolved, downloadDir, rel, url);
       }
 
       return errorResponse(404, "Unknown media route");

@@ -1,6 +1,7 @@
 import React from "react";
 import { X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { motionTransition } from "../lib/motion";
 
 export type ToastTone = "info" | "success" | "error";
 
@@ -21,7 +22,7 @@ export const ToastHost: React.FC<ToastHostProps> = ({ toasts, onDismiss }) => {
       className="pointer-events-none fixed right-5 bottom-5 z-50 flex max-w-sm flex-col items-end gap-2"
       aria-live="polite"
     >
-      <AnimatePresence initial={false}>
+      <AnimatePresence initial={false} mode="popLayout">
         {toasts.map((toast) => {
           const dot =
             toast.tone === "error" ? "bg-drop" : toast.tone === "success" ? "bg-keep" : "bg-ink-3";
@@ -29,11 +30,11 @@ export const ToastHost: React.FC<ToastHostProps> = ({ toasts, onDismiss }) => {
           return (
             <motion.div
               key={toast.id}
-              layout
+              layout="position"
               initial={{ opacity: 0, y: 10, scale: 0.97 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 6, scale: 0.97 }}
-              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              transition={motionTransition.normal}
               className="pointer-events-auto flex items-center gap-2.5 rounded-xl bg-overlay py-2 pr-1.5 pl-3.5 text-[13px] text-ink shadow-float"
             >
               <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />

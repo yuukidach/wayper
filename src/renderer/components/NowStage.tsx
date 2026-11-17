@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { ConfigPayload, MonitorInfo, StatusResponse } from "../../shared/types";
 import { previewUrl } from "../lib/media";
+import { CrossfadeImage } from "./CrossfadeImage";
 
 interface NowStageProps {
   t: (key: string) => string;
@@ -170,14 +171,7 @@ export const NowStage: React.FC<NowStageProps> = ({
               className="stage-screen"
             >
               {monitor.current_image ? (
-                <img
-                  key={monitor.current_image}
-                  src={previewUrl(monitor.current_image)}
-                  alt=""
-                  className="fade-in h-full w-full object-cover"
-                  decoding="async"
-                  draggable={false}
-                />
+                <CrossfadeImage src={previewUrl(monitor.current_image)} />
               ) : (
                 <span className="flex h-full w-full items-center justify-center text-ink-3">
                   <Monitor className="h-6 w-6" strokeWidth={1.5} />

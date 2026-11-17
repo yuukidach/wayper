@@ -34,6 +34,8 @@
 
   --shadow-float: 0 18px 50px -12px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.06);
   --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --default-transition-duration: var(--motion-fast, 160ms);
+  --default-transition-timing-function: var(--ease-out-soft);
 }
 
 *,
@@ -348,13 +350,43 @@ kbd.keycap-on-accent {
 }
 
 .fade-in {
-  animation: wayper-fade-in 320ms var(--ease-out-soft) both;
+  animation: wayper-fade-in var(--motion-normal) var(--ease-out-soft) both;
+}
+
+@keyframes wayper-workspace-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.workspace-enter {
+  animation: wayper-workspace-enter var(--motion-normal) var(--ease-out-soft) backwards;
+}
+
+.lightbox-image {
+  transition: transform var(--motion-fast) var(--ease-out-soft);
+  will-change: transform;
+}
+
+.wallpaper-thumbnail {
+  transition:
+    opacity var(--motion-normal) var(--ease-out-soft),
+    transform var(--motion-reveal) var(--ease-out-soft);
+}
+
+.wallpaper-card:hover .wallpaper-thumbnail {
+  transform: scale(1.025);
 }
 
 /* A new library context replaces the previous cards in place. */
 .grid-enter {
-  animation: wayper-fade-in 300ms var(--ease-out-soft) backwards;
-  transition: opacity 180ms var(--ease-out-soft);
+  animation: wayper-fade-in var(--motion-normal) var(--ease-out-soft) backwards;
+  transition: opacity var(--motion-fast) var(--ease-out-soft);
 }
 
 .grid-pending {
@@ -369,8 +401,8 @@ kbd.keycap-on-accent {
   overflow: hidden;
   background: rgb(255 255 255 / 0.045);
   transition:
-    box-shadow 160ms ease,
-    transform 200ms var(--ease-out-soft);
+    box-shadow var(--motion-fast) var(--ease-out-soft),
+    transform var(--motion-fast) var(--ease-out-soft);
   outline: none;
 }
 
@@ -404,7 +436,10 @@ kbd.keycap-on-accent {
 
 .wallpaper-card .card-actions {
   opacity: 0;
-  transition: opacity 140ms ease;
+  transform: translate3d(0, 4px, 0);
+  transition:
+    opacity var(--motion-fast) var(--ease-out-soft),
+    transform var(--motion-fast) var(--ease-out-soft);
 }
 
 .wallpaper-card:hover .card-actions,
@@ -412,6 +447,7 @@ kbd.keycap-on-accent {
 .wallpaper-card:focus-visible .card-actions,
 .wallpaper-card[data-focused="true"] .card-actions {
   opacity: 1;
+  transform: translate3d(0, 0, 0);
 }
 
 @keyframes wayper-shake {
@@ -443,5 +479,19 @@ kbd.keycap-on-accent {
   *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .wallpaper-card:hover .wallpaper-thumbnail,
+  .wallpaper-card .card-actions {
+    transform: none;
+  }
+
+  .workspace-enter {
+    animation-name: wayper-fade-in;
+  }
+
+  .dock-after-stage {
+    transform: none !important;
   }
 }

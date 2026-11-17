@@ -28,6 +28,7 @@ import {
   parseComboInput,
 } from "../../shared/exclusion";
 import { casefold, normalizeTag } from "../../shared/tags";
+import { motionTransition } from "../lib/motion";
 
 export type SettingsTab = "general" | "wallhaven" | "filters";
 
@@ -440,7 +441,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <motion.span
                   layoutId="settings-tab-pill"
                   className="absolute inset-0 rounded-lg bg-white/[0.09]"
-                  transition={{ type: "spring", stiffness: 520, damping: 40, mass: 0.7 }}
+                  transition={motionTransition.select}
                 />
               )}
               <Icon className="relative h-4 w-4 shrink-0" strokeWidth={1.75} />
@@ -456,7 +457,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           key={tab}
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+          transition={motionTransition.normal}
           className="space-y-9 px-8 pt-7 pb-8"
         >
           {tab === "general" && (
