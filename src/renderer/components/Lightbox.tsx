@@ -19,7 +19,6 @@ import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/
 import type {
   ConfigPayload,
   ImageItem,
-  ImageMetadata,
   ReviewCandidateItem,
 } from "../../shared/types";
 import { tagItems } from "../../shared/tags";
@@ -32,6 +31,7 @@ import {
 } from "../lib/media";
 import { useAmbient } from "../lib/ambient";
 import { prewarmLightboxPreview } from "../lib/lightbox-preview";
+import { useImageMetadata } from "../lib/metadata-cache";
 import { motionTransition } from "../lib/motion";
 import { LightboxImage } from "./LightboxImage";
 import type { ReviewLane } from "./ReviewWorkspace";
@@ -71,7 +71,6 @@ interface LightboxProps {
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 8;
 const ZOOM_STEP = 1.25;
-const metadataCache = new Map<string, ImageMetadata | null>();
 
 const topIconButton =
   "flex h-8 w-8 items-center justify-center rounded-lg text-white/70 transition-colors hover:bg-white/10 hover:text-white";
@@ -107,8 +106,6 @@ const LightboxView: React.FC<Omit<LightboxProps, "session"> & { session: Lightbo
   const [entered, setEntered] = useState(false);
   const [direction, setDirection] = useState(1);
   const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
-  const [metadata, setMetadata] = useState<ImageMetadata | null>(null);
-  const [metaLoading, setMetaLoading] = useState(false);
   const [copiedHex, setCopiedHex] = useState<string | null>(null);
   const [favOverride, setFavOverride] = useState<Record<string, boolean>>({});
 
@@ -123,6 +120,10 @@ const LightboxView: React.FC<Omit<LightboxProps, "session"> & { session: Lightbo
   const reducedMotion = useReducedMotion();
 
   const current = session.items[session.index];
+  const { metadata, loading: metaLoading } = useImageMetadata(
+    current?.name,
+    Boolean(inspectorOpen && entered && isPresent),
+  );
 
   useEffect(() => {
     const previousFocus = document.activeElement;
@@ -172,35 +173,6 @@ const LightboxView: React.FC<Omit<LightboxProps, "session"> & { session: Lightbo
     }, delayMs);
     return () => window.clearTimeout(timer);
   }, [entered, isPresent, session.context, session.index, session.items]);
-
-  useEffect(() => {
-    if (!inspectorOpen || !entered || !isPresent) return;
-    const key = current.name;
-    if (metadataCache.has(key)) {
-      setMetadata(metadataCache.get(key) ?? null);
-      setMetaLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setMetadata(null);
-    setMetaLoading(true);
-    window.wayper
-      .getImageMetadata(current.name)
-      .then((res) => {
-        if (cancelled) return;
-        metadataCache.set(key, res);
-        setMetadata(res);
-      })
-      .catch(() => {
-        if (!cancelled) setMetadata(null);
-      })
-      .finally(() => {
-        if (!cancelled) setMetaLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [inspectorOpen, entered, isPresent, current.name]);
 
   const clampScale = (next: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
 
@@ -563,7 +535,10 @@ const LightboxView: React.FC<Omit<LightboxProps, "session"> & { session: Lightbo
             </AnimatePresence>
             <div className="absolute inset-0 bg-black/55" />
           </motion.div>
-          <div className="relative flex min-w-0 flex-1 flex-col">
+          <div
+            style={{ marginRight: inspectorOpen ? 348 : 0 }}
+            className="relative flex min-w-0 flex-1 flex-col transition-[margin-right] duration-200 ease-[var(--ease-out-soft)]"
+          >
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -659,7 +634,7 @@ const LightboxView: React.FC<Omit<LightboxProps, "session"> & { session: Lightbo
                       navigateItem(-1);
                     }}
                     className="absolute left-4 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.08] text-white/70 transition-colors hover:bg-white/[0.16] hover:text-white"
-                    aria-label="Previous"
+                    aria-label={t("Previous")}
                   >
                     <ChevronLeft className="h-5 w-5" strokeWidth={1.75} />
                   </button>
@@ -669,9 +644,8 @@ const LightboxView: React.FC<Omit<LightboxProps, "session"> & { session: Lightbo
                       e.stopPropagation();
                       navigateItem(1);
                     }}
-                    style={{ transform: inspectorOpen ? "translateX(-348px)" : "none" }}
-                    className="absolute right-4 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.08] text-white/70 transition-[transform,background-color,color] duration-200 hover:bg-white/[0.16] hover:text-white"
-                    aria-label="Next"
+                    className="absolute right-4 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.08] text-white/70 transition-colors hover:bg-white/[0.16] hover:text-white"
+                    aria-label={t("Next")}
                   >
                     <ChevronRight className="h-5 w-5" strokeWidth={1.75} />
                   </button>
@@ -727,7 +701,7 @@ const LightboxView: React.FC<Omit<LightboxProps, "session"> & { session: Lightbo
                       title={`${isFav ? t("Unfavorite") : t("Favorite")} [F]`}
                       aria-label={isFav ? t("Unfavorite") : t("Favorite")}
                       aria-pressed={isFav}
-                      className={`${dockIcon} ${isFav ? "text-ink!" : ""}`}
+                      className={`${dockIcon} ${isFav ? "text-fav!" : ""}`}
                     >
                       <Heart
                         className={`h-4 w-4 ${isFav ? "fill-current" : ""}`}
@@ -848,9 +822,9 @@ const LightboxView: React.FC<Omit<LightboxProps, "session"> & { session: Lightbo
                 animate={{ opacity: 1, transform: "none" }}
                 exit={{ opacity: 0, transform: reducedMotion ? "none" : "translateX(16px)" }}
                 transition={motionTransition.normal}
-                className="absolute top-16 right-4 bottom-24 z-30 flex w-[332px] flex-col overflow-hidden rounded-2xl bg-panel/95 shadow-float"
+                className="inspector-surface absolute top-16 right-4 bottom-24 z-30 flex w-[332px] flex-col overflow-hidden rounded-2xl"
               >
-                <div className="flex h-14 w-[332px] shrink-0 items-center justify-between pr-3 pl-5">
+                <div className="flex h-14 w-[332px] shrink-0 items-center justify-between pr-3 pl-5 shadow-[inset_0_-1px_0_var(--color-line)]">
                   <span className="text-[14px] font-semibold tracking-[-0.01em] text-ink">
                     {t("Details")}
                   </span>
@@ -873,7 +847,9 @@ const LightboxView: React.FC<Omit<LightboxProps, "session"> & { session: Lightbo
                         [
                           t("Category"),
                           [
-                            metadata?.category,
+                            metadata?.category
+                              ? metadata.category.replace(/\b[a-z]/g, (ch) => ch.toUpperCase())
+                              : undefined,
                             metadata?.purity && /^n?sfw$/i.test(metadata.purity)
                               ? metadata.purity.toUpperCase()
                               : metadata?.purity,
@@ -914,9 +890,10 @@ const LightboxView: React.FC<Omit<LightboxProps, "session"> & { session: Lightbo
                   {metadata?.colors && metadata.colors.length > 0 && (
                     <div className="space-y-2.5">
                       <div className="text-[12.5px] font-medium text-ink-3">{t("Palette")}</div>
-                      <div className="flex h-8 overflow-hidden rounded-lg">
+                      <div className="flex h-8 overflow-hidden rounded-xl shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)]">
                         {metadata.colors.map((rawColor) => {
                           const hex = normalizeHexColor(rawColor);
+                          const isCopied = copiedHex === hex;
                           return (
                             <button
                               key={hex}
@@ -927,11 +904,18 @@ const LightboxView: React.FC<Omit<LightboxProps, "session"> & { session: Lightbo
                                 onNotify(`${t("Copied")} ${hex}`, "info");
                                 window.setTimeout(() => setCopiedHex(null), 1500);
                               }}
-                              title={copiedHex === hex ? t("Copied") : hex}
+                              title={isCopied ? `${t("Copied")} ${hex}` : hex}
                               aria-label={`Copy ${hex}`}
-                              className="h-full flex-1 transition-[flex-grow] duration-200 hover:flex-[1.6]"
+                              className="flex h-full flex-1 items-center justify-center transition-[flex-grow] duration-200 hover:flex-[1.7]"
                               style={{ backgroundColor: hex }}
-                            />
+                            >
+                              {isCopied && (
+                                <Check
+                                  className="h-3.5 w-3.5 text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.9)]"
+                                  strokeWidth={2.75}
+                                />
+                              )}
+                            </button>
                           );
                         })}
                       </div>

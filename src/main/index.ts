@@ -181,6 +181,24 @@ function createWindow(show: boolean): void {
   if (show && isMac) app.focus({ steal: true });
   const iconPath = getAppIconPath();
   const availableHeight = screen.getPrimaryDisplay().workAreaSize.height;
+  const isWin = process.platform === "win32";
+  const windowChromeOptions: Partial<Electron.BrowserWindowConstructorOptions> = isMac
+    ? {
+        titleBarStyle: "hiddenInset",
+        trafficLightPosition: { x: 18, y: 20 },
+      }
+    : isWin
+      ? {
+          titleBarStyle: "hidden",
+          titleBarOverlay: {
+            color: "#00000000",
+            symbolColor: "#f4f4f5",
+            height: 60,
+          },
+        }
+      : {
+          titleBarStyle: "default",
+        };
   const window = new BrowserWindow({
     width: 1200,
     height: Math.min(900, availableHeight),
@@ -188,7 +206,7 @@ function createWindow(show: boolean): void {
     minHeight: 520,
     backgroundColor: "#0d0d0d",
     autoHideMenuBar: !isMac,
-    titleBarStyle: "default",
+    ...windowChromeOptions,
     show: false,
     ...(iconPath ? { icon: iconPath } : {}),
     webPreferences: {

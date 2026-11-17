@@ -24,6 +24,7 @@
   --color-keep: #62d296;
   --color-drop: #f2646f;
   --color-warn: #e8b05c;
+  --color-fav: #fb7185;
 
   --color-line: rgb(255 255 255 / 0.07);
   --color-line-strong: rgb(255 255 255 / 0.13);
@@ -153,42 +154,70 @@ kbd.keycap-on-accent {
   display: none;
 }
 
+.app-drag {
+  -webkit-app-region: drag;
+}
+
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
 /* Floating glass: docks, popovers, sheets. */
 .glass {
-  background: rgb(34 34 36 / 0.72);
-  backdrop-filter: blur(28px) saturate(1.6);
+  background: rgb(28 28 31 / 0.74);
+  backdrop-filter: blur(30px) saturate(1.7);
   box-shadow:
     0 24px 60px -14px rgb(0 0 0 / 0.75),
     0 2px 6px rgb(0 0 0 / 0.3),
-    inset 0 0 0 1px rgb(255 255 255 / 0.08),
-    inset 0 1px 0 rgb(255 255 255 / 0.06);
+    inset 0 0 0 1px rgb(255 255 255 / 0.085),
+    inset 0 1px 0 rgb(255 255 255 / 0.12);
+}
+
+/* Modal scrim: softens the live atelier behind sheets and palettes. */
+.sheet-scrim {
+  background: rgb(6 6 7 / 0.68);
+  backdrop-filter: blur(10px) saturate(1.2);
 }
 
 /* Sheets: settings and other panels that sit on a blurred scrim. */
 .sheet-surface {
-  background: rgb(22 22 24 / 0.84);
+  background: rgb(20 20 22 / 0.84);
+  backdrop-filter: blur(32px) saturate(1.55);
   box-shadow:
     0 40px 90px -30px rgb(0 0 0 / 0.85),
-    inset 0 0 0 1px rgb(255 255 255 / 0.08),
-    inset 0 1px 0 rgb(255 255 255 / 0.07);
+    0 8px 24px rgb(0 0 0 / 0.45),
+    inset 0 0 0 1px rgb(255 255 255 / 0.085),
+    inset 0 1px 0 rgb(255 255 255 / 0.11);
 }
 
-/* Same look as .glass for surfaces that sit on an already blurred backdrop. */
+/* Floating optical glass for docks and HUD cards over live artwork. */
 .dock-surface {
-  background: rgb(30 30 32 / 0.78);
+  background: rgb(24 24 27 / 0.7);
+  backdrop-filter: blur(28px) saturate(1.65);
   box-shadow:
-    0 20px 48px -16px rgb(0 0 0 / 0.7),
-    inset 0 0 0 1px rgb(255 255 255 / 0.08),
-    inset 0 1px 0 rgb(255 255 255 / 0.06);
+    0 22px 52px -14px rgb(0 0 0 / 0.76),
+    0 2px 8px rgb(0 0 0 / 0.35),
+    inset 0 0 0 1px rgb(255 255 255 / 0.085),
+    inset 0 1px 0 rgb(255 255 255 / 0.11);
+}
+
+/* Lightbox inspector drawer: translucent darkroom loupe card. */
+.inspector-surface {
+  background: rgb(20 20 23 / 0.78);
+  backdrop-filter: blur(30px) saturate(1.65);
+  box-shadow:
+    0 28px 64px -18px rgb(0 0 0 / 0.82),
+    inset 0 0 0 1px rgb(255 255 255 / 0.085),
+    inset 0 1px 0 rgb(255 255 255 / 0.11);
 }
 
 /* Darkens the ambient light: brightest behind the stage, quiet behind the library. */
 .ambient-shade {
   background: linear-gradient(
     to bottom,
-    rgb(13 13 13 / 0.6) 0%,
-    rgb(13 13 13 / 0.74) 26%,
-    rgb(13 13 13 / 0.89) 56%,
+    rgb(13 13 13 / 0.54) 0%,
+    rgb(13 13 13 / 0.71) 26%,
+    rgb(13 13 13 / 0.88) 56%,
     rgb(13 13 13 / 0.96) 100%
   );
 }
@@ -209,27 +238,48 @@ kbd.keycap-on-accent {
 }
 
 .stage-screen {
+  position: relative;
   flex-shrink: 0;
   padding: 0;
   border: 0;
   border-radius: 14px;
   overflow: hidden;
   cursor: pointer;
-  background: rgb(255 255 255 / 0.05);
+  background: rgb(255 255 255 / 0.045);
   box-shadow:
-    0 0 0 1px rgb(255 255 255 / 0.1),
-    0 36px 70px -32px rgb(0 0 0 / 0.9);
+    0 0 0 1px rgb(255 255 255 / 0.11),
+    0 32px 64px -26px rgb(0 0 0 / 0.92),
+    0 8px 20px -8px rgb(0 0 0 / 0.6);
   opacity: 0.42;
   outline: 1.5px solid transparent;
   outline-offset: 3px;
   transition:
     opacity 260ms var(--ease-out-soft),
-    outline-color 260ms var(--ease-out-soft);
+    outline-color 260ms var(--ease-out-soft),
+    box-shadow 260ms var(--ease-out-soft);
+}
+
+/* Studio glass bezel + subtle diagonal reflection sheen. */
+.stage-screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    135deg,
+    rgb(255 255 255 / 0.11) 0%,
+    rgb(255 255 255 / 0.02) 32%,
+    transparent 58%
+  );
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.12),
+    inset 0 1px 0 rgb(255 255 255 / 0.22);
 }
 
 .stage-screen:hover,
 .stage-screen:focus-visible {
-  opacity: 0.8;
+  opacity: 0.84;
 }
 
 .stage-screen:focus-visible {
@@ -239,6 +289,20 @@ kbd.keycap-on-accent {
 .stage-screen[aria-pressed="true"] {
   opacity: 1;
   outline-color: rgb(255 255 255 / 0.92);
+}
+
+.stage-screen .stage-loupe {
+  opacity: 0;
+  transform: translate3d(0, 3px, 0);
+  transition:
+    opacity var(--motion-fast) var(--ease-out-soft),
+    transform var(--motion-fast) var(--ease-out-soft);
+}
+
+.stage-screen:hover .stage-loupe,
+.stage-screen:focus-visible .stage-loupe {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
 }
 
 /* A single display has nothing to be chosen from. */
@@ -397,9 +461,10 @@ kbd.keycap-on-accent {
 /* Wallpaper tile: borderless, the image is the card. */
 .wallpaper-card {
   position: relative;
+  container-type: inline-size;
   border-radius: 12px;
   overflow: hidden;
-  background: rgb(255 255 255 / 0.045);
+  background: rgb(255 255 255 / 0.04);
   transition:
     box-shadow var(--motion-fast) var(--ease-out-soft),
     transform var(--motion-fast) var(--ease-out-soft);
@@ -411,13 +476,38 @@ kbd.keycap-on-accent {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.07),
+    inset 0 1px 0 rgb(255 255 255 / 0.09);
   pointer-events: none;
   transition: box-shadow 160ms ease;
 }
 
 .wallpaper-card:hover::after {
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.16);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.18),
+    inset 0 1px 0 rgb(255 255 255 / 0.22);
+}
+
+/* Narrow tiles (portrait or compact density) collapse the text pill cleanly. */
+.wallpaper-card .set-wallpaper-btn {
+  width: 28px;
+  padding-inline: 0;
+  justify-content: center;
+}
+
+.wallpaper-card .set-wallpaper-label {
+  display: none;
+}
+
+@container (min-width: 224px) {
+  .wallpaper-card .set-wallpaper-btn {
+    width: auto;
+    padding-inline: 10px;
+  }
+  .wallpaper-card .set-wallpaper-label {
+    display: inline;
+  }
 }
 
 .wallpaper-card:focus-visible,
@@ -426,7 +516,7 @@ kbd.keycap-on-accent {
 }
 
 .wallpaper-card.current {
-  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.5);
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.58);
 }
 
 .wallpaper-card.current:focus-visible,
@@ -448,6 +538,44 @@ kbd.keycap-on-accent {
 .wallpaper-card[data-focused="true"] .card-actions {
   opacity: 1;
   transform: translate3d(0, 0, 0);
+}
+
+@keyframes wayper-shimmer {
+  0% {
+    background-position: 180% 0;
+  }
+  100% {
+    background-position: -80% 0;
+  }
+}
+
+.wallpaper-skeleton {
+  border-radius: 12px;
+  background: linear-gradient(
+    105deg,
+    rgb(255 255 255 / 0.032) 25%,
+    rgb(255 255 255 / 0.072) 50%,
+    rgb(255 255 255 / 0.032) 75%
+  );
+  background-size: 220% 100%;
+  animation: wayper-shimmer 1.85s ease-in-out infinite;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.05);
+}
+
+@keyframes wayper-pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.88);
+  }
+}
+
+.live-dot {
+  animation: wayper-pulse-dot 2.6s ease-in-out infinite;
 }
 
 @keyframes wayper-shake {
@@ -483,8 +611,14 @@ kbd.keycap-on-accent {
   }
 
   .wallpaper-card:hover .wallpaper-thumbnail,
-  .wallpaper-card .card-actions {
+  .wallpaper-card .card-actions,
+  .stage-screen .stage-loupe {
     transform: none;
+  }
+
+  .wallpaper-skeleton,
+  .live-dot {
+    animation: none !important;
   }
 
   .workspace-enter {

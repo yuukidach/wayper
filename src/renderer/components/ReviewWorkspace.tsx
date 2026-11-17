@@ -13,6 +13,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  Maximize2,
   RefreshCw,
   Trash2,
   X,
@@ -86,7 +87,33 @@ interface ReviewWorkspaceProps {
   ) => void;
   onBrowsePool: () => void;
   onOpenWallhaven: (filenameOrPath: string) => void;
+  onSelectTag?: (tag: string) => void;
+  onSelectUploader?: (uploader: string) => void;
   onNotify: (text: string, tone?: "info" | "success" | "error") => void;
+}
+
+function parseEvidenceFeature(
+  feature: string,
+):
+  | { kind: "color"; hex: string }
+  | { kind: "uploader"; uploader: string }
+  | { kind: "tag"; tag: string }
+  | { kind: "other"; prefix: string; value: string } {
+  const match = /^([a-z_]+):\s*(.+)$/i.exec(feature);
+  if (!match) return { kind: "tag", tag: feature.trim() };
+  const [, kindRaw, valueRaw] = match;
+  const kind = kindRaw.toLowerCase();
+  const value = valueRaw.trim();
+  if (kind === "color" && /^#[0-9a-f]{3,8}$/i.test(value)) {
+    return { kind: "color", hex: value.toUpperCase() };
+  }
+  if (kind === "uploader") {
+    return { kind: "uploader", uploader: value.replace(/^@/, "") };
+  }
+  if (kind === "tag") {
+    return { kind: "tag", tag: value };
+  }
+  return { kind: "other", prefix: kindRaw, value };
 }
 
 function evidenceLabel(feature: string): React.ReactNode {
@@ -212,6 +239,7 @@ interface DeckCardProps {
   stageHeight: number;
   keepLabel: string;
   dropLabel: string;
+  inspectLabel: string;
   onDecide: (action: "keep" | "ban") => void;
   onOpen: () => void;
   onNaturalSize: (itemPath: string, width: number, height: number) => void;
@@ -226,6 +254,7 @@ const DeckCard: React.FC<DeckCardProps> = ({
   stageHeight,
   keepLabel,
   dropLabel,
+  inspectLabel,
   onDecide,
   onOpen,
   onNaturalSize,
@@ -292,7 +321,7 @@ const DeckCard: React.FC<DeckCardProps> = ({
         gridArea: "1 / 1",
         backgroundImage: previewReady ? undefined : `url("${thumbUrl(item.path)}")`,
       }}
-      className={`relative overflow-hidden rounded-[18px] bg-well bg-cover bg-center shadow-[0_22px_48px_-24px_rgb(0_0_0/0.85),0_0_0_1px_rgb(255_255_255/0.09)] will-change-transform ${
+      className={`group/deckcard relative overflow-hidden rounded-[18px] bg-well bg-cover bg-center shadow-[0_28px_60px_-22px_rgb(0_0_0/0.9),0_0_0_1px_rgb(255_255_255/0.11)] will-change-transform ${
         isTop ? "cursor-grab" : "pointer-events-none"
       }`}
     >
@@ -310,6 +339,10 @@ const DeckCard: React.FC<DeckCardProps> = ({
           }
         }}
         className="pointer-events-none h-full w-full object-cover select-none"
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 rounded-[inherit] shadow-[inset_0_1px_0_rgb(255_255_255/0.18)]"
       />
       <motion.div
         variants={shadeVariants}
@@ -331,6 +364,13 @@ const DeckCard: React.FC<DeckCardProps> = ({
             <X className="h-5 w-5" strokeWidth={2.5} />
             {dropLabel}
           </motion.span>
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute right-3.5 bottom-3.5 inline-flex h-7 items-center gap-1.5 rounded-full bg-black/58 px-2.5 text-[11.5px] text-white/85 opacity-0 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)] backdrop-blur-md transition-opacity duration-150 group-hover/deckcard:opacity-100"
+          >
+            <Maximize2 className="h-3 w-3" strokeWidth={2} />
+            <span>{inspectLabel}</span>
+          </span>
         </>
       )}
     </motion.div>
@@ -382,6 +422,8 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
       onOpenReviewLightbox,
       onBrowsePool,
       onOpenWallhaven,
+      onSelectTag,
+      onSelectUploader,
       onNotify,
     },
     ref,
@@ -421,6 +463,8 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
     );
     const [errorState, setErrorState] = useState<string | null>(null);
     const [retraining, setRetraining] = useState(false);
+    const [whyPinned, setWhyPinned] = useState(false);
+    const whyRef = useRef<HTMLDivElement | null>(null);
 
     const inFlightPathsRef = useRef<Set<string>>(new Set());
     const autoLaneInitializedRef = useRef(false);
@@ -628,6 +672,10 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
       selectedPathRef.current = currentItem?.path ?? null;
     }, [currentItem]);
 
+    useEffect(() => {
+      setWhyPinned(false);
+    }, [currentItem?.path, lane]);
+
     const moveSelection = useCallback(
       (delta: -1 | 1) => {
         if (activeItems.length <= 1) return;
@@ -735,6 +783,24 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
         ? { label: t("Calibrating"), dot: "bg-warn" }
         : { label: t("Untrained"), dot: "bg-ink-3" };
 
+    useEffect(() => {
+      if (!whyPinned) return;
+      const onPointerDown = (event: MouseEvent) => {
+        if (whyRef.current && !whyRef.current.contains(event.target as Node)) {
+          setWhyPinned(false);
+        }
+      };
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (event.key === "Escape") setWhyPinned(false);
+      };
+      document.addEventListener("mousedown", onPointerDown);
+      document.addEventListener("keydown", onKeyDown);
+      return () => {
+        document.removeEventListener("mousedown", onPointerDown);
+        document.removeEventListener("keydown", onKeyDown);
+      };
+    }, [whyPinned]);
+
     const topDislikeEvidence = useMemo(() => {
       if (!currentItem) return [];
       const source =
@@ -745,11 +811,41 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
         .filter((c) => !NON_PREFERENCE_FEATURE_TAGS.has(c.feature.toLowerCase()))
         .slice(0, 5);
     }, [currentItem]);
+    const topKeepEvidence = useMemo(() => {
+      if (!currentItem) return [];
+      const source =
+        currentItem.keep_evidence?.length > 0
+          ? currentItem.keep_evidence
+          : (currentItem.contributions ?? []).filter((c) => c.direction === "keep");
+      return source
+        .filter((c) => !NON_PREFERENCE_FEATURE_TAGS.has(c.feature.toLowerCase()))
+        .slice(0, 3);
+    }, [currentItem]);
 
     const nearestDislike = currentItem?.neighbor_nearest_dislike ?? null;
+    const nearestKeep = currentItem?.neighbor_nearest_keep ?? null;
     const neighborTagMatches = useMemo(() => {
       return (nearestDislike?.tag_matches ?? []).slice(0, 4);
     }, [nearestDislike]);
+
+    const handleEvidenceActivate = useCallback(
+      (feature: string) => {
+        const parsed = parseEvidenceFeature(feature);
+        if (parsed.kind === "color") {
+          window.wayper.copyToClipboard(parsed.hex);
+          onNotify(`${t("Copied")} ${parsed.hex}`, "info");
+          return;
+        }
+        if (parsed.kind === "uploader" && onSelectUploader) {
+          onSelectUploader(parsed.uploader);
+          return;
+        }
+        if (parsed.kind === "tag" && onSelectTag) {
+          onSelectTag(parsed.tag);
+        }
+      },
+      [onNotify, onSelectTag, onSelectUploader, t],
+    );
 
     const otherLane: ReviewLane = lane === "held" ? "recommended" : "held";
     const otherLaneCount = otherLane === "held" ? heldItems.length : recItems.length;
@@ -1107,7 +1203,7 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
                 )}
           </div>
         ) : (
-          <div className="relative flex min-h-0 flex-1 flex-col">
+          <div className="relative z-10 flex min-h-0 flex-1 flex-col">
             {/* The deck */}
             <div className="relative min-h-0 flex-1 px-[72px] pt-3 pb-7">
               <div ref={stageRef} className="grid h-full w-full place-items-center">
@@ -1123,6 +1219,7 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
                       stageHeight={stageSize.height}
                       keepLabel={t("Keep")}
                       dropLabel={t("Dislike")}
+                      inspectLabel={t("Click or Space to inspect")}
                       onDecide={(action) => void decideItem(item, action)}
                       onOpen={() => onOpenReviewLightbox(item, activeItems, lane)}
                       onNaturalSize={recordNaturalSize}
@@ -1136,7 +1233,7 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
                   <button
                     type="button"
                     onClick={() => moveSelection(-1)}
-                    aria-label="Previous candidate"
+                    aria-label={t("Previous candidate")}
                     className="group absolute inset-y-0 left-0 flex w-[72px] items-center justify-center outline-none"
                   >
                     <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.08] text-white/60 transition-[transform,background-color,color] duration-150 group-hover:scale-110 group-hover:bg-white/[0.16] group-hover:text-white group-focus-visible:ring-2 group-focus-visible:ring-white/70">
@@ -1146,7 +1243,7 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
                   <button
                     type="button"
                     onClick={() => moveSelection(1)}
-                    aria-label="Next candidate"
+                    aria-label={t("Next candidate")}
                     className="group absolute inset-y-0 right-0 flex w-[72px] items-center justify-center outline-none"
                   >
                     <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.08] text-white/60 transition-[transform,background-color,color] duration-150 group-hover:scale-110 group-hover:bg-white/[0.16] group-hover:text-white group-focus-visible:ring-2 group-focus-visible:ring-white/70">
@@ -1166,40 +1263,57 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
           is pre-selected.
         */}
         {showDock && (
-          <div className="relative flex shrink-0 items-center justify-center px-6 pt-3 pb-5">
+          <div className="relative z-20 flex shrink-0 items-center justify-center px-6 pt-3 pb-5">
             <motion.div
               initial={{ opacity: 0, y: 28, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               transition={motionTransition.reveal}
-              className="dock-surface flex items-center gap-1 rounded-[20px] p-1.5"
+              className="relative flex items-center gap-1 rounded-[20px] p-1.5"
             >
+              <span
+                aria-hidden="true"
+                className="dock-surface pointer-events-none absolute inset-0 rounded-[20px]"
+              />
               {monitors.length > 1 && (
                 <MonitorTiles
                   t={t}
                   monitors={monitors}
                   activeMonitorName={activeMonitorName}
                   onSelectMonitor={onSelectMonitor}
-                  className="pr-1 pl-0.5"
+                  className="relative pr-1 pl-0.5"
                 />
               )}
               {decisionItem && (
                 <>
-                  {monitors.length > 1 && <span className="mx-1 h-5 w-px bg-white/[0.1]" />}
-                    <div className="group/why relative">
+                  {monitors.length > 1 && (
+                    <span className="relative mx-1 h-5 w-px bg-white/[0.1]" />
+                  )}
+                    <div ref={whyRef} className="group/why relative">
                       <button
                         type="button"
+                        onClick={() => setWhyPinned((v) => !v)}
+                        aria-expanded={whyPinned}
                         aria-label={`${t("Dislike score")} ${score.toFixed(2)}`}
                         aria-describedby="review-why"
-                        className="flex h-10 cursor-default items-center gap-2 rounded-xl pr-3 pl-2.5 text-[13.5px] transition-colors hover:bg-white/[0.08] focus-visible:bg-white/[0.08]"
+                        className={`flex h-10 items-center gap-2 rounded-xl pr-3 pl-2.5 text-[13.5px] transition-colors hover:bg-white/[0.08] focus-visible:bg-white/[0.08] ${
+                          whyPinned ? "bg-white/[0.1]" : ""
+                        }`}
                       >
                         <ScoreRing value={score} threshold={threshold} />
                         <span className="font-medium tabular-nums text-ink">{score.toFixed(2)}</span>
                       </button>
                       <div
-                        id="review-why"
-                        role="tooltip"
-                        className="dock-surface pointer-events-none absolute bottom-full left-0 z-10 mb-3.5 w-[300px] bg-[rgb(26_26_28/0.97)]! origin-bottom-left translate-y-1.5 scale-[0.98] rounded-2xl p-4 opacity-0 transition-[opacity,transform] duration-150 ease-out group-focus-within/why:translate-y-0 group-focus-within/why:scale-100 group-focus-within/why:opacity-100 group-hover/why:translate-y-0 group-hover/why:scale-100 group-hover/why:opacity-100"
+                        className={`absolute bottom-full left-0 z-20 pb-3.5 transition-[opacity,transform] duration-150 ease-out ${
+                          whyPinned
+                            ? "pointer-events-auto translate-y-0 scale-100 opacity-100"
+                            : "pointer-events-none origin-bottom-left translate-y-1.5 scale-[0.98] opacity-0 group-focus-within/why:pointer-events-auto group-focus-within/why:translate-y-0 group-focus-within/why:scale-100 group-focus-within/why:opacity-100 group-hover/why:pointer-events-auto group-hover/why:translate-y-0 group-hover/why:scale-100 group-hover/why:opacity-100"
+                        }`}
                       >
+                        <div
+                          id="review-why"
+                          role="tooltip"
+                          className="glass w-[320px] rounded-2xl p-4"
+                        >
                         <div className="flex items-baseline justify-between gap-3">
                           <span className="text-[13px] font-medium text-ink">{t("Dislike score")}</span>
                           <span className="text-[13px] tabular-nums text-ink">{score.toFixed(2)}</span>
@@ -1222,42 +1336,102 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
                             <span className="tabular-nums">{threshold.toFixed(2)}</span>
                           </div>
                         )}
-                        {nearestDislike && (
-                          <div className="mt-3 flex items-baseline justify-between gap-3 border-t border-white/[0.08] pt-3 text-[12.5px]">
-                            <span className="text-ink-2">{t("Similar to a disliked wallpaper")}</span>
-                            <span className="font-medium tabular-nums text-ink">
-                              {Math.round((nearestDislike.similarity ?? 0) * 100)}%
-                            </span>
+                        {(nearestDislike || nearestKeep) && (
+                          <div className="mt-3 space-y-1.5 border-t border-white/[0.08] pt-3 text-[12.5px]">
+                            {nearestDislike && (
+                              <div className="flex items-baseline justify-between gap-3">
+                                <span className="text-ink-2">
+                                  {t("Similar to a disliked wallpaper")}
+                                </span>
+                                <span className="font-medium tabular-nums text-drop">
+                                  {Math.round((nearestDislike.similarity ?? 0) * 100)}%
+                                </span>
+                              </div>
+                            )}
+                            {nearestKeep && (
+                              <div className="flex items-baseline justify-between gap-3">
+                                <span className="text-ink-2">
+                                  {t("Similar to a kept wallpaper")}
+                                </span>
+                                <span className="font-medium tabular-nums text-keep">
+                                  {Math.round((nearestKeep.similarity ?? 0) * 100)}%
+                                </span>
+                              </div>
+                            )}
                           </div>
                         )}
                         {(topDislikeEvidence.length > 0 || neighborTagMatches.length > 0) && (
-                          <div className="mt-3 flex flex-wrap gap-1.5">
-                            {topDislikeEvidence.map((ev) => (
-                              <span
-                                key={`ev-${ev.type}-${ev.feature}`}
-                                className="inline-flex h-6 items-center gap-1.5 rounded-full bg-white/[0.08] px-2.5 text-[12px] text-ink-2"
-                              >
-                                {evidenceLabel(ev.feature)}
-                              </span>
-                            ))}
-                            {neighborTagMatches.map((tm, i) => (
-                              <span
-                                key={`tm-${tm.query}-${tm.prototype}-${i}`}
-                                className="inline-flex h-6 items-center rounded-full px-2.5 text-[12px] text-ink-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]"
-                              >
-                                {tm.query === tm.prototype ? tm.query : `${tm.query} ≈ ${tm.prototype}`}
-                              </span>
-                            ))}
+                          <div className="mt-3 space-y-1.5">
+                            <div className="text-[11.5px] font-medium text-ink-3">
+                              {t("Dislike signals")}
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {topDislikeEvidence.map((ev) => {
+                                const parsed = parseEvidenceFeature(ev.feature);
+                                const clickable =
+                                  parsed.kind === "color" ||
+                                  (parsed.kind === "uploader" && Boolean(onSelectUploader)) ||
+                                  (parsed.kind === "tag" && Boolean(onSelectTag));
+                                return clickable ? (
+                                  <button
+                                    key={`ev-${ev.type}-${ev.feature}`}
+                                    type="button"
+                                    onClick={() => handleEvidenceActivate(ev.feature)}
+                                    className="inline-flex h-6 items-center gap-1.5 rounded-full bg-drop/12 px-2.5 text-[12px] text-ink-2 shadow-[inset_0_0_0_1px_rgb(242_100_111/0.2)] transition-colors hover:bg-drop/22 hover:text-ink"
+                                  >
+                                    {evidenceLabel(ev.feature)}
+                                  </button>
+                                ) : (
+                                  <span
+                                    key={`ev-${ev.type}-${ev.feature}`}
+                                    className="inline-flex h-6 items-center gap-1.5 rounded-full bg-white/[0.08] px-2.5 text-[12px] text-ink-2"
+                                  >
+                                    {evidenceLabel(ev.feature)}
+                                  </span>
+                                );
+                              })}
+                              {neighborTagMatches.map((tm, i) => (
+                                <button
+                                  key={`tm-${tm.query}-${tm.prototype}-${i}`}
+                                  type="button"
+                                  onClick={() => onSelectTag?.(tm.query)}
+                                  disabled={!onSelectTag}
+                                  className="inline-flex h-6 items-center rounded-full px-2.5 text-[12px] text-ink-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)] transition-colors enabled:hover:bg-white/[0.1] enabled:hover:text-ink"
+                                >
+                                  {tm.query === tm.prototype ? tm.query : `${tm.query} ≈ ${tm.prototype}`}
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         )}
+                        {topKeepEvidence.length > 0 && (
+                          <div className="mt-3 space-y-1.5">
+                            <div className="text-[11.5px] font-medium text-ink-3">
+                              {t("Keep signals")}
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {topKeepEvidence.map((ev) => (
+                                <button
+                                  key={`keep-ev-${ev.type}-${ev.feature}`}
+                                  type="button"
+                                  onClick={() => handleEvidenceActivate(ev.feature)}
+                                  className="inline-flex h-6 items-center gap-1.5 rounded-full bg-keep/12 px-2.5 text-[12px] text-ink-2 shadow-[inset_0_0_0_1px_rgb(98_210_150/0.2)] transition-colors hover:bg-keep/22 hover:text-ink"
+                                >
+                                  {evidenceLabel(ev.feature)}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        </div>
                       </div>
                     </div>
-                    <span className="mx-1 h-5 w-px bg-white/[0.1]" />
+                    <span className="relative mx-1 h-5 w-px bg-white/[0.1]" />
                     <motion.button
                       type="button"
                       whileTap={{ scale: 0.95 }}
                       onClick={() => void decideItem(decisionItem, "keep")}
-                      className="inline-flex h-10 items-center gap-2 rounded-xl pr-3 pl-3.5 text-[13.5px] font-medium text-ink transition-colors hover:bg-keep/15 hover:text-keep"
+                      className="relative inline-flex h-10 items-center gap-2 rounded-xl pr-3 pl-3.5 text-[13.5px] font-medium text-ink transition-colors hover:bg-keep/15 hover:text-keep"
                     >
                       <Check className="h-4 w-4" strokeWidth={2} />
                       <span>{t("Keep")}</span>
@@ -1267,19 +1441,19 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
                       type="button"
                       whileTap={{ scale: 0.95 }}
                       onClick={() => void decideItem(decisionItem, "ban")}
-                      className="inline-flex h-10 items-center gap-2 rounded-xl pr-3 pl-3.5 text-[13.5px] font-medium text-ink transition-colors hover:bg-drop/15 hover:text-drop"
+                      className="relative inline-flex h-10 items-center gap-2 rounded-xl pr-3 pl-3.5 text-[13.5px] font-medium text-ink transition-colors hover:bg-drop/15 hover:text-drop"
                     >
                       <X className="h-4 w-4" strokeWidth={2} />
                       <span>{t("Dislike")}</span>
                       <kbd className="keycap">D</kbd>
                     </motion.button>
-                    <span className="mx-1 h-5 w-px bg-white/[0.1]" />
+                    <span className="relative mx-1 h-5 w-px bg-white/[0.1]" />
                     <button
                       type="button"
                       onClick={() => onOpenWallhaven(decisionItem.name)}
                       title={`${t("Open on Wallhaven")} [O]`}
                       aria-label={t("Open on Wallhaven")}
-                      className="flex h-10 w-10 items-center justify-center rounded-xl text-ink-2 transition-colors hover:bg-white/[0.08] hover:text-ink"
+                      className="relative flex h-10 w-10 items-center justify-center rounded-xl text-ink-2 transition-colors hover:bg-white/[0.08] hover:text-ink"
                     >
                       <ExternalLink className="h-4 w-4" strokeWidth={1.75} />
                     </button>

@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type { ImageItem, Orientation, Purity } from "../../shared/types";
 import { casefold } from "../../shared/tags";
+import type { GalleryDensity, GalleryFraming } from "../lib/gallery-prefs";
 import { prewarmLightboxPreview } from "../lib/lightbox-preview";
 import { thumbUrl } from "../lib/media";
 import { motionDuration, motionEasing, prefersReducedMotion, scrollMotion } from "../lib/motion";
@@ -52,6 +53,8 @@ interface WallpaperGridProps {
   mode: "pool" | "favorites";
   purities: Purity[];
   orientation: Orientation;
+  density?: GalleryDensity;
+  framing?: GalleryFraming;
   activeImagePath: string | null;
   searchQuery: string;
   searchMatches: Set<string> | null;
@@ -75,6 +78,8 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
       mode,
       purities,
       orientation,
+      density = "standard",
+      framing = "fill",
       activeImagePath,
       searchQuery,
       searchMatches,
@@ -621,16 +626,34 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
     };
 
     const isPortraitGrid = shown.orientation === "portrait";
+    const isMatte = framing === "matte";
+    const gridColumnsClass = isPortraitGrid
+      ? density === "compact"
+        ? "grid-cols-[repeat(auto-fill,minmax(152px,1fr))] gap-2.5"
+        : density === "gallery"
+          ? "grid-cols-[repeat(auto-fill,minmax(256px,1fr))] gap-4"
+          : "grid-cols-[repeat(auto-fill,minmax(194px,1fr))] gap-3"
+      : density === "compact"
+        ? "grid-cols-[repeat(auto-fill,minmax(216px,1fr))] gap-2.5"
+        : density === "gallery"
+          ? "grid-cols-[repeat(auto-fill,minmax(372px,1fr))] gap-4"
+          : "grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3";
+    const skeletonAspectClass = isPortraitGrid ? "aspect-[10/16]" : "aspect-[16/10]";
 
     const placeholderHeight = header ? "min-h-[36vh]" : "min-h-[72vh]";
     let placeholder: React.ReactNode = null;
     if (initialLoading && allItems.length === 0) {
       placeholder = (
         <div
-          className={`flex ${placeholderHeight} items-center justify-center`}
           aria-label={t("Loading library...")}
+          className={`grid ${gridColumnsClass}`}
         >
-          <Loader2 className="h-5 w-5 animate-spin text-ink-3" strokeWidth={1.75} />
+          {Array.from({ length: isPortraitGrid ? 10 : 8 }).map((_, idx) => (
+            <div
+              key={`skeleton-${idx}`}
+              className={`wallpaper-skeleton ${skeletonAspectClass}`}
+            />
+          ))}
         </div>
       );
     } else if (filteredItems.length === 0) {
@@ -681,11 +704,7 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
           key={shown.epoch}
           ref={gridRef}
           hidden={placeholder !== null}
-          className={`grid-enter grid gap-3 ${initialLoading ? "grid-pending" : ""} ${
-            isPortraitGrid
-              ? "grid-cols-[repeat(auto-fill,minmax(190px,1fr))]"
-              : "grid-cols-[repeat(auto-fill,minmax(280px,1fr))]"
-          }`}
+          className={`grid-enter grid ${gridColumnsClass} ${initialLoading ? "grid-pending" : ""}`}
         >
           {filteredItems.map((item, idx) => {
             const isCurrent = activeImagePath === item.path;
@@ -715,6 +734,8 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
                 }}
                 onClick={() => onOpenLightbox(item, filteredItems)}
                 className={`wallpaper-card group cursor-pointer ${aspectClass} ${
+                  isMatte ? "bg-[#0f0f11]" : ""
+                } ${
                   isCurrent ? "current" : ""
                 }`}
               >
@@ -734,14 +755,18 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
                     // Keep the neutral card instead of the browser's broken-image glyph.
                     event.currentTarget.style.visibility = "hidden";
                   }}
-                  className="wallpaper-thumbnail h-full w-full object-cover opacity-0"
+                  className={`wallpaper-thumbnail h-full w-full opacity-0 ${
+                    isMatte
+                      ? "object-contain p-3.5 drop-shadow-[0_12px_24px_rgb(0_0_0/0.75)]"
+                      : "object-cover"
+                  }`}
                 />
 
                 {/* Top Status Indicators */}
                 <div className="pointer-events-none absolute top-2 right-2 left-2 flex items-center justify-between gap-1.5">
                   {isCurrent ? (
-                    <span className="inline-flex h-[22px] items-center gap-1.5 rounded-full bg-black/60 px-2 text-[11.5px] font-medium text-white">
-                      <span className="h-1.5 w-1.5 rounded-full bg-white" />
+                    <span className="inline-flex h-[22px] items-center gap-1.5 rounded-full bg-black/62 px-2.5 text-[11px] font-medium text-white shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)] backdrop-blur-md">
+                      <span className="h-1.5 w-1.5 rounded-full bg-keep" />
                       {t("Active")}
                     </span>
                   ) : (
@@ -749,14 +774,14 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
                   )}
 
                   {item.is_favorite && mode !== "favorites" && (
-                    <span className="flex h-[22px] w-[22px] items-center justify-center rounded-full bg-black/60 text-white">
+                    <span className="flex h-[22px] w-[22px] items-center justify-center rounded-full bg-black/62 text-fav shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] backdrop-blur-md">
                       <Heart className="h-3 w-3 fill-current" />
                     </span>
                   )}
                 </div>
 
                 {/* Bottom Hover / Focus Contact-Sheet Action Bar */}
-                <div className="card-actions absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-black/70 to-transparent px-2 pt-10 pb-2">
+                <div className="card-actions absolute inset-x-0 bottom-0 flex items-end justify-between gap-1.5 bg-gradient-to-t from-black/75 via-black/28 to-transparent px-2 pt-10 pb-2">
                   <button
                     type="button"
                     onClick={(e) => {
@@ -764,19 +789,20 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
                       onSetWallpaper(item);
                     }}
                     title={`${t("Set Wallpaper")} [Enter]`}
-                    className="inline-flex h-7 min-w-0 items-center gap-1.5 rounded-full bg-white/90 px-2.5 text-[12px] font-medium text-black transition-colors hover:bg-white"
+                    aria-label={t("Set Wallpaper")}
+                    className="set-wallpaper-btn inline-flex h-7 min-w-0 shrink-0 items-center gap-1.5 rounded-full bg-white/92 text-[12px] font-medium text-black shadow-[0_2px_8px_rgb(0_0_0/0.4)] transition-colors hover:bg-white"
                   >
                     <MonitorUp className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-                    <span className="truncate">{t("Set Wallpaper")}</span>
+                    <span className="set-wallpaper-label truncate">{t("Set Wallpaper")}</span>
                   </button>
 
-                  <div className="flex shrink-0 items-center rounded-full bg-black/55 p-0.5 backdrop-blur-md">
+                  <div className="flex shrink-0 items-center rounded-full bg-black/58 p-0.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] backdrop-blur-md">
                     <button
                       type="button"
                       onClick={(e) => void handleCardFavorite(e, item)}
                       title={`${item.is_favorite ? t("Unfavorite") : t("Favorite")} [F]`}
                       className={`flex h-6 w-6 items-center justify-center rounded-full transition-colors hover:bg-white/15 ${
-                        item.is_favorite ? "text-white" : "text-white/75 hover:text-white"
+                        item.is_favorite ? "text-fav" : "text-white/75 hover:text-white"
                       }`}
                     >
                       <Heart className={`h-3.5 w-3.5 ${item.is_favorite ? "fill-current" : ""}`} />

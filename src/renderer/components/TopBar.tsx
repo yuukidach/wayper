@@ -2,7 +2,9 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import {
   ArrowDownToLine,
   AtSign,
+  Command,
   Hash,
+  Keyboard,
   Search,
   Settings2,
   SlidersHorizontal,
@@ -16,9 +18,15 @@ import type {
   FilterStrategy,
   GalleryMode,
   Purity,
+  SearchResponse,
   StatusResponse,
   UpdateCheckResponse,
 } from "../../shared/types";
+import type {
+  GalleryDensity,
+  GalleryFraming,
+  GalleryPreferences,
+} from "../lib/gallery-prefs";
 import { motionTransition } from "../lib/motion";
 
 interface SuggestionEntry {
@@ -35,6 +43,7 @@ interface TopBarProps {
   t: (key: string) => string;
   view: "workspace" | "settings";
   immersive: boolean;
+  overlayOpen?: boolean;
   mode: GalleryMode;
   onSelectMode: (mode: GalleryMode) => void;
   onToggleSettings: () => void;
@@ -56,10 +65,13 @@ interface TopBarProps {
   activeFilterLabel: string | null;
   matchCount: number | null;
   isSearching: boolean;
-  onCommitSearch: (query: string) => void;
+  onCommitSearch: (query: string) => Promise<SearchResponse | null> | void;
   onSelectUploader: (uploader: string) => void;
   onSelectTag: (tag: string) => void;
   onClearSearch: () => void;
+  galleryPrefs: GalleryPreferences;
+  onChangeGalleryPrefs: (next: GalleryPreferences) => void;
+  onOpenCommandPalette: () => void;
 }
 
 const PURITY_DOT: Record<Purity, string> = {
@@ -84,6 +96,7 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
     t,
     view,
     immersive,
+    overlayOpen = false,
     mode,
     onSelectMode,
     onToggleSettings,
@@ -109,9 +122,17 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
     onSelectUploader,
     onSelectTag,
     onClearSearch,
+    galleryPrefs,
+    onChangeGalleryPrefs,
+    onOpenCommandPalette,
   },
   ref,
 ) {
+  const platform = window.wayper.platform;
+  const isMac = platform === "darwin";
+  const isWin = platform === "win32";
+  const hasFramelessDrag = isMac || isWin;
+
   const [draft, setDraft] = useState(searchQuery);
   const [openDropdown, setOpenDropdown] = useState(false);
   const [suggestions, setSuggestions] = useState<SuggestionEntry[]>([]);
@@ -155,10 +176,19 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
 
     debounceRef.current = window.setTimeout(async () => {
       const seq = ++requestSeqRef.current;
-      onCommitSearch(trimmed);
       try {
-        const res = await window.wayper.searchImages({ query: trimmed });
+        const committed = await onCommitSearch(trimmed);
+        const res =
+          committed ??
+          (trimmed.startsWith("@") || trimmed.includes("+")
+            ? await window.wayper.searchImages({ query: trimmed })
+            : null);
         if (seq !== requestSeqRef.current) return;
+        if (!res) {
+          setSuggestions([]);
+          setOpenDropdown(false);
+          return;
+        }
         const uploaderItems: SuggestionEntry[] = (res.uploader_suggestions ?? [])
           .slice(0, 6)
           .map((u) => ({
@@ -265,6 +295,11 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
   }, [purityHint]);
 
   useEffect(() => {
+    setFiltersOpen(false);
+    setOpenDropdown(false);
+  }, [mode, view, overlayOpen]);
+
+  useEffect(() => {
     if (!filtersOpen) return;
     const onPointerDown = (event: MouseEvent) => {
       if (filtersRef.current && !filtersRef.current.contains(event.target as Node)) {
@@ -272,13 +307,16 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
       }
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setFiltersOpen(false);
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setFiltersOpen(false);
+      }
     };
     document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keydown", onKeyDown, true);
     };
   }, [filtersOpen]);
 
@@ -307,11 +345,25 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
     { value: "model", label: t("Model") },
     { value: "rules+model", label: t("Both") },
   ];
+  const densityItems: Array<{ value: GalleryDensity; label: string }> = [
+    { value: "compact", label: t("Compact") },
+    { value: "standard", label: t("Standard") },
+    { value: "gallery", label: t("Gallery") },
+  ];
+  const framingItems: Array<{ value: GalleryFraming; label: string }> = [
+    { value: "fill", label: t("Fill") },
+    { value: "matte", label: t("Matte") },
+  ];
 
   const usedMb = diskUsage?.used_mb ?? 0;
   const quotaMb = diskUsage?.quota_mb ?? config?.quota_mb ?? 4000;
   const usedPct = quotaMb > 0 ? Math.min(100, Math.round((usedMb / quotaMb) * 100)) : 0;
   const meterColor = usedPct >= 90 ? "bg-drop" : usedPct >= 75 ? "bg-warn" : "bg-ink";
+  const horizontalPadding = isMac
+    ? "pl-[82px] pr-6"
+    : isWin
+      ? "pl-6 pr-[144px]"
+      : "px-6";
 
   return (
     <header className="pointer-events-none absolute inset-x-0 top-0 z-30 h-[60px]">
@@ -322,14 +374,20 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
         <i />
         <b />
       </div>
-      <div className="pointer-events-auto relative grid h-full grid-cols-[1fr_minmax(150px,380px)_1fr] items-center gap-4 px-6">
-        <div className="flex items-center gap-3.5 justify-self-start">
-        <img
-          src={appIcon}
-          alt="Wayper"
-          className="h-6 w-6 shrink-0 rounded-[7px]"
-          draggable={false}
-        />
+      <div
+        className={`pointer-events-auto relative grid h-full grid-cols-[1fr_minmax(150px,380px)_1fr] items-center gap-4 ${horizontalPadding} ${
+          hasFramelessDrag ? "app-drag" : ""
+        }`}
+      >
+        <div className="app-no-drag flex items-center gap-3.5 justify-self-start">
+        {!isMac && (
+          <img
+            src={appIcon}
+            alt="Wayper"
+            className="h-6 w-6 shrink-0 rounded-[7px] shadow-[0_2px_8px_rgb(0_0_0/0.35)]"
+            draggable={false}
+          />
+        )}
 
         <nav className="flex shrink-0 items-center gap-px rounded-full bg-white/[0.055] p-[3px] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.045)]">
           {navItems.map((item) => {
@@ -378,7 +436,7 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
         </div>
 
       <div ref={wrapperRef} className="relative min-w-0">
-        <div className="group flex h-8 items-center gap-2 rounded-full bg-white/[0.06] px-3 transition-colors hover:bg-white/[0.075] focus-within:bg-white/[0.09] focus-within:shadow-[0_0_0_1px_rgb(255_255_255/0.22)]">
+        <div className="app-no-drag group flex h-8 items-center gap-2 rounded-full bg-white/[0.06] px-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.04)] transition-colors hover:bg-white/[0.08] focus-within:bg-white/[0.095] focus-within:shadow-[0_0_0_1px_rgb(255_255_255/0.22)]">
           <Search className="h-3.5 w-3.5 shrink-0 text-ink-3 transition-colors group-focus-within:text-ink-2" />
           <input
             ref={searchInputRef}
@@ -469,7 +527,7 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
         </AnimatePresence>
       </div>
 
-        <div className="flex items-center gap-1 justify-self-end">
+        <div className="app-no-drag flex items-center gap-1 justify-self-end">
         {updateInfo?.update_available && (
           <button
             type="button"
@@ -518,7 +576,7 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
                 exit={{ opacity: 0, y: -4, scale: 0.98 }}
                 transition={motionTransition.fast}
                 style={{ transformOrigin: "top right" }}
-                className="glass absolute top-[calc(100%+8px)] right-0 z-40 flex w-[288px] flex-col gap-4 rounded-2xl p-4"
+                className="glass absolute top-[calc(100%+8px)] right-0 z-40 flex w-[300px] flex-col gap-4 rounded-2xl p-4"
               >
                 <div>
                   <div className="mb-2 flex items-center justify-between text-[12.5px] text-ink-3">
@@ -598,6 +656,80 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
                   </div>
                 </div>
 
+                <div className="space-y-3 border-t border-white/[0.07] pt-3.5">
+                  <div>
+                    <div className="mb-2 text-[12.5px] text-ink-3">{t("Grid Size")}</div>
+                    <div
+                      role="radiogroup"
+                      aria-label={t("Grid Size")}
+                      className="grid grid-cols-3 gap-0.5 rounded-xl bg-white/[0.05] p-0.5"
+                    >
+                      {densityItems.map((item) => {
+                        const selected = galleryPrefs.density === item.value;
+                        return (
+                          <button
+                            key={item.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            onClick={() =>
+                              onChangeGalleryPrefs({ ...galleryPrefs, density: item.value })
+                            }
+                            className={`relative h-8 rounded-[10px] text-[12.5px] font-medium transition-colors ${
+                              selected ? "text-ink" : "text-ink-3 hover:text-ink-2"
+                            }`}
+                          >
+                            {selected && (
+                              <motion.span
+                                layoutId="density-pill"
+                                className="absolute inset-0 rounded-[10px] bg-white/[0.13] shadow-[0_1px_2px_rgb(0_0_0/0.4)]"
+                                transition={motionTransition.select}
+                              />
+                            )}
+                            <span className="relative">{item.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-[12.5px] text-ink-3">{t("Framing")}</div>
+                    <div
+                      role="radiogroup"
+                      aria-label={t("Framing")}
+                      className="grid grid-cols-2 gap-0.5 rounded-xl bg-white/[0.05] p-0.5"
+                    >
+                      {framingItems.map((item) => {
+                        const selected = galleryPrefs.framing === item.value;
+                        return (
+                          <button
+                            key={item.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            onClick={() =>
+                              onChangeGalleryPrefs({ ...galleryPrefs, framing: item.value })
+                            }
+                            className={`relative h-8 rounded-[10px] text-[12.5px] font-medium transition-colors ${
+                              selected ? "text-ink" : "text-ink-3 hover:text-ink-2"
+                            }`}
+                          >
+                            {selected && (
+                              <motion.span
+                                layoutId="framing-pill"
+                                className="absolute inset-0 rounded-[10px] bg-white/[0.13] shadow-[0_1px_2px_rgb(0_0_0/0.4)]"
+                                transition={motionTransition.select}
+                              />
+                            )}
+                            <span className="relative">{item.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
                 <div>
                   <div className="mb-2 flex items-baseline justify-between text-[12.5px]">
                     <span className="text-ink-3">{t("Storage")}</span>
@@ -616,6 +748,20 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
             )}
           </AnimatePresence>
         </div>
+
+        <button
+          type="button"
+          onClick={onOpenCommandPalette}
+          title={`${t("Commands & shortcuts")} [? / ${isMac ? "⌘K" : "Ctrl+K"}]`}
+          aria-label={t("Commands & shortcuts")}
+          className={ICON_BUTTON}
+        >
+          {isMac ? (
+            <Command className="h-4 w-4" strokeWidth={1.75} />
+          ) : (
+            <Keyboard className="h-4 w-4" strokeWidth={1.75} />
+          )}
+        </button>
 
         <button
           type="button"

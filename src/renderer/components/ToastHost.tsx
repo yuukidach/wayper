@@ -12,11 +12,12 @@ export interface ToastMessage {
 }
 
 interface ToastHostProps {
+  t?: (key: string) => string;
   toasts: ToastMessage[];
   onDismiss: (id: number) => void;
 }
 
-export const ToastHost: React.FC<ToastHostProps> = ({ toasts, onDismiss }) => {
+export const ToastHost: React.FC<ToastHostProps> = ({ t, toasts, onDismiss }) => {
   return (
     <div
       className="pointer-events-none fixed right-5 bottom-5 z-50 flex max-w-sm flex-col items-end gap-2"
@@ -35,7 +36,7 @@ export const ToastHost: React.FC<ToastHostProps> = ({ toasts, onDismiss }) => {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 6, scale: 0.97 }}
               transition={motionTransition.normal}
-              className="pointer-events-auto flex items-center gap-2.5 rounded-xl bg-overlay py-2 pr-1.5 pl-3.5 text-[13px] text-ink shadow-float"
+              className="glass pointer-events-auto flex items-center gap-2.5 rounded-2xl py-2 pr-2 pl-3.5 text-[13px] text-ink"
             >
               <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
               <span className="leading-snug">{toast.text}</span>
@@ -43,7 +44,7 @@ export const ToastHost: React.FC<ToastHostProps> = ({ toasts, onDismiss }) => {
                 type="button"
                 onClick={() => onDismiss(toast.id)}
                 className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-3 transition-colors hover:bg-white/[0.08] hover:text-ink"
-                aria-label="Dismiss notification"
+                aria-label={t ? t("Dismiss notification") : "Dismiss notification"}
               >
                 <X className="h-3.5 w-3.5" strokeWidth={1.75} />
               </button>

@@ -13,6 +13,7 @@ import {
   Check,
   ChevronRight,
   ExternalLink,
+  ImageOff,
   Loader2,
   Plus,
   RotateCcw,
@@ -44,6 +45,7 @@ import {
   type LightboxPreviewContext,
   type LightboxPreviewItem,
 } from "../lib/lightbox-preview";
+import type { GalleryDensity, GalleryFraming } from "../lib/gallery-prefs";
 import { formatTimestamp, thumbUrl, trashThumbUrl } from "../lib/media";
 import { motionTransition } from "../lib/motion";
 
@@ -73,6 +75,8 @@ interface BlocklistWorkspaceProps {
   config: ConfigPayload | null;
   purities: Purity[];
   orientation: Orientation;
+  density?: GalleryDensity;
+  framing?: GalleryFraming;
   refreshToken: number;
   onRefreshConfigAndStatus: () => Promise<void>;
   onOpenTrashLightbox: (item: ImageItem, list: ImageItem[]) => void;
@@ -84,7 +88,7 @@ interface BlocklistWorkspaceProps {
 
 const BLOCKED_BATCH_SIZE = 100;
 const TRASH_BATCH_SIZE = 60;
-const RULE_ROWS_PER_COLUMN = 10;
+const RULE_ROWS_PER_COLUMN = 15;
 const RULE_SKELETON_WIDTHS = [58, 44, 66, 38, 52, 47, 34, 41];
 
 type RuleType = "tag" | "combo" | "uploader";
@@ -142,10 +146,13 @@ const RuleTable: React.FC<RuleTableProps> = ({
   undoLabel,
   onOpen,
   onToggle,
-}) => (
-  <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto_auto] content-start gap-x-4">
-    <div className="col-span-4 grid h-[32px] grid-cols-subgrid items-center px-3 text-[12px] text-ink-3 shadow-[inset_0_-1px_0_var(--color-line)]">
-      <h3 className="m-0 text-[12px] font-medium text-ink-2">{title}</h3>
+}) => {
+  const scale = Math.max(1, ...rows.map((row) => row.banned + row.kept));
+  return (
+  <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(40px,0.55fr)_auto_auto_auto] content-start gap-x-4 rounded-2xl bg-white/[0.025] p-2 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.05)]">
+    <div className="col-span-5 grid h-[36px] grid-cols-subgrid items-center px-3 text-[12px] text-ink-3 shadow-[inset_0_-1px_0_var(--color-line)]">
+      <h3 className="m-0 text-[12.5px] font-medium text-ink">{title}</h3>
+      <span aria-hidden="true" />
       <span className="text-right">{blockedLabel}</span>
       <span className="text-right">{keptLabel}</span>
       {/* Holds the action column at its final width while the rows load. */}
@@ -154,7 +161,7 @@ const RuleTable: React.FC<RuleTableProps> = ({
       </span>
     </div>
     {loading ? (
-      <ul className="col-span-4 m-0 list-none p-0 pt-1" aria-hidden="true">
+      <ul className="col-span-5 m-0 list-none p-0 pt-1" aria-hidden="true">
         {RULE_SKELETON_WIDTHS.map((width) => (
           <li key={width} className="flex h-[36px] items-center px-3">
             <span
@@ -165,17 +172,17 @@ const RuleTable: React.FC<RuleTableProps> = ({
         ))}
       </ul>
     ) : (
-      <ul className="col-span-4 m-0 grid list-none grid-cols-subgrid p-0 pt-1">
+      <ul className="col-span-5 m-0 grid list-none grid-cols-subgrid p-0 pt-1">
         {rows.map((row) => (
           <li
             key={row.key}
-            className="group/rule col-span-4 grid h-[36px] grid-cols-subgrid items-center rounded-lg px-3 transition-colors hover:bg-white/[0.05] has-[:focus-visible]:bg-white/[0.05]"
+            className="group/rule col-span-5 grid h-[36px] grid-cols-subgrid items-center rounded-lg px-3 transition-colors hover:bg-white/[0.05] has-[:focus-visible]:bg-white/[0.05]"
           >
             <button
               type="button"
               onClick={() => onOpen(row)}
               title={row.label}
-              className="col-span-3 grid h-full grid-cols-subgrid items-center rounded-md text-left outline-offset-0"
+              className="col-span-4 grid h-full grid-cols-subgrid items-center rounded-md text-left outline-offset-0"
             >
               <span
                 className={`flex min-w-0 items-center gap-1.5 text-[13.5px] ${
@@ -188,6 +195,21 @@ const RuleTable: React.FC<RuleTableProps> = ({
                 <span className="truncate">
                   <RuleName row={row} />
                 </span>
+              </span>
+              <span
+                aria-hidden="true"
+                className="flex h-1.5 min-w-0 overflow-hidden rounded-full bg-white/[0.06]"
+              >
+                <span
+                  className={`h-full transition-colors ${
+                    row.applied ? "bg-white/20" : "bg-drop/70 group-hover/rule:bg-drop"
+                  }`}
+                  style={{ width: `${(row.banned / scale) * 100}%` }}
+                />
+                <span
+                  className={`h-full ${row.applied ? "bg-white/10" : "bg-keep/60"}`}
+                  style={{ width: `${(row.kept / scale) * 100}%` }}
+                />
               </span>
               <span
                 className={`text-right text-[13px] tabular-nums ${
@@ -214,7 +236,8 @@ const RuleTable: React.FC<RuleTableProps> = ({
       </ul>
     )}
   </div>
-);
+  );
+};
 
 export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, BlocklistWorkspaceProps>(
   (
@@ -224,6 +247,8 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
       config,
       purities,
       orientation,
+      density = "standard",
+      framing = "fill",
       refreshToken,
       onRefreshConfigAndStatus,
       onOpenTrashLightbox,
@@ -647,6 +672,13 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
 
     const recoverableCount = trashImages.length;
     const isMac = window.wayper.platform === "darwin";
+    const isMatte = framing === "matte";
+    const cardGridClass =
+      density === "compact"
+        ? "grid-cols-[repeat(auto-fill,minmax(216px,1fr))] gap-2.5"
+        : density === "gallery"
+          ? "grid-cols-[repeat(auto-fill,minmax(372px,1fr))] gap-4"
+          : "grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3";
 
     const drillType: "tag" | "combo" | "uploader" =
       drilldown?.kind === "uploader"
@@ -959,7 +991,7 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
                 ) : drilldownMatches.length === 0 ? (
                   <p className="py-4 text-[12.5px] text-ink-2">{t("No matches found")}</p>
                 ) : (
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-3">
+                  <div className={`grid ${cardGridClass}`}>
                     {drilldownMatches.map((img) => (
                       <div
                         key={`drill-img-${img.path}`}
@@ -977,13 +1009,19 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
                             onOpenLibraryLightbox(img, drilldownMatches);
                           }
                         }}
-                        className="wallpaper-card aspect-[16/10] cursor-pointer"
+                        className={`wallpaper-card aspect-[16/10] cursor-pointer ${
+                          isMatte ? "bg-[#0f0f11]" : ""
+                        }`}
                       >
                         <img
                           src={thumbUrl(img.path)}
                           alt={img.name}
                           loading="lazy"
-                          className="h-full w-full object-cover"
+                          className={`h-full w-full ${
+                            isMatte
+                              ? "object-contain p-3.5 drop-shadow-[0_12px_24px_rgb(0_0_0/0.75)]"
+                              : "object-cover"
+                          }`}
                         />
                       </div>
                     ))}
@@ -992,9 +1030,9 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
               </div>
             </section>
           ) : tab === "rules" ? (
-            <section className="max-w-[1280px]">
+            <section className="w-full">
               <div className="mb-6 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
-                <p className="m-0 max-w-[560px] text-[13px] leading-relaxed text-ink-2">
+                <p className="m-0 max-w-[720px] text-[13px] leading-relaxed text-ink-2">
                   {t(
                     "What shows up most in the wallpapers you blocked. Exclude one and new downloads skip it.",
                   )}
@@ -1016,7 +1054,7 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
                   {t("No rule suggestions yet")}
                 </p>
               ) : (
-                <div className="grid grid-cols-[repeat(auto-fit,minmax(290px,1fr))] gap-x-10 gap-y-9">
+              <div className="grid w-full grid-cols-[repeat(auto-fit,minmax(340px,1fr))] items-start gap-4">
                   {ruleColumns
                     .filter(([, rows]) => !suggestionsLoaded || rows.length > 0)
                     .map(([title, rows]) => (
@@ -1048,7 +1086,7 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(236px,1fr))] gap-3">
+              <div className={`grid ${cardGridClass}`}>
                 {trashImages.slice(0, visibleTrashCount).map((item) => (
                   <div
                     key={`trash-${item.name}`}
@@ -1066,7 +1104,9 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
                         onOpenTrashLightbox(item, trashImages);
                       }
                     }}
-                    className="wallpaper-card group aspect-[16/10] cursor-pointer"
+                    className={`wallpaper-card group aspect-[16/10] cursor-pointer ${
+                      isMatte ? "bg-[#0f0f11]" : ""
+                    }`}
                   >
                     <img
                       src={trashThumbUrl(item.name)}
@@ -1074,7 +1114,11 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
                       loading="lazy"
                       decoding="async"
                       onError={() => void handleTrashThumbError(item.name)}
-                      className="wallpaper-thumbnail h-full w-full object-cover"
+                      className={`wallpaper-thumbnail h-full w-full ${
+                        isMatte
+                          ? "object-contain p-3.5 drop-shadow-[0_12px_24px_rgb(0_0_0/0.75)]"
+                          : "object-cover"
+                      }`}
                     />
                     <div className="card-actions absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/70 to-transparent px-2 pt-8 pb-2">
                       <button
@@ -1113,44 +1157,64 @@ export const BlocklistWorkspace = forwardRef<BlocklistWorkspaceHandle, Blocklist
               <p className="m-0 text-[13.5px] text-ink-2">{t("No blocked wallpapers recorded")}</p>
             </div>
           ) : (
-            <div>
-              <div className="divide-y divide-line">
+            <div className="w-full">
+              <div className="grid w-full grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-2.5">
                 {entries.slice(0, visibleBlockedCount).map((entry) => (
                   <div
                     key={`bl-row-${entry.filename}`}
-                    className="group flex h-10 items-center justify-between gap-3 rounded-lg px-2 transition-colors hover:bg-white/[0.04]"
+                    className="group flex h-16 items-center gap-3 rounded-xl bg-white/[0.025] p-2 pr-2.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.05)] transition-colors hover:bg-white/[0.05]"
                   >
-                    <div className="flex min-w-0 items-center gap-3">
+                    <span className="relative flex h-12 w-[76px] shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white/[0.05] text-ink-3">
+                      {entry.recoverable ? (
+                        <img
+                          src={trashThumbUrl(entry.filename)}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                          onError={(event) => {
+                            event.currentTarget.style.visibility = "hidden";
+                          }}
+                          className="absolute inset-0 h-full w-full object-cover"
+                        />
+                      ) : (
+                        <ImageOff className="h-4 w-4" strokeWidth={1.5} />
+                      )}
+                    </span>
+
+                    <div className="min-w-0 flex-1">
                       <button
                         type="button"
                         onClick={() => onOpenWallhaven(entry.filename)}
-                        className="truncate text-[13px] tabular-nums text-ink underline-offset-2 hover:underline"
+                        title={`${t("Open on Wallhaven")} [O]`}
+                        className="block max-w-full truncate text-[13px] tabular-nums text-ink underline-offset-2 hover:underline"
                       >
                         {entry.filename}
                       </button>
-                      <span className="inline-flex shrink-0 items-center gap-1.5 text-[12px] text-ink-3">
+                      <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px] text-ink-3">
                         <span
-                          className={`h-1.5 w-1.5 rounded-full ${
+                          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                             entry.recoverable ? "bg-keep" : "bg-white/20"
                           }`}
                         />
-                        {entry.recoverable ? t("In Trash") : t("Deleted")}
-                      </span>
+                        <span className="shrink-0">
+                          {entry.recoverable ? t("In Trash") : t("Deleted")}
+                        </span>
+                        <span className="shrink-0 text-white/20">·</span>
+                        <span className="truncate tabular-nums">
+                          {formatTimestamp(entry.timestamp, locale)}
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="flex shrink-0 items-center gap-3">
-                      <span className="text-[12px] tabular-nums text-ink-3">
-                        {formatTimestamp(entry.timestamp, locale)}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void handleUnblock(entry)}
-                        className="inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] font-medium text-ink-2 opacity-0 transition-[opacity,background-color,color] duration-100 group-hover:opacity-100 hover:bg-white/[0.08] hover:text-ink focus-visible:opacity-100"
-                      >
-                        <Undo2 className="h-3 w-3" />
-                        <span>{t("Unblock")}</span>
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleUnblock(entry)}
+                      title={t("Unblock")}
+                      aria-label={t("Unblock")}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink-3 opacity-0 transition-[opacity,background-color,color] duration-100 group-hover:opacity-100 hover:bg-white/[0.1] hover:text-ink focus-visible:opacity-100"
+                    >
+                      <Undo2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    </button>
                   </div>
                 ))}
               </div>

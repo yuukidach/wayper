@@ -36,7 +36,7 @@ export async function openInteractiveWallhavenLogin(options: {
       parent: options.parent ?? undefined,
       modal: false,
       title: "Sign in to Wallhaven — Wayper",
-      backgroundColor: "#11131a",
+      backgroundColor: "#0d0d0d",
       autoHideMenuBar: true,
       webPreferences: {
         session: whSession,
