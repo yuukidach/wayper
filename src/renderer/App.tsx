@@ -1025,6 +1025,16 @@ export const App: React.FC = () => {
   const handleToggleGridFavorite = useCallback((item: ImageItem) => {
     return handleToggleFavorite(item.path);
   }, [handleToggleFavorite]);
+  const handleToggleLightboxFavorite = useCallback(
+    async (imagePath: string) => {
+      const toggled = await handleToggleFavorite(imagePath);
+      if (toggled) {
+        setRefreshToken((count) => count + 1);
+      }
+      return toggled;
+    },
+    [handleToggleFavorite],
+  );
   const handleDislikeGridImage = useCallback((item: ImageItem) => {
     return handleDislikePath(item.path);
   }, [handleDislikePath]);
@@ -1310,7 +1320,7 @@ export const App: React.FC = () => {
         }
         onSetWallpaper={handleSetWallpaper}
         onSetGreeter={handleSetGreeter}
-        onToggleFavorite={handleToggleFavorite}
+        onToggleFavorite={handleToggleLightboxFavorite}
         onDislikeLibrary={async (p) => {
           const ok = await handleDislikePath(p);
           if (ok) setRefreshToken((n) => n + 1);

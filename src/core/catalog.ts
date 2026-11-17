@@ -5,7 +5,7 @@ import type { ImageMetadata, Purity, RuleMatchStats, SearchResponse } from "../s
 import type { WayperConfig } from "./config";
 import { ALL_ORIENTATIONS, ALL_PURITIES, poolDir } from "./paths";
 import { favoriteFilenames, listImagesInDir, loadMetadata } from "./pool";
-import { listBlacklist, type ConfigOrDir } from "./state";
+import { isBlacklisted, listBlacklist, type ConfigOrDir } from "./state";
 
 export const FAVORITE_WEIGHT = 3;
 export const KEPT_WEIGHT = 5;
@@ -606,7 +606,10 @@ export function loadSuggestionCatalog(
   for (const purity of ALL_PURITIES) {
     for (const orient of ALL_ORIENTATIONS) {
       for (const imgPath of listImagesInDir(poolDir(dl, purity, orient))) {
-        retained.add(path.basename(imgPath));
+        const filename = path.basename(imgPath);
+        if (!isBlacklisted(config, filename)) {
+          retained.add(filename);
+        }
       }
     }
   }

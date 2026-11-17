@@ -379,7 +379,10 @@ export function favoriteFilenames(
   for (const purity of active) {
     for (const orient of ALL_ORIENTATIONS) {
       for (const imgPath of listImagesInDir(favoritesDir(dl, purity, orient))) {
-        names.add(path.basename(imgPath));
+        const filename = path.basename(imgPath);
+        if (!isBlacklisted(config, filename)) {
+          names.add(filename);
+        }
       }
     }
   }
@@ -525,6 +528,7 @@ export function listLibraryImages(
     for (const orientation of orientations) {
       const dir = isFav ? favoritesDir(dl, purity, orientation) : poolDir(dl, purity, orientation);
       for (const fullPath of listImagesInDir(dir)) {
+        if (isBlacklisted(config, path.basename(fullPath))) continue;
         try {
           const stat = fs.statSync(fullPath);
           records.push({ mtimeMs: stat.mtimeMs, fullPath });
