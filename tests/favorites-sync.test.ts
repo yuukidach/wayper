@@ -44,6 +44,13 @@ function mockHtmlResponse(
   return response;
 }
 
+function hasSandboxTrashCopy(currentSandbox: Sandbox, filename: string): boolean {
+  if (process.platform === "linux") {
+    return findTrashImage(currentSandbox.config(), filename) !== null;
+  }
+  return fs.existsSync(path.join(currentSandbox.root, "custom-trash", filename));
+}
+
 let sandbox: Sandbox;
 
 beforeEach(() => {
@@ -210,7 +217,7 @@ describe("deleting favorites and preventing remote resurrection", () => {
   it("excludes already-resurrected blacklisted files at read time and purges them safely", async () => {
     const original = sandbox.addImage("sfw", "landscape", "wallhaven-resur1.png", true);
     await doBan(sandbox.config(), { image: original, waitRemote: false });
-    expect(findTrashImage(sandbox.config(), "wallhaven-resur1.png")).not.toBeNull();
+    expect(hasSandboxTrashCopy(sandbox, "wallhaven-resur1.png")).toBe(true);
 
     const resurrectedWithTrash = sandbox.addImage("sfw", "landscape", "wallhaven-resur1.png", true);
     const resurrectedWithoutTrash = sandbox.addImage(
@@ -243,8 +250,8 @@ describe("deleting favorites and preventing remote resurrection", () => {
     expect(purged).toBe(2);
     expect(fs.existsSync(resurrectedWithTrash)).toBe(false);
     expect(fs.existsSync(resurrectedWithoutTrash)).toBe(false);
-    expect(findTrashImage(config, "wallhaven-resur1.png")).not.toBeNull();
-    expect(findTrashImage(config, "wallhaven-resur2.png")).not.toBeNull();
+    expect(hasSandboxTrashCopy(sandbox, "wallhaven-resur1.png")).toBe(true);
+    expect(hasSandboxTrashCopy(sandbox, "wallhaven-resur2.png")).toBe(true);
   });
 
   it("clears a stale blacklist entry when explicitly favorited again", async () => {

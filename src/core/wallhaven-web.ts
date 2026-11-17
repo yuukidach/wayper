@@ -3,6 +3,7 @@ import path from "node:path";
 import { wallhavenId } from "../shared/tags";
 import { saveConfig, type WayperConfig } from "./config";
 import { httpFetch, httpGetJson, USER_AGENT } from "./http";
+import { atomicWrite } from "./image-probe";
 import { getConfigDir } from "./paths";
 import { favoriteFilenames } from "./pool";
 import { listBlacklist } from "./state";
@@ -139,11 +140,8 @@ function saveCachedSession(username: string, cookies: StoredCookie[]): void {
   if (!cookies.length) return;
   try {
     const file = sessionFilePath();
-    const dir = path.dirname(file);
-    fs.mkdirSync(dir, { recursive: true });
-    const tempFile = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(
-      tempFile,
+    atomicWrite(
+      file,
       JSON.stringify(
         {
           cookies,
@@ -153,9 +151,10 @@ function saveCachedSession(username: string, cookies: StoredCookie[]): void {
         null,
         2,
       ),
-      { encoding: "utf-8", mode: 0o600 },
     );
-    fs.renameSync(tempFile, file);
+    if (process.platform !== "win32") {
+      fs.chmodSync(file, 0o600);
+    }
   } catch {
     // Best-effort session persistence
   }
