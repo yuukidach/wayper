@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import os from "node:os";
 import {
   buildNeighborPrototypes,
   makeExample,
@@ -12,6 +13,8 @@ import {
   type PreferenceExample,
   type PredictRecord,
 } from "../src/core/preference/model";
+import { savePreferenceModel } from "../src/core/preference/ledger";
+import { preferenceDeletionSuggestions } from "../src/core/preference/review";
 import {
   embedTagSets,
   semanticDiskCacheKey,
@@ -315,5 +318,62 @@ describe("python parity: end-to-end training", () => {
     const after = restored.predictMany([record])[0];
     closeTo(after.score, before.score, 1e-9);
     expect(after.neighbor_count).toBe(before.neighbor_count);
+  });
+
+  it("keeps cached deletion suggestions identical across library updates and attaches dimensions", async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wayper-pref-cache-"));
+    try {
+      const pool = path.join(tmpRoot, "sfw", "landscape");
+      fs.mkdirSync(pool, { recursive: true });
+      const metadata: Record<string, Record<string, unknown>> = {};
+      fixture.queries.forEach((query: Record<string, unknown>, idx: number) => {
+        const name = `wallhaven-q${String(idx).padStart(4, "0")}.jpg`;
+        fs.writeFileSync(path.join(pool, name), "x");
+        metadata[name] = {
+          ...query,
+          dimension_x: 3840,
+          dimension_y: 2160,
+        };
+      });
+      fs.writeFileSync(path.join(tmpRoot, ".metadata.json"), JSON.stringify(metadata));
+      await savePreferenceModel(model, path.join(tmpRoot, ".preference_model.json"));
+
+      const cold = await preferenceDeletionSuggestions(tmpRoot, {
+        purities: ["sfw"],
+        orientation: "landscape",
+        limit: 60,
+        includeLearning: false,
+        metadataSnapshot: metadata,
+      });
+      const warm = await preferenceDeletionSuggestions(tmpRoot, {
+        purities: ["sfw"],
+        orientation: "landscape",
+        limit: 60,
+        includeLearning: false,
+        metadataSnapshot: metadata,
+      });
+      expect(warm).toEqual(cold);
+      const items = cold.items as Array<{ width?: number; height?: number }>;
+      for (const item of items) {
+        expect(item.width).toBe(3840);
+        expect(item.height).toBe(2160);
+      }
+
+      // Reloaded metadata objects (same values, new object references) must also match.
+      const clonedMeta = JSON.parse(JSON.stringify(metadata)) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      const reloaded = await preferenceDeletionSuggestions(tmpRoot, {
+        purities: ["sfw"],
+        orientation: "landscape",
+        limit: 60,
+        includeLearning: false,
+        metadataSnapshot: clonedMeta,
+      });
+      expect(reloaded).toEqual(cold);
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
   });
 });

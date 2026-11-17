@@ -23,12 +23,13 @@ import {
   SEMANTIC_EXACT_WEIGHT,
   SEMANTIC_FINE_CACHE_SIZE,
   SEMANTIC_FINE_PER_CLASS,
+  SEMANTIC_MAX_BATCH_RECORDS,
   SEMANTIC_NEIGHBOR_SIMILARITY_FLOOR,
+  SEMANTIC_SIMILARITY_FLOOR,
   SEMANTIC_TAG_WEIGHT,
   SUPPORTED_MODEL_SCHEMA_VERSIONS,
 } from "./constants";
 import {
-  embedPooledTagSets,
   embedTagSets,
   scoreEmbedding,
   SemanticHead,
@@ -214,6 +215,13 @@ interface ContextProfile {
   purities: ReadonlySet<string>;
 }
 
+interface PrototypeFineEntry {
+  tagSet: SemanticTagSet;
+  vecIds: Int32Array;
+  weights: Float32Array;
+  weightTotal: number;
+}
+
 interface SemanticNeighborRuntime {
   idf: Record<string, number>;
   items: ReadonlyArray<ReadonlyArray<SemanticTagItem>>;
@@ -221,7 +229,10 @@ interface SemanticNeighborRuntime {
   dimension: number;
   labelIndices: [number[], number[]];
   tiebreakRank: Int32Array;
-  fineSets: Map<number, SemanticTagSet>;
+  protoTagMatrix: Float32Array;
+  protoTagCount: number;
+  protoEntries: PrototypeFineEntry[];
+  queryDotCache: Map<Float32Array, Float32Array>;
   contextProfiles: ContextProfile[];
 }
 
@@ -659,6 +670,52 @@ interface FineNeighbor {
   prototype_index: number;
 }
 
+function selectTopIndices(
+  indices: readonly number[],
+  scores: Float32Array | Float64Array,
+  tiebreakRank: Int32Array,
+  limit: number,
+  out: Set<number>,
+): void {
+  if (limit <= 0 || indices.length === 0) return;
+  const topIdx = new Int32Array(limit);
+  const topScore = new Float64Array(limit);
+  const topRank = new Int32Array(limit);
+  let count = 0;
+
+  for (let p = 0; p < indices.length; p += 1) {
+    const idx = indices[p];
+    const score = scores[idx];
+    if (!(score > 0)) continue;
+    const rank = tiebreakRank[idx];
+    if (count === limit) {
+      const worstScore = topScore[count - 1];
+      if (score < worstScore || (score === worstScore && rank >= topRank[count - 1])) {
+        continue;
+      }
+    }
+    let pos = count < limit ? count : limit - 1;
+    if (count < limit) count += 1;
+    while (pos > 0) {
+      const prevScore = topScore[pos - 1];
+      if (score > prevScore || (score === prevScore && rank < topRank[pos - 1])) {
+        topIdx[pos] = topIdx[pos - 1];
+        topScore[pos] = prevScore;
+        topRank[pos] = topRank[pos - 1];
+        pos -= 1;
+      } else {
+        break;
+      }
+    }
+    topIdx[pos] = idx;
+    topScore[pos] = score;
+    topRank[pos] = rank;
+  }
+
+  for (let i = 0; i < count; i += 1) {
+    out.add(topIdx[i]);
+  }
+}
 export interface PreferenceModelInit {
   bias: number;
   prior_log_odds: number;
@@ -853,9 +910,71 @@ export class PreferenceModel {
     try {
       const records = this.prototypeSemanticRecords();
       const idf = semanticIdf(records);
-      const pooled = embedPooledTagSets(records, { modelName: this.semantic_model, idf });
-      if (!pooled.dimension || pooled.rows !== records.length) {
+      const prototypeSets: SemanticTagSet[] = [];
+      let dimension = 0;
+      for (let start = 0; start < records.length; start += SEMANTIC_MAX_BATCH_RECORDS) {
+        const batch = embedTagSets(records.slice(start, start + SEMANTIC_MAX_BATCH_RECORDS), {
+          modelName: this.semantic_model,
+          idf,
+        });
+        if (dimension === 0) {
+          for (const tagSet of batch) {
+            if (tagSet.pooled.length > 0) {
+              dimension = tagSet.pooled.length;
+              break;
+            }
+          }
+        }
+        prototypeSets.push(...batch);
+      }
+      if (!dimension || prototypeSets.length !== records.length) {
         throw new Error("semantic prototypes produced no vectors");
+      }
+      const pooledMatrix = new Float32Array(records.length * dimension);
+      for (let r = 0; r < prototypeSets.length; r += 1) {
+        const pooledVec = prototypeSets[r].pooled;
+        if (pooledVec.length === dimension) {
+          pooledMatrix.set(pooledVec, r * dimension);
+        }
+      }
+      const defaultIdf = maxIdfValue(idf);
+      const protoVecIds = new Map<Float32Array, number>();
+      const protoVecList: Float32Array[] = [];
+      const protoEntries: PrototypeFineEntry[] = new Array(prototypeSets.length);
+      for (let r = 0; r < prototypeSets.length; r += 1) {
+        const tagSet = prototypeSets[r];
+        const len = tagSet.items.length;
+        const vecIds = new Int32Array(len);
+        const weights = new Float32Array(len);
+        let weightTotal = 0;
+        const rowVectors = tagSet.rowVectors;
+        for (let j = 0; j < len; j += 1) {
+          const rowVec =
+            rowVectors && rowVectors.length === len
+              ? rowVectors[j]
+              : tagSet.matrix.subarray(j * dimension, (j + 1) * dimension);
+          let id = protoVecIds.get(rowVec);
+          if (id === undefined) {
+            id = protoVecList.length;
+            protoVecIds.set(rowVec, id);
+            protoVecList.push(rowVec);
+          }
+          vecIds[j] = id;
+          const w = Math.fround(Math.max(0.05, idf[tagSet.items[j][0]] ?? defaultIdf));
+          weights[j] = w;
+          weightTotal += w;
+        }
+        protoEntries[r] = {
+          tagSet,
+          vecIds,
+          weights,
+          weightTotal: Math.max(weightTotal, 1e-12),
+        };
+      }
+      const protoTagCount = protoVecList.length;
+      const protoTagMatrix = new Float32Array(protoTagCount * dimension);
+      for (let u = 0; u < protoTagCount; u += 1) {
+        protoTagMatrix.set(protoVecList[u], u * dimension);
       }
       const labelIndices: [number[], number[]] = [[], []];
       this.neighbor_prototypes.forEach((prototype, index) => {
@@ -871,11 +990,14 @@ export class PreferenceModel {
       this.semanticNeighborRuntime = {
         idf,
         items: records,
-        pooledMatrix: pooled.matrix,
-        dimension: pooled.dimension,
+        pooledMatrix,
+        dimension,
         labelIndices,
         tiebreakRank,
-        fineSets: new Map(),
+        protoTagMatrix,
+        protoTagCount,
+        protoEntries,
+        queryDotCache: new Map(),
         contextProfiles: this.neighbor_prototypes.map((prototype) =>
           semanticContextProfile(prototype.context_features),
         ),
@@ -956,64 +1078,130 @@ export class PreferenceModel {
     const candidateIndices = new Set<number>();
     for (const label of [0, 1] as const) {
       const labelIndices = runtime.labelIndices[label];
-      const semanticRank = labelIndices
-        .filter((index) => coarseScores[index] > 0)
-        .sort(
-          (left, right) =>
-            coarseScores[right] - coarseScores[left] || this.compareRecency(left, right),
-        )
-        .slice(0, SEMANTIC_COARSE_PER_CLASS);
-      for (const index of semanticRank) candidateIndices.add(index);
+      selectTopIndices(
+        labelIndices,
+        coarseScores,
+        runtime.tiebreakRank,
+        SEMANTIC_COARSE_PER_CLASS,
+        candidateIndices,
+      );
       if (exactScores !== null) {
-        const exactRank = labelIndices
-          .filter((index) => exactScores[index] > 0)
-          .sort(
-            (left, right) =>
-              exactScores[right] - exactScores[left] ||
-              runtime.tiebreakRank[left] - runtime.tiebreakRank[right],
-          )
-          .slice(0, SEMANTIC_EXACT_PER_CLASS);
-        for (const index of exactRank) candidateIndices.add(index);
+        selectTopIndices(
+          labelIndices,
+          exactScores,
+          runtime.tiebreakRank,
+          SEMANTIC_EXACT_PER_CLASS,
+          candidateIndices,
+        );
       }
     }
 
     const orderedIndices = [...candidateIndices].sort((left, right) => left - right);
-    const missingIndices = orderedIndices.filter((index) => !runtime.fineSets.has(index));
-    if (missingIndices.length > 0) {
-      const missingSets = embedTagSets(
-        missingIndices.map((index) => runtime.items[index]),
-        { modelName: this.semantic_model, idf: runtime.idf },
-      );
-      missingIndices.forEach((index, position) => {
-        runtime.fineSets.set(index, missingSets[position]);
-      });
-    }
-    const tagSetsByIndex = new Map<number, SemanticTagSet>();
-    for (const index of orderedIndices) {
-      const tagSet = runtime.fineSets.get(index) as SemanticTagSet;
-      runtime.fineSets.delete(index);
-      runtime.fineSets.set(index, tagSet);
-      tagSetsByIndex.set(index, tagSet);
-    }
-    while (runtime.fineSets.size > SEMANTIC_FINE_CACHE_SIZE) {
-      const oldest = runtime.fineSets.keys().next().value as number;
-      runtime.fineSets.delete(oldest);
+    const defaultIdf = maxIdfValue(runtime.idf);
+    const leftLen = querySet.items.length;
+    const leftVectors =
+      querySet.rowVectors && querySet.rowVectors.length === leftLen ? querySet.rowVectors : null;
+    let semanticScores: Float64Array | null = null;
+    let cachedQueryRows: Float32Array[] | null = null;
+    if (leftLen > 0 && leftVectors !== null && querySet.dimension === runtime.dimension) {
+      const dimension = runtime.dimension;
+      const protoTagMatrix = runtime.protoTagMatrix;
+      const protoTagCount = runtime.protoTagCount;
+      const queryDotCache = runtime.queryDotCache;
+      const leftWeights = new Float32Array(leftLen);
+      let leftWeightTotal = 0;
+      const qRows: Float32Array[] = new Array(leftLen);
+      cachedQueryRows = qRows;
+      for (let i = 0; i < leftLen; i += 1) {
+        const w = Math.fround(Math.max(0.05, runtime.idf[querySet.items[i][0]] ?? defaultIdf));
+        leftWeights[i] = w;
+        leftWeightTotal += w;
+        const qVec = leftVectors[i];
+        let qRow = queryDotCache.get(qVec);
+        if (qRow === undefined) {
+          qRow = new Float32Array(protoTagCount);
+          qRow.fill(Number.NaN);
+          queryDotCache.set(qVec, qRow);
+          if (queryDotCache.size > SEMANTIC_FINE_CACHE_SIZE) {
+            const oldest = queryDotCache.keys().next().value as Float32Array;
+            queryDotCache.delete(oldest);
+          }
+        } else {
+          queryDotCache.delete(qVec);
+          queryDotCache.set(qVec, qRow);
+        }
+        qRows[i] = qRow;
+      }
+      leftWeightTotal = Math.max(leftWeightTotal, 1e-12);
+      const forwardScores = new Float32Array(leftLen);
+      const floorDenom = Math.max(1e-9, 1.0 - SEMANTIC_SIMILARITY_FLOOR);
+      semanticScores = new Float64Array(orderedIndices.length);
+      for (let pos = 0; pos < orderedIndices.length; pos += 1) {
+        const proto = runtime.protoEntries[orderedIndices[pos]];
+        const rightLen = proto.vecIds.length;
+        if (rightLen === 0) {
+          semanticScores[pos] = 0.0;
+          continue;
+        }
+        for (let i = 0; i < leftLen; i += 1) {
+          forwardScores[i] = -Infinity;
+        }
+        let reverseWeighted = 0;
+        for (let j = 0; j < rightLen; j += 1) {
+          const u = proto.vecIds[j];
+          const pOffset = u * dimension;
+          let maxForJ = -Infinity;
+          for (let i = 0; i < leftLen; i += 1) {
+            const qRow = qRows[i];
+            let score32 = qRow[u];
+            if (score32 !== score32) {
+              const leftRow = leftVectors[i];
+              let dot = 0;
+              for (let d = 0; d < dimension; d += 1) {
+                dot += leftRow[d] * protoTagMatrix[pOffset + d];
+              }
+              qRow[u] = dot;
+              score32 = qRow[u];
+            }
+            if (score32 > forwardScores[i]) forwardScores[i] = score32;
+            if (score32 > maxForJ) maxForJ = score32;
+          }
+          reverseWeighted += proto.weights[j] * maxForJ;
+        }
+        let forwardWeighted = 0;
+        for (let i = 0; i < leftLen; i += 1) {
+          forwardWeighted += leftWeights[i] * forwardScores[i];
+        }
+        const forward = forwardWeighted / leftWeightTotal;
+        const reverse = reverseWeighted / proto.weightTotal;
+        semanticScores[pos] = Math.max(
+          0.0,
+          Math.min(1.0, ((forward + reverse) / 2 - SEMANTIC_SIMILARITY_FLOOR) / floorDenom),
+        );
+      }
+    } else if (leftLen === 0) {
+      semanticScores = new Float64Array(orderedIndices.length);
     }
 
-    const semanticResults = tagMaxSimMany(
-      querySet,
-      orderedIndices.map((index) => tagSetsByIndex.get(index) as SemanticTagSet),
-      runtime.idf,
-      { includeMatches: false },
-    );
+    const fallbackResults =
+      semanticScores === null
+        ? tagMaxSimMany(
+            querySet,
+            orderedIndices.map((index) => runtime.protoEntries[index].tagSet),
+            runtime.idf,
+            { includeMatches: false },
+          )
+        : null;
     const queryContextProfile = semanticContextProfile(queryContext);
-    const defaultIdf = maxIdfValue(runtime.idf);
 
     const fine: FineNeighbor[] = [];
     orderedIndices.forEach((index, position) => {
       const prototype = this.neighbor_prototypes[index];
-      const prototypeSet = tagSetsByIndex.get(index) as SemanticTagSet;
-      const semanticScore = semanticResults[position][0];
+      const prototypeSet = runtime.protoEntries[index].tagSet;
+      const semanticScore =
+        semanticScores !== null
+          ? semanticScores[position]
+          : (fallbackResults as ReturnType<typeof tagMaxSimMany>)[position][0];
       const contextScore = contextProfileSimilarity(
         queryContextProfile,
         runtime.contextProfiles[index],
@@ -1053,11 +1241,30 @@ export class PreferenceModel {
 
     for (const nearest of [dislikeNeighbors[0], keepNeighbors[0]]) {
       if (!nearest) continue;
-      nearest.matches = tagMaxSim(
-        querySet,
-        tagSetsByIndex.get(nearest.prototype_index) as SemanticTagSet,
-        runtime.idf,
-      )[1];
+      const proto = runtime.protoEntries[nearest.prototype_index];
+      const rightItems = proto.tagSet.items;
+      const rightLen = rightItems.length;
+      if (cachedQueryRows !== null && leftLen > 0 && rightLen > 0) {
+        const matches: TagMaxSimMatch[] = new Array(leftLen);
+        for (let i = 0; i < leftLen; i += 1) {
+          const qRow = cachedQueryRows[i];
+          let bestIndex = 0;
+          let bestScore = -Infinity;
+          for (let j = 0; j < rightLen; j += 1) {
+            const score32 = qRow[proto.vecIds[j]];
+            if (score32 > bestScore) {
+              bestScore = score32;
+              bestIndex = j;
+            }
+          }
+          matches[i] = [querySet.items[i][0], rightItems[bestIndex][0], bestScore];
+        }
+        nearest.matches = matches
+          .sort((a, b) => b[2] - a[2] || compareStrings(a[0], b[0]) || compareStrings(a[1], b[1]))
+          .slice(0, 4);
+      } else {
+        nearest.matches = tagMaxSim(querySet, proto.tagSet, runtime.idf)[1];
+      }
     }
 
     const evidenceMass = (items: FineNeighbor[]): number => {

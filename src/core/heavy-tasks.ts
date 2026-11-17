@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import type { ImageMetadata } from "../shared/types";
 import { ImageCatalog, loadSuggestionCatalog } from "./catalog";
 import type { WayperConfig } from "./config";
 import { loadMetadata } from "./pool";
@@ -95,11 +98,31 @@ function suggestionCatalog(
 }
 
 let searchCatalogMemo: { key: string; catalog: ImageCatalog } | null = null;
+let metadataMemo: { key: string; metadata: Record<string, ImageMetadata> } | null = null;
+
+function metadataStateKey(config: ModelTaskConfig): string {
+  const root = path.resolve(config.download_dir);
+  const target = path.join(root, ".metadata.json");
+  try {
+    const stat = fs.statSync(target);
+    return `${root}|${stat.mtimeMs}:${stat.size}:${stat.ino}`;
+  } catch {
+    return `${root}|0:0:0`;
+  }
+}
+
+function cachedMetadata(config: ModelTaskConfig): Record<string, ImageMetadata> {
+  const key = metadataStateKey(config);
+  if (metadataMemo?.key !== key) {
+    metadataMemo = { key, metadata: loadMetadata(config) };
+  }
+  return metadataMemo.metadata;
+}
 
 /** Search only needs metadata, so its catalog outlives blacklist and pool changes. */
 function searchCatalog(config: ModelTaskConfig, stateKey: string): ImageCatalog {
   if (searchCatalogMemo?.key !== stateKey) {
-    searchCatalogMemo = { key: stateKey, catalog: new ImageCatalog(loadMetadata(config)) };
+    searchCatalogMemo = { key: stateKey, catalog: new ImageCatalog(cachedMetadata(config)) };
   }
   return searchCatalogMemo.catalog;
 }
@@ -196,6 +219,7 @@ export const heavyTasks = {
       orientation: args.orientation,
       limit: args.limit,
       includeLearning: false,
+      metadataSnapshot: cachedMetadata(args.config) as Record<string, Record<string, unknown>>,
     });
   },
 
@@ -203,7 +227,7 @@ export const heavyTasks = {
     config: ModelTaskConfig;
     filename: string;
   }): Promise<JsonRecord | null> {
-    const metadata = loadMetadata(args.config)[args.filename] as JsonRecord | undefined;
+    const metadata = cachedMetadata(args.config)[args.filename] as JsonRecord | undefined;
     if (!isRecord(metadata) || !Array.isArray(metadata.tags) || metadata.tags.length === 0) {
       return null;
     }

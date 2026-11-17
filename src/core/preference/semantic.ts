@@ -1251,6 +1251,73 @@ export function weightedTagJaccard(
   idf: Record<string, number>,
   options?: { defaultIdf?: number | null } | number | null,
 ): number {
+  const leftLen = left.length;
+  const rightLen = right.length;
+  if (leftLen === 0 && rightLen === 0) {
+    return 0.0;
+  }
+  const resolvedDefault =
+    typeof options === "number"
+      ? options
+      : (options?.defaultIdf ?? maxIdfValue(idf));
+
+  // Tag sets from semanticTagItems are already deduplicated and sorted with
+  // compareStrings; scan in lockstep to avoid allocating Sets on every pair.
+  let sortedUnique = true;
+  let leftSum = 0;
+  let prevLeft = "";
+  for (let i = 0; i < leftLen; i += 1) {
+    const item = left[i];
+    const key = typeof item === "string" ? item : item[0];
+    if (i > 0 && !(prevLeft < key)) {
+      sortedUnique = false;
+      break;
+    }
+    prevLeft = key;
+    leftSum += idf[key] ?? resolvedDefault;
+  }
+  if (sortedUnique) {
+    let prevRight = "";
+    for (let j = 0; j < rightLen; j += 1) {
+      const item = right[j];
+      const key = typeof item === "string" ? item : item[0];
+      if (j > 0 && !(prevRight < key)) {
+        sortedUnique = false;
+        break;
+      }
+      prevRight = key;
+    }
+  }
+  if (sortedUnique) {
+    let denominator = leftSum;
+    let numerator = 0;
+    let i = 0;
+    let j = 0;
+    while (i < leftLen && j < rightLen) {
+      const leftItem = left[i];
+      const rightItem = right[j];
+      const lk = typeof leftItem === "string" ? leftItem : leftItem[0];
+      const rk = typeof rightItem === "string" ? rightItem : rightItem[0];
+      if (lk === rk) {
+        numerator += idf[lk] ?? resolvedDefault;
+        i += 1;
+        j += 1;
+      } else if (lk < rk) {
+        i += 1;
+      } else {
+        denominator += idf[rk] ?? resolvedDefault;
+        j += 1;
+      }
+    }
+    while (j < rightLen) {
+      const rightItem = right[j];
+      const rk = typeof rightItem === "string" ? rightItem : rightItem[0];
+      denominator += idf[rk] ?? resolvedDefault;
+      j += 1;
+    }
+    return numerator / Math.max(denominator, 1e-12);
+  }
+
   const leftKeys = new Set<string>();
   for (const item of left) {
     leftKeys.add(typeof item === "string" ? item : item[0]);
@@ -1262,11 +1329,6 @@ export function weightedTagJaccard(
   if (leftKeys.size === 0 && rightKeys.size === 0) {
     return 0.0;
   }
-  const resolvedDefault =
-    typeof options === "number"
-      ? options
-      : (options?.defaultIdf ?? maxIdfValue(idf));
-
   const union = new Set<string>(leftKeys);
   for (const key of rightKeys) {
     union.add(key);

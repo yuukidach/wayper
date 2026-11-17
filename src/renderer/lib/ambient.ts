@@ -3,6 +3,46 @@ import { useEffect, useState } from "react";
 const AMBIENT_WIDTH = 160;
 const AMBIENT_HEIGHT = 100;
 const ambientCache = new Map<string, string>();
+const ambientInflight = new Map<string, Promise<string | null>>();
+
+function storeAmbient(source: string, url: string): void {
+  if (ambientCache.has(source)) {
+    ambientCache.delete(source);
+  } else if (ambientCache.size >= 64) {
+    const oldest = ambientCache.keys().next().value;
+    if (oldest !== undefined) ambientCache.delete(oldest);
+  }
+  ambientCache.set(source, url);
+}
+
+export function preloadAmbient(source: string): Promise<string | null> {
+  if (!source) return Promise.resolve(null);
+  const cached = ambientCache.get(source);
+  if (cached) {
+    storeAmbient(source, cached);
+    return Promise.resolve(cached);
+  }
+  const existing = ambientInflight.get(source);
+  if (existing) return existing;
+
+  const task = new Promise<string | null>((resolve) => {
+    const probe = new Image();
+    probe.crossOrigin = "anonymous";
+    probe.decoding = "async";
+    probe.onload = () => {
+      const url = renderAmbient(probe);
+      if (url) storeAmbient(source, url);
+      resolve(url);
+    };
+    probe.onerror = () => resolve(null);
+    probe.src = source;
+  }).finally(() => {
+    ambientInflight.delete(source);
+  });
+
+  ambientInflight.set(source, task);
+  return task;
+}
 
 /**
  * Renders the wallpaper as a tiny, already blurred bitmap.  Stretching that
@@ -56,24 +96,9 @@ export function useAmbient(source: string | null): AmbientLight | null {
       return;
     }
     let cancelled = false;
-    const probe = new Image();
-    probe.crossOrigin = "anonymous";
-    probe.decoding = "async";
-    probe.onload = () => {
-      const url = renderAmbient(probe);
-      if (url) {
-        if (ambientCache.size >= 64) {
-          const oldest = ambientCache.keys().next().value;
-          if (oldest !== undefined) ambientCache.delete(oldest);
-        }
-        ambientCache.set(source, url);
-      }
+    void preloadAmbient(source).then((url) => {
       if (!cancelled) setLight(url ? { source, url } : null);
-    };
-    probe.onerror = () => {
-      if (!cancelled) setLight(null);
-    };
-    probe.src = source;
+    });
     return () => {
       cancelled = true;
     };

@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { PREVIEW_DIMENSIONS, previewCacheDirectory } from "../../shared/media";
 import type { FilterStrategy } from "../../shared/types";
 import { normalizeFilterStrategy } from "../config";
-import { atomicWrite } from "../image-probe";
+import { atomicWrite, probeImageDimensions } from "../image-probe";
 import { getDefaultLockPath, withFileLock } from "../lock";
 import { ALL_ORIENTATIONS, ALL_PURITIES, isOrientation, isPurity, poolDir } from "../paths";
-import { favoriteFilenames, listImagesInDir, loadMetadata } from "../pool";
+import { clearImageDerivatives, favoriteFilenames, listImagesInDir, loadMetadata } from "../pool";
 import { addToBlacklist, listBlacklist, type ConfigOrDir } from "../state";
 import { trashAndRecordUndo } from "../trash";
 import {
@@ -39,6 +40,7 @@ import {
   preferenceCandidate,
   preferenceDecisionScore,
   preferenceDecisionThreshold,
+  type PreferenceModel,
   type PredictRecord,
   type PreferencePrediction,
 } from "./model";
@@ -108,6 +110,17 @@ function cleanRecord(value: unknown): ReviewRecord | null {
     if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
       clean[key] = item;
     }
+  }
+  if (
+    typeof value.width === "number" &&
+    typeof value.height === "number" &&
+    Number.isFinite(value.width) &&
+    Number.isFinite(value.height) &&
+    value.width > 0 &&
+    value.height > 0
+  ) {
+    clean.width = Math.trunc(value.width);
+    clean.height = Math.trunc(value.height);
   }
   if (isRecord(value.model)) {
     const cleanModel: Record<string, unknown> = {};
@@ -368,13 +381,79 @@ function reviewSortKey(item: ReviewRecord): [number, number, string] {
   return [-score, -created, String(item.name)];
 }
 
+const DIMENSION_CACHE_LIMIT = 2048;
+const dimensionProbeCache = new Map<string, { token: string; width: number; height: number }>();
+
+function resolveCandidateDimensions(
+  fullPath: string,
+  meta?: Record<string, unknown> | null,
+): { width: number; height: number } | null {
+  const metaW = meta?.dimension_x;
+  const metaH = meta?.dimension_y;
+  if (
+    typeof metaW === "number" &&
+    typeof metaH === "number" &&
+    Number.isFinite(metaW) &&
+    Number.isFinite(metaH) &&
+    metaW > 0 &&
+    metaH > 0
+  ) {
+    return { width: Math.trunc(metaW), height: Math.trunc(metaH) };
+  }
+  const resolved = path.resolve(fullPath);
+  const token = fileToken(resolved);
+  if (token !== null) {
+    const cached = dimensionProbeCache.get(resolved);
+    if (cached && cached.token === token) {
+      return { width: cached.width, height: cached.height };
+    }
+  }
+  const probed = probeImageDimensions(resolved);
+  if (!probed || probed.width <= 0 || probed.height <= 0) return null;
+  if (token !== null) {
+    dimensionProbeCache.set(resolved, { token, width: probed.width, height: probed.height });
+    while (dimensionProbeCache.size > DIMENSION_CACHE_LIMIT) {
+      const oldest = dimensionProbeCache.keys().next().value;
+      if (oldest === undefined) break;
+      dimensionProbeCache.delete(oldest);
+    }
+  }
+  return { width: probed.width, height: probed.height };
+}
+
+function relocateImageDerivatives(
+  downloadDir: string,
+  fromRelPath: string,
+  toRelPath: string,
+): void {
+  const root = path.resolve(downloadDir);
+  const fromParsed = path.parse(fromRelPath);
+  const toParsed = path.parse(toRelPath);
+  if (!fromParsed.name || !toParsed.name) return;
+  for (const cacheName of [".thumbnails", ...PREVIEW_DIMENSIONS.map(previewCacheDirectory)]) {
+    const src = path.join(root, cacheName, fromParsed.dir, `${fromParsed.name}.jpg`);
+    if (!isFile(src)) continue;
+    const dst = path.join(root, cacheName, toParsed.dir, `${toParsed.name}.jpg`);
+    try {
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.renameSync(src, dst);
+    } catch {
+      try {
+        fs.rmSync(src, { force: true });
+      } catch {
+        // Ignore best-effort cache cleanup
+      }
+    }
+  }
+}
+
 export function listModelReviewItems(
   config: ConfigOrDir,
   options?: ReviewScope & { limit?: number; includeResolved?: boolean },
 ): ReviewRecord[] {
   const active = activePurities(options?.purities);
   const state = loadModelReviewState(config);
-  const result: ReviewRecord[] = [];
+  const result: Array<{ item: ReviewRecord; image: string }> = [];
   for (const record of Object.values(state.items)) {
     if (!options?.includeResolved && record.status !== "pending") continue;
     if (!active.has(String(record.purity ?? "sfw"))) continue;
@@ -393,15 +472,24 @@ export function listModelReviewItems(
         if (key in record.model) item[key] = record.model[key];
       }
     }
-    result.push(item);
+    result.push({ item, image });
   }
   result.sort((left, right) => {
-    const first = reviewSortKey(left);
-    const second = reviewSortKey(right);
+    const first = reviewSortKey(left.item);
+    const second = reviewSortKey(right.item);
     return first[0] - second[0] || first[1] - second[1] || compareStrings(first[2], second[2]);
   });
   const limit = Math.max(1, Math.min(500, Math.trunc(options?.limit ?? 100)));
-  return result.slice(0, limit);
+  return result.slice(0, limit).map(({ item, image }) => {
+    if (typeof item.width !== "number" || typeof item.height !== "number") {
+      const dims = resolveCandidateDimensions(image);
+      if (dims) {
+        item.width = dims.width;
+        item.height = dims.height;
+      }
+    }
+    return item;
+  });
 }
 
 export async function queueModelReviewItem(
@@ -437,6 +525,11 @@ export async function queueModelReviewItem(
     created_at: nowSeconds(),
     model: cleanModel?.model ?? {},
   };
+  const dims = resolveCandidateDimensions(image);
+  if (dims) {
+    record.width = dims.width;
+    record.height = dims.height;
+  }
   await withFileLock(getDefaultLockPath(), () => {
     const state = loadModelReviewState(config);
     for (const [key, value] of Object.entries(state.items)) {
@@ -515,9 +608,13 @@ export async function resolveModelReviewItem(
 
     const model: Record<string, unknown> = isRecord(record.model) ? { ...record.model } : {};
     model.filter_strategy = String(record.strategy ?? "model");
+    const nextPoolRel = path.relative(path.resolve(downloadDir), destination).split(path.sep).join("/");
     if (action === "ban" || action === "filter") {
       addToBlacklist(config, name);
       await trashAndRecordUndo(config, destination);
+      clearImageDerivatives(config, canonicalPath);
+    } else if (action === "keep") {
+      relocateImageDerivatives(downloadDir, canonicalPath, nextPoolRel);
     }
     let feedbackRecorded = false;
     if (action !== "filter") {
@@ -541,10 +638,7 @@ export async function resolveModelReviewItem(
     saveModelReviewState(config, state);
     return {
       ...record,
-      new_path:
-        action === "keep"
-          ? path.relative(path.resolve(downloadDir), destination).split(path.sep).join("/")
-          : null,
+      new_path: action === "keep" ? nextPoolRel : null,
     };
   });
 
@@ -616,9 +710,47 @@ export function modelReviewStatus(
 
 interface RankedItem {
   path: string;
+  image: string;
   name: string;
+  meta: Record<string, unknown>;
   prediction: PreferencePrediction;
   decision_score: number;
+}
+
+interface CachedPredictionEntry {
+  sig: string;
+  prediction: PreferencePrediction;
+  decisionScore: number;
+  candidate: boolean;
+}
+
+interface ModelPredictionCache {
+  byMeta: WeakMap<object, CachedPredictionEntry>;
+  byName: Map<string, CachedPredictionEntry>;
+}
+
+const MODEL_PREDICTION_CACHE_LIMIT = 16_384;
+const modelPredictionCaches = new WeakMap<PreferenceModel, ModelPredictionCache>();
+
+function getModelPredictionCache(model: PreferenceModel): ModelPredictionCache {
+  let cache = modelPredictionCaches.get(model);
+  if (!cache) {
+    cache = { byMeta: new WeakMap(), byName: new Map() };
+    modelPredictionCaches.set(model, cache);
+  }
+  return cache;
+}
+
+function metadataPredictionSignature(meta: Record<string, unknown>): string {
+  return JSON.stringify([
+    meta.tags ?? null,
+    meta.tag_details ?? null,
+    meta.colors ?? null,
+    meta.category ?? null,
+    meta.purity ?? null,
+    meta.uploader ?? null,
+    meta._semantic_tag_items ?? null,
+  ]);
 }
 
 function diversifyReviewRank(ranked: RankedItem[]): RankedItem[] {
@@ -730,57 +862,117 @@ export async function preferenceDeletionSuggestions(
   let bestNeighborProbability: number | null = null;
   let bestNeighborSimilarity: number | null = null;
   const scored: RankedItem[] = [];
-  for (let start = 0; start < records.length; start += PREFERENCE_PREDICTION_BATCH_SIZE) {
-    const batch = records.slice(start, start + PREFERENCE_PREDICTION_BATCH_SIZE);
-    const predictRecords = batch.map(
-      ({ meta }): PredictRecord => [meta.tags as unknown[], meta, null],
-    );
-    await prefetchModelEmbeddings(model, predictRecords);
-    const predictions = model.predictMany(predictRecords, { topN: 20 });
-    batch.forEach(({ image, name }, index) => {
-      const prediction = predictions[index];
-      if (prediction.positive_evidence_count > 0) {
-        positiveEvidenceImages += 1;
-        if (bestScore === null || prediction.feature_score > bestScore) {
-          bestScore = prediction.feature_score;
-        }
-      }
-      if (prediction.semantic_available && prediction.semantic_score !== null) {
-        semanticScoredImages += 1;
-        if (prediction.semantic_score > 0) semanticEvidenceImages += 1;
-        if (bestSemanticScore === null || prediction.semantic_score > bestSemanticScore) {
-          bestSemanticScore = prediction.semantic_score;
-        }
-      }
-      const decisionScore = preferenceDecisionScore(model, prediction);
-      if (bestDecisionScore === null || decisionScore > bestDecisionScore) {
-        bestDecisionScore = decisionScore;
-      }
-      if (prediction.neighbor_available) {
-        neighborScoredImages += 1;
-        if (
-          bestNeighborProbability === null ||
-          (prediction.neighbor_probability ?? 0.0) > bestNeighborProbability
-        ) {
-          bestNeighborProbability = prediction.neighbor_probability;
-        }
-        if (
-          bestNeighborSimilarity === null ||
-          prediction.neighbor_max_similarity > bestNeighborSimilarity
-        ) {
-          bestNeighborSimilarity = prediction.neighbor_max_similarity;
-        }
-      }
-      if (!preferenceCandidate(model, prediction)) return;
-      neighborCandidateImages += 1;
-      scored.push({
-        path: path.relative(downloadDir, image).split(path.sep).join("/"),
-        name,
-        prediction,
-        decision_score: decisionScore,
-      });
+  const predictionCache = getModelPredictionCache(model);
+  const resolvedEntries: Array<CachedPredictionEntry | null> = new Array(records.length).fill(null);
+  const uncachedIndices: number[] = [];
+  const uncachedSigs: string[] = [];
+
+  for (let index = 0; index < records.length; index += 1) {
+    const { name, meta } = records[index];
+    const direct = predictionCache.byMeta.get(meta);
+    if (direct) {
+      resolvedEntries[index] = direct;
+      continue;
+    }
+    const sig = metadataPredictionSignature(meta);
+    const byName = predictionCache.byName.get(name);
+    if (byName && byName.sig === sig) {
+      predictionCache.byMeta.set(meta, byName);
+      predictionCache.byName.delete(name);
+      predictionCache.byName.set(name, byName);
+      resolvedEntries[index] = byName;
+      continue;
+    }
+    uncachedIndices.push(index);
+    uncachedSigs.push(sig);
+  }
+
+  if (uncachedIndices.length > 0) {
+    const allUncachedRecords: PredictRecord[] = uncachedIndices.map((recordIndex) => {
+      const { meta } = records[recordIndex];
+      return [meta.tags as unknown[], meta, null];
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await prefetchModelEmbeddings(model, allUncachedRecords);
+
+    for (let start = 0; start < uncachedIndices.length; start += PREFERENCE_PREDICTION_BATCH_SIZE) {
+      const batchIndices = uncachedIndices.slice(start, start + PREFERENCE_PREDICTION_BATCH_SIZE);
+      const predictRecords = batchIndices.map((recordIndex): PredictRecord => {
+        const { meta } = records[recordIndex];
+        return [meta.tags as unknown[], meta, null];
+      });
+      const predictions = model.predictMany(predictRecords, { topN: 20 });
+      for (let offset = 0; offset < batchIndices.length; offset += 1) {
+        const recordIndex = batchIndices[offset];
+        const { name, meta } = records[recordIndex];
+        const prediction = predictions[offset];
+        const decisionScore = preferenceDecisionScore(model, prediction);
+        const candidate = preferenceCandidate(model, prediction);
+        const entry: CachedPredictionEntry = {
+          sig: uncachedSigs[start + offset],
+          prediction,
+          decisionScore,
+          candidate,
+        };
+        predictionCache.byMeta.set(meta, entry);
+        predictionCache.byName.delete(name);
+        predictionCache.byName.set(name, entry);
+        while (predictionCache.byName.size > MODEL_PREDICTION_CACHE_LIMIT) {
+          const oldest = predictionCache.byName.keys().next().value;
+          if (oldest === undefined) break;
+          predictionCache.byName.delete(oldest);
+        }
+        resolvedEntries[recordIndex] = entry;
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+
+  for (let index = 0; index < records.length; index += 1) {
+    const entry = resolvedEntries[index];
+    if (!entry) continue;
+    const { image, name, meta } = records[index];
+    const { prediction, decisionScore, candidate } = entry;
+    if (prediction.positive_evidence_count > 0) {
+      positiveEvidenceImages += 1;
+      if (bestScore === null || prediction.feature_score > bestScore) {
+        bestScore = prediction.feature_score;
+      }
+    }
+    if (prediction.semantic_available && prediction.semantic_score !== null) {
+      semanticScoredImages += 1;
+      if (prediction.semantic_score > 0) semanticEvidenceImages += 1;
+      if (bestSemanticScore === null || prediction.semantic_score > bestSemanticScore) {
+        bestSemanticScore = prediction.semantic_score;
+      }
+    }
+    if (bestDecisionScore === null || decisionScore > bestDecisionScore) {
+      bestDecisionScore = decisionScore;
+    }
+    if (prediction.neighbor_available) {
+      neighborScoredImages += 1;
+      if (
+        bestNeighborProbability === null ||
+        (prediction.neighbor_probability ?? 0.0) > bestNeighborProbability
+      ) {
+        bestNeighborProbability = prediction.neighbor_probability;
+      }
+      if (
+        bestNeighborSimilarity === null ||
+        prediction.neighbor_max_similarity > bestNeighborSimilarity
+      ) {
+        bestNeighborSimilarity = prediction.neighbor_max_similarity;
+      }
+    }
+    if (!candidate) continue;
+    neighborCandidateImages += 1;
+    scored.push({
+      path: path.relative(downloadDir, image).split(path.sep).join("/"),
+      image,
+      name,
+      meta,
+      prediction,
+      decision_score: decisionScore,
+    });
   }
 
   const rankedAll = diversifyReviewRank(
@@ -797,9 +989,11 @@ export async function preferenceDeletionSuggestions(
   const candidates = rankedPage.map((item, index) => {
     const prediction = item.prediction;
     const rank = index + 1;
+    const dims = resolveCandidateDimensions(item.image, item.meta);
     return {
       path: item.path,
       name: item.name,
+      ...(dims ? { width: dims.width, height: dims.height } : {}),
       score: roundTo(prediction.score, 4),
       feature_score: roundTo(prediction.feature_score, 4),
       decision_score: roundTo(item.decision_score, 4),

@@ -13,7 +13,10 @@ export type LightboxPreviewContext = "library" | "trash" | "review";
 export type LightboxPreviewItem = Pick<
   ImageItem | ReviewCandidateItem,
   "path" | "name" | "orientation"
->;
+> & {
+  width?: number;
+  height?: number;
+};
 
 export const LIGHTBOX_OPEN_BUDGET_MS = 140;
 
@@ -22,7 +25,17 @@ export function findSourceTileImage(itemPath: string): HTMLImageElement | null {
   return document.querySelector<HTMLImageElement>(`[data-path="${CSS.escape(itemPath)}"] img`);
 }
 
-export function estimateItemAspect(item: Pick<LightboxPreviewItem, "path" | "orientation">): number {
+export function estimateItemAspect(
+  item: Pick<LightboxPreviewItem, "path" | "orientation" | "width" | "height">,
+): number {
+  if (
+    typeof item.width === "number" &&
+    typeof item.height === "number" &&
+    item.width > 0 &&
+    item.height > 0
+  ) {
+    return item.width / item.height;
+  }
   const source = findSourceTileImage(item.path);
   if (source && source.naturalWidth > 0 && source.naturalHeight > 0) {
     return source.naturalWidth / source.naturalHeight;

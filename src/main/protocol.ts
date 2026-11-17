@@ -36,8 +36,16 @@ type SharpFactory = typeof import("sharp");
 const MAX_DERIVATIVE_JOBS = 2;
 let sharpLoader: Promise<SharpFactory | null> | null = null;
 let activeDerivativeJobs = 0;
-const queuedDerivativeJobs: Array<() => void> = [];
-const pendingDerivatives = new Map<string, Promise<string>>();
+interface QueuedDerivative {
+  resolve: () => void;
+  highPriority: boolean;
+}
+const highPriorityDerivativeJobs: QueuedDerivative[] = [];
+const normalPriorityDerivativeJobs: QueuedDerivative[] = [];
+const pendingDerivatives = new Map<
+  string,
+  { promise: Promise<string>; promote: () => void }
+>();
 
 /**
  * sharp resizes on the libuv thread pool, so thumbnails and previews never
@@ -50,23 +58,43 @@ function loadSharp(): Promise<SharpFactory | null> {
   return sharpLoader;
 }
 
-async function withDerivativeSlot<T>(job: () => Promise<T>, highPriority = false): Promise<T> {
-  if (activeDerivativeJobs >= MAX_DERIVATIVE_JOBS) {
-    await new Promise<void>((resolve) => {
-      if (highPriority) {
-        queuedDerivativeJobs.unshift(resolve);
-      } else {
-        queuedDerivativeJobs.push(resolve);
-      }
-    });
-  }
-  activeDerivativeJobs += 1;
-  try {
-    return await job();
-  } finally {
-    activeDerivativeJobs -= 1;
-    queuedDerivativeJobs.shift()?.();
-  }
+function withDerivativeSlot<T>(
+  job: () => Promise<T>,
+  highPriority = false,
+): { promise: Promise<T>; promote: () => void } {
+  let entry: QueuedDerivative | null = null;
+  const promote = (): void => {
+    if (!entry || entry.highPriority) return;
+    const index = normalPriorityDerivativeJobs.indexOf(entry);
+    if (index < 0) return;
+    normalPriorityDerivativeJobs.splice(index, 1);
+    entry.highPriority = true;
+    highPriorityDerivativeJobs.push(entry);
+  };
+
+  const run = async (): Promise<T> => {
+    if (activeDerivativeJobs >= MAX_DERIVATIVE_JOBS) {
+      await new Promise<void>((resolve) => {
+        entry = { resolve, highPriority };
+        if (highPriority) {
+          highPriorityDerivativeJobs.push(entry);
+        } else {
+          normalPriorityDerivativeJobs.push(entry);
+        }
+      });
+      entry = null;
+    }
+    activeDerivativeJobs += 1;
+    try {
+      return await job();
+    } finally {
+      activeDerivativeJobs -= 1;
+      const next = highPriorityDerivativeJobs.shift() ?? normalPriorityDerivativeJobs.shift();
+      next?.resolve();
+    }
+  };
+
+  return { promise: run(), promote };
 }
 
 function temporaryPath(targetPath: string): string {
@@ -151,15 +179,19 @@ async function ensureDerivative(
     return sourcePath;
   }
   const pending = pendingDerivatives.get(targetPath);
-  if (pending) return pending;
-  const task = withDerivativeSlot(() =>
+  if (pending) {
+    if (highPriority) pending.promote();
+    return pending.promise;
+  }
+  const scheduled = withDerivativeSlot(() =>
     renderDerivative(sourcePath, targetPath, maxDimension, quality),
     highPriority,
-  ).finally(() => {
+  );
+  const promise = scheduled.promise.finally(() => {
     pendingDerivatives.delete(targetPath);
   });
-  pendingDerivatives.set(targetPath, task);
-  return task;
+  pendingDerivatives.set(targetPath, { promise, promote: scheduled.promote });
+  return promise;
 }
 
 async function serveLocalFile(
