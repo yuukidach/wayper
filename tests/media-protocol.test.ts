@@ -102,4 +102,27 @@ describe("bounded media previews", () => {
     const response = await media.handler!(new Request("wayper://media/trash-preview?name=../large.png"));
     expect(response.status).toBe(400);
   });
+
+  it("serves the sharpest already-cached preview without rendering on cached-only requests", async () => {
+    const encoded = encodeURIComponent(relativePath);
+    const cold = await media.handler!(
+      new Request(`wayper://media/preview?path=${encoded}&size=2560&cached=1`),
+    );
+    expect(cold.status).toBe(404);
+    expect(media.resize).not.toHaveBeenCalled();
+
+    expect(await imageBody(`wayper://media/preview?path=${encoded}&size=1920`))
+      .toBe("preview:1920");
+    expect(media.resize).toHaveBeenCalledTimes(1);
+
+    expect(await imageBody(`wayper://media/preview?path=${encoded}&size=2560&cached=1`))
+      .toBe("preview:1920");
+    expect(media.resize).toHaveBeenCalledTimes(1);
+
+    expect(await imageBody(`wayper://media/preview?path=${encoded}&size=2560`))
+      .toBe("preview:2560");
+    expect(await imageBody(`wayper://media/preview?path=${encoded}&size=3840&cached=1`))
+      .toBe("preview:2560");
+    expect(media.resize).toHaveBeenCalledTimes(2);
+  });
 });

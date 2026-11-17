@@ -36,6 +36,7 @@ import type {
 } from "../../shared/types";
 import { NON_PREFERENCE_FEATURE_TAGS } from "../../shared/tags";
 import { renderAmbient } from "../lib/ambient";
+import { prewarmLightboxPreview } from "../lib/lightbox-preview";
 import { previewUrl, thumbUrl } from "../lib/media";
 import { motionTransition, prefersReducedMotion } from "../lib/motion";
 import { MonitorTiles } from "./MonitorTiles";
@@ -631,6 +632,17 @@ export const ReviewWorkspace = forwardRef<ReviewWorkspaceHandle, ReviewWorkspace
         keepAlive.delete(oldest);
       }
     }, [activeItems, selectedIndex]);
+
+    useEffect(() => {
+      if (!currentItem) return;
+      prewarmLightboxPreview(currentItem, "review");
+      const nextItem = activeItems[selectedIndex + 1];
+      if (!nextItem) return;
+      const timer = window.setTimeout(() => {
+        prewarmLightboxPreview(nextItem, "review", false);
+      }, 120);
+      return () => window.clearTimeout(timer);
+    }, [currentItem, activeItems, selectedIndex]);
 
     const stageRef = useRef<HTMLDivElement | null>(null);
     const [stageSize, setStageSize] = useState({ width: 0, height: 0 });

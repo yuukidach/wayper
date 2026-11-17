@@ -31,6 +31,7 @@ import {
   trashThumbUrl,
 } from "../lib/media";
 import { useAmbient } from "../lib/ambient";
+import { prewarmLightboxPreview } from "../lib/lightbox-preview";
 import { motionTransition } from "../lib/motion";
 import { LightboxImage } from "./LightboxImage";
 import type { ReviewLane } from "./ReviewWorkspace";
@@ -157,6 +158,20 @@ const LightboxView: React.FC<Omit<LightboxProps, "session"> & { session: Lightbo
   }, []);
 
   const handleEntered = useCallback(() => setEntered(true), []);
+
+  useEffect(() => {
+    if (!isPresent || session.items.length <= 1) return;
+    const delayMs = entered ? 35 : 140;
+    const timer = window.setTimeout(() => {
+      const nextIndex = (session.index + 1) % session.items.length;
+      const prevIndex = (session.index - 1 + session.items.length) % session.items.length;
+      prewarmLightboxPreview(session.items[nextIndex], session.context);
+      if (prevIndex !== nextIndex) {
+        prewarmLightboxPreview(session.items[prevIndex], session.context);
+      }
+    }, delayMs);
+    return () => window.clearTimeout(timer);
+  }, [entered, isPresent, session.context, session.index, session.items]);
 
   useEffect(() => {
     if (!inspectorOpen || !entered || !isPresent) return;

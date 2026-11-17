@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type { ImageItem, Orientation, Purity } from "../../shared/types";
 import { casefold } from "../../shared/tags";
+import { prewarmLightboxPreview } from "../lib/lightbox-preview";
 import { thumbUrl } from "../lib/media";
 import { motionDuration, motionEasing, prefersReducedMotion, scrollMotion } from "../lib/motion";
 
@@ -114,8 +115,33 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
     const lastRefreshTokenRef = useRef(refreshToken);
     const pendingRemovalsRef = useRef<Set<string>>(new Set());
     const reflowFromRef = useRef<Map<string, DOMRect> | null>(null);
+    const prewarmTimerRef = useRef<number | null>(null);
     const allItemsRef = useRef<ImageItem[]>(allItems);
     allItemsRef.current = allItems;
+
+    const clearPrewarmTimer = useCallback(() => {
+      if (prewarmTimerRef.current !== null) {
+        window.clearTimeout(prewarmTimerRef.current);
+        prewarmTimerRef.current = null;
+      }
+    }, []);
+
+    const scheduleTilePrewarm = useCallback(
+      (item: ImageItem, delayMs: number) => {
+        clearPrewarmTimer();
+        if (delayMs <= 0) {
+          prewarmLightboxPreview(item, "library");
+          return;
+        }
+        prewarmTimerRef.current = window.setTimeout(() => {
+          prewarmTimerRef.current = null;
+          prewarmLightboxPreview(item, "library");
+        }, delayMs);
+      },
+      [clearPrewarmTimer],
+    );
+
+    useEffect(() => clearPrewarmTimer, [clearPrewarmTimer]);
 
     const purityParam = useMemo(() => [...purities].sort().join(","), [purities]);
 
@@ -680,7 +706,13 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
                 tabIndex={0}
                 data-path={item.path}
                 data-focused={isFocused ? "true" : "false"}
-                onFocus={() => setFocusedIndex(idx)}
+                onPointerEnter={() => scheduleTilePrewarm(item, 55)}
+                onPointerLeave={clearPrewarmTimer}
+                onPointerDown={() => scheduleTilePrewarm(item, 0)}
+                onFocus={() => {
+                  setFocusedIndex(idx);
+                  scheduleTilePrewarm(item, 40);
+                }}
                 onClick={() => onOpenLightbox(item, filteredItems)}
                 className={`wallpaper-card group cursor-pointer ${aspectClass} ${
                   isCurrent ? "current" : ""

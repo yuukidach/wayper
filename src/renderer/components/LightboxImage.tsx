@@ -1,22 +1,27 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
+import { motion, useIsPresent, useReducedMotion } from "motion/react";
 import type { ImageItem, ReviewCandidateItem } from "../../shared/types";
 import { useDecodedImage, type DecodedImage } from "../lib/decoded-image";
 import {
+  defaultLightboxBounds,
   fitImage,
   imageOriginTransform,
   previewDimension,
   type ImageBounds,
 } from "../lib/lightbox-layout";
 import {
+  estimateItemAspect,
+  findSourceTileImage,
+  getReadyLightboxPreview,
+  lightboxPreviewUrls,
+} from "../lib/lightbox-preview";
+import {
   fullImgUrl,
-  previewUrl,
   thumbUrl,
-  trashPreviewUrl,
   trashThumbUrl,
   trashUrl,
 } from "../lib/media";
-import { motionTransition } from "../lib/motion";
+import { motionEase, motionTransition } from "../lib/motion";
 import type { LightboxContextKind } from "./Lightbox";
 
 export interface LightboxExit {
@@ -37,12 +42,8 @@ interface LightboxImageProps {
   onEntered: () => void;
 }
 
-function findSource(itemPath: string): HTMLImageElement | null {
-  return document.querySelector<HTMLImageElement>(`[data-path="${CSS.escape(itemPath)}"] img`);
-}
-
 function sourceTransform(itemPath: string, target: ImageBounds): string | null {
-  const source = findSource(itemPath)?.closest<HTMLElement>("[data-path]");
+  const source = findSourceTileImage(itemPath)?.closest<HTMLElement>("[data-path]");
   if (!source) return null;
   const rect = source.getBoundingClientRect();
   if (
@@ -72,31 +73,35 @@ export const LightboxImage: React.FC<LightboxImageProps> = ({
   const areaRef = useRef<HTMLDivElement>(null);
   const [settled, setSettled] = useState(false);
   const [originalRequested, setOriginalRequested] = useState(false);
-  const [shownPreview, setShownPreview] = useState<DecodedImage | null>(null);
   const [shownOriginal, setShownOriginal] = useState<DecodedImage | null>(null);
+  const [bounds, setBounds] = useState<ImageBounds>(() =>
+    defaultLightboxBounds(window.innerWidth, window.innerHeight),
+  );
   const [aspect, setAspect] = useState(() => {
-    const source = findSource(item.path);
-    return source?.naturalWidth && source.naturalHeight
-      ? source.naturalWidth / source.naturalHeight
-      : item.orientation === "portrait" ? 9 / 16 : 16 / 9;
+    const ready = getReadyLightboxPreview(item, context, bounds);
+    if (ready && ready.width > 0 && ready.height > 0) {
+      return ready.width / ready.height;
+    }
+    return estimateItemAspect(item);
   });
-  const [bounds, setBounds] = useState<ImageBounds>(() => ({
-    left: 64,
-    top: 56,
-    width: window.innerWidth - 128,
-    height: window.innerHeight - 144,
-  }));
   const size = fitImage(aspect, bounds);
   const target = {
     ...size,
     left: bounds.left + (bounds.width - size.width) / 2,
     top: bounds.top + (bounds.height - size.height) / 2,
   };
-  const [origin] = useState(() =>
-    reducedMotion ? REST_TRANSFORM : opening
-      ? sourceTransform(item.path, target) ?? "translate3d(0px, 8px, 0) scale(0.97)"
-      : `translate3d(${direction * 28}px, 0px, 0) scale(1)`,
-  );
+  const [entrance] = useState(() => {
+    if (reducedMotion) {
+      return { transform: REST_TRANSFORM, fromTile: true };
+    }
+    if (!opening) {
+      return { transform: `translate3d(${direction * 28}px, 0px, 0) scale(1)`, fromTile: false };
+    }
+    const tileOrigin = sourceTransform(item.path, target);
+    return tileOrigin
+      ? { transform: tileOrigin, fromTile: true }
+      : { transform: "translate3d(0px, 8px, 0) scale(0.97)", fromTile: false };
+  });
   const attachImage = useCallback((node: HTMLImageElement | null) => {
     if (!node) return;
     imageRef.current = node;
@@ -118,13 +123,15 @@ export const LightboxImage: React.FC<LightboxImageProps> = ({
     return () => observer.disconnect();
   }, []);
 
-  const dimension = previewDimension(size, window.devicePixelRatio);
+  const dimension = previewDimension(size, window.devicePixelRatio || 1);
   const thumbnail = context === "trash" ? trashThumbUrl(item.name) : thumbUrl(item.path);
-  const preview = useDecodedImage(
-    settled && isPresent
-      ? context === "trash" ? trashPreviewUrl(item.name, dimension) : previewUrl(item.path, dimension)
-      : null,
-  );
+  const { targetUrl, fallbackUrl } = lightboxPreviewUrls(item, context, dimension);
+  const targetPreview = useDecodedImage(isPresent ? targetUrl : null);
+  const fallbackPreview = useDecodedImage(isPresent && !targetPreview ? fallbackUrl : null);
+  const currentPreview = targetPreview ?? fallbackPreview;
+  const [retainedPreview, setRetainedPreview] = useState<DecodedImage | null>(() => currentPreview);
+  const activePreview = currentPreview ?? retainedPreview;
+  const [previewReadyAtMount] = useState(() => activePreview !== null);
   const original = useDecodedImage(
     originalRequested && isPresent
       ? context === "trash" ? trashUrl(item.name) : fullImgUrl(item.path)
@@ -132,11 +139,19 @@ export const LightboxImage: React.FC<LightboxImageProps> = ({
   );
 
   useEffect(() => {
-    if (preview) {
-      setAspect(preview.width / preview.height);
-      setShownPreview(preview);
+    if (currentPreview) {
+      setRetainedPreview(currentPreview);
+      const nextAspect = currentPreview.width / currentPreview.height;
+      setAspect((previous) => (Math.abs(previous - nextAspect) > 0.005 ? nextAspect : previous));
     }
-  }, [preview]);
+  }, [currentPreview]);
+
+  useEffect(() => {
+    if (reducedMotion && isPresent && !settled) {
+      setSettled(true);
+      onEntered();
+    }
+  }, [reducedMotion, isPresent, settled, onEntered]);
 
   useEffect(() => {
     if (!settled || !isPresent || scale <= 1 || originalRequested) return;
@@ -159,7 +174,7 @@ export const LightboxImage: React.FC<LightboxImageProps> = ({
       className="pointer-events-none absolute grid place-items-center"
     >
       <motion.div
-        initial={{ opacity: opening ? 0.7 : 0, transform: origin }}
+        initial={{ opacity: entrance.fromTile ? 1 : 0, transform: entrance.transform }}
         animate={{ opacity: 1, transform: REST_TRANSFORM }}
         variants={{
           exit: (exit: LightboxExit) => ({
@@ -197,28 +212,38 @@ export const LightboxImage: React.FC<LightboxImageProps> = ({
             data-lightbox-image="thumbnail"
             onLoad={(event) => {
               const image = event.currentTarget;
-              if (image.naturalHeight > 0) setAspect(image.naturalWidth / image.naturalHeight);
+              if (!activePreview && image.naturalHeight > 0) {
+                const nextAspect = image.naturalWidth / image.naturalHeight;
+                setAspect((previous) => (Math.abs(previous - nextAspect) > 0.005 ? nextAspect : previous));
+              }
             }}
             className="pointer-events-auto absolute inset-0 h-full w-full rounded-lg object-contain select-none"
           />
-          <AnimatePresence initial={false}>
-            {[shownPreview, shownOriginal].map((image, index) => image && (
-              <motion.img
-                key={image.source}
-                src={image.source}
-                alt=""
-                aria-hidden="true"
-                draggable={false}
-                decoding="async"
-                data-lightbox-image={index === 0 ? "preview" : "original"}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={motionTransition.fast}
-                className="pointer-events-none absolute inset-0 h-full w-full rounded-lg object-contain select-none"
-              />
-            ))}
-          </AnimatePresence>
+          {activePreview && (
+            <motion.img
+              src={activePreview.source}
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+              decoding="async"
+              data-lightbox-image="preview"
+              initial={previewReadyAtMount || !settled || Boolean(reducedMotion) ? false : { opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.08, ease: motionEase }}
+              className="pointer-events-none absolute inset-0 h-full w-full rounded-lg object-contain select-none"
+            />
+          )}
+          {shownOriginal && (
+            <img
+              src={shownOriginal.source}
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+              decoding="async"
+              data-lightbox-image="original"
+              className="pointer-events-none absolute inset-0 h-full w-full rounded-lg object-contain select-none"
+            />
+          )}
         </div>
       </motion.div>
     </div>

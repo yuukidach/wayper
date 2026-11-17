@@ -50,9 +50,15 @@ function loadSharp(): Promise<SharpFactory | null> {
   return sharpLoader;
 }
 
-async function withDerivativeSlot<T>(job: () => Promise<T>): Promise<T> {
+async function withDerivativeSlot<T>(job: () => Promise<T>, highPriority = false): Promise<T> {
   if (activeDerivativeJobs >= MAX_DERIVATIVE_JOBS) {
-    await new Promise<void>((resolve) => queuedDerivativeJobs.push(resolve));
+    await new Promise<void>((resolve) => {
+      if (highPriority) {
+        queuedDerivativeJobs.unshift(resolve);
+      } else {
+        queuedDerivativeJobs.push(resolve);
+      }
+    });
   }
   activeDerivativeJobs += 1;
   try {
@@ -131,6 +137,7 @@ async function ensureDerivative(
   targetPath: string,
   maxDimension: number,
   quality = 82,
+  highPriority = false,
 ): Promise<string> {
   try {
     const [srcStat, dstStat] = await Promise.all([
@@ -147,6 +154,7 @@ async function ensureDerivative(
   if (pending) return pending;
   const task = withDerivativeSlot(() =>
     renderDerivative(sourcePath, targetPath, maxDimension, quality),
+    highPriority,
   ).finally(() => {
     pendingDerivatives.delete(targetPath);
   });
@@ -179,8 +187,37 @@ function errorResponse(status: number, message: string): Response {
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-store",
     },
   });
+}
+
+function previewTargetPath(downloadDir: string, relativePath: string, size: number): string {
+  return path.join(
+    downloadDir,
+    previewCacheDirectory(size),
+    path.dirname(relativePath),
+    `${path.parse(relativePath).name}.jpg`,
+  );
+}
+
+async function findCachedPreview(
+  sourcePath: string,
+  downloadDir: string,
+  relativePath: string,
+  maxSize: number,
+): Promise<string | null> {
+  const sourceStat = await fs.promises.stat(sourcePath).catch(() => null);
+  if (!sourceStat) return null;
+  const candidates = PREVIEW_DIMENSIONS.filter((dimension) => dimension <= maxSize).reverse();
+  for (const dimension of candidates) {
+    const candidate = previewTargetPath(downloadDir, relativePath, dimension);
+    const candidateStat = await fs.promises.stat(candidate).catch(() => null);
+    if (candidateStat && candidateStat.size > 0 && candidateStat.mtimeMs >= sourceStat.mtimeMs) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 async function servePreview(
@@ -191,13 +228,15 @@ async function servePreview(
 ): Promise<Response> {
   const requestedSize = Number(url.searchParams.get("size"));
   const size = PREVIEW_DIMENSIONS.find((dimension) => dimension === requestedSize) ?? PREVIEW_DIMENSIONS[0];
-  const target = path.join(
-    downloadDir,
-    previewCacheDirectory(size),
-    path.dirname(relativePath),
-    `${path.parse(relativePath).name}.jpg`,
-  );
-  return serveLocalFile(await ensureDerivative(sourcePath, target, size, 86), true);
+  if (url.searchParams.get("cached") === "1") {
+    const cached = await findCachedPreview(sourcePath, downloadDir, relativePath, size);
+    if (!cached) {
+      return errorResponse(404, "Cached preview not found");
+    }
+    return serveLocalFile(cached, true);
+  }
+  const target = previewTargetPath(downloadDir, relativePath, size);
+  return serveLocalFile(await ensureDerivative(sourcePath, target, size, 86, true), true);
 }
 
 export function installWayperMediaProtocol(getConfig: () => WayperConfig): void {

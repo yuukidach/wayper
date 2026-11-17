@@ -19,6 +19,10 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { NowDock } from "./components/NowDock";
 import { NowStage } from "./components/NowStage";
 import { useAmbient } from "./lib/ambient";
+import {
+  getReadyLightboxPreview,
+  prepareLightboxPreview,
+} from "./lib/lightbox-preview";
 import { thumbUrl } from "./lib/media";
 import { motionCssVariables, motionTransition } from "./lib/motion";
 import { TopBar, type TopBarHandle } from "./components/TopBar";
@@ -106,6 +110,8 @@ export const App: React.FC = () => {
   const pendingGRef = useRef<number | null>(null);
   const purityHintTimerRef = useRef<number | null>(null);
   const toastSeqRef = useRef(0);
+  const lightboxRequestRef = useRef(0);
+  const pendingLightboxRef = useRef(false);
 
   const effectiveLangPref = previewLang ?? normalizeLanguagePreference(config?.language ?? "auto");
   const locale = useMemo(() => resolveLocale(effectiveLangPref), [effectiveLangPref]);
@@ -122,6 +128,34 @@ export const App: React.FC = () => {
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((item) => item.id !== id));
   }, []);
+
+  const closeLightbox = useCallback(() => {
+    pendingLightboxRef.current = false;
+    lightboxRequestRef.current += 1;
+    setLightbox(null);
+  }, []);
+
+  const openLightboxSession = useCallback((nextSession: LightboxSession) => {
+    const currentItem = nextSession.items[nextSession.index];
+    if (!currentItem) return;
+    const requestId = ++lightboxRequestRef.current;
+    if (getReadyLightboxPreview(currentItem, nextSession.context)) {
+      pendingLightboxRef.current = false;
+      setLightbox(nextSession);
+      return;
+    }
+    pendingLightboxRef.current = true;
+    void prepareLightboxPreview(currentItem, nextSession.context).then(() => {
+      if (lightboxRequestRef.current !== requestId) return;
+      pendingLightboxRef.current = false;
+      setLightbox(nextSession);
+    });
+  }, []);
+
+  useEffect(() => {
+    pendingLightboxRef.current = false;
+    lightboxRequestRef.current += 1;
+  }, [mode, view]);
 
   const activeMonitor = useMemo(() => {
     if (monitors.length === 0) return null;
@@ -678,7 +712,7 @@ export const App: React.FC = () => {
       if (e.button !== 3) return;
       if (lightbox) {
         e.preventDefault();
-        setLightbox(null);
+        closeLightbox();
         return;
       }
       if (view === "workspace" && mode === "trash" && blocklistRef.current?.hasDrilldown()) {
@@ -693,11 +727,17 @@ export const App: React.FC = () => {
     };
     window.addEventListener("mouseup", onMouseUp);
     return () => window.removeEventListener("mouseup", onMouseUp);
-  }, [lightbox, view, mode, searchQuery, searchMatches, handleClearSearch]);
+  }, [lightbox, view, mode, searchQuery, searchMatches, handleClearSearch, closeLightbox]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (lightbox) return;
+      if (pendingLightboxRef.current && e.key === "Escape") {
+        e.preventDefault();
+        pendingLightboxRef.current = false;
+        lightboxRequestRef.current += 1;
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       const target = e.target as HTMLElement | null;
@@ -973,12 +1013,12 @@ export const App: React.FC = () => {
   ]);
 
   const handleOpenLibraryLightbox = useCallback((item: ImageItem, items: ImageItem[]) => {
-    setLightbox({
+    openLightboxSession({
       context: "library",
       index: Math.max(0, items.findIndex((entry) => entry.path === item.path)),
       items,
     });
-  }, []);
+  }, [openLightboxSession]);
   const handleSetGridWallpaper = useCallback((item: ImageItem) => {
     void handleSetWallpaper(item.path);
   }, [handleSetWallpaper]);
@@ -1119,7 +1159,7 @@ export const App: React.FC = () => {
                     0,
                     items.findIndex((x) => x.path === item.path),
                   );
-                  setLightbox({
+                  openLightboxSession({
                     context: "review",
                     index: idx,
                     items,
@@ -1152,7 +1192,7 @@ export const App: React.FC = () => {
                     0,
                     list.findIndex((x) => x.name === item.name),
                   );
-                  setLightbox({
+                  openLightboxSession({
                     context: "trash",
                     index: idx,
                     items: list,
@@ -1264,7 +1304,7 @@ export const App: React.FC = () => {
         t={t}
         session={lightbox}
         config={config}
-        onClose={() => setLightbox(null)}
+        onClose={closeLightbox}
         onChangeIndex={(nextIdx) =>
           setLightbox((prev) => (prev ? { ...prev, index: nextIdx } : null))
         }
