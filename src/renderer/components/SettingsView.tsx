@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "motion/react";
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { AnimatePresence, motion } from "motion/react";
 import {
+  Check,
   ChevronDown,
   ExternalLink,
   FolderOpen,
@@ -105,31 +107,308 @@ const Toggle: React.FC<{
   </button>
 );
 
+interface SelectPlacement {
+  top?: number;
+  bottom?: number;
+  right: number;
+  minWidth: number;
+  origin: "top right" | "bottom right";
+}
+
 const Select: React.FC<{
   value: string;
   options: Array<[string, string]>;
+  ariaLabel?: string;
   disabled?: boolean;
   onChange: (value: string) => void;
-}> = ({ value, options, disabled, onChange }) => (
-  <div className="relative">
-    <select
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onChange(e.target.value)}
-      className={`${field} appearance-none pr-8 disabled:opacity-40`}
-    >
-      {options.map(([optionValue, label]) => (
-        <option key={optionValue} value={optionValue}>
-          {label}
-        </option>
-      ))}
-    </select>
-    <ChevronDown
-      className="pointer-events-none absolute top-1/2 right-2.5 h-3.5 w-3.5 -translate-y-1/2 text-ink-3"
-      strokeWidth={1.75}
-    />
-  </div>
-);
+}> = ({ value, options, ariaLabel, disabled, onChange }) => {
+  const listboxId = useId();
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState<number>(() =>
+    Math.max(
+      0,
+      options.findIndex(([optVal]) => optVal === value),
+    ),
+  );
+  const [placement, setPlacement] = useState<SelectPlacement | null>(null);
+
+  const updatePlacement = useCallback(() => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const estimatedHeight = Math.min(260, options.length * 32 + 8);
+    const gap = 6;
+    const margin = 16;
+    const boundaryRect = el.closest('[role="dialog"]')?.getBoundingClientRect();
+    const boundTop = boundaryRect ? boundaryRect.top : 0;
+    const boundBottom = boundaryRect ? boundaryRect.bottom : window.innerHeight;
+    const spaceBelow = boundBottom - rect.bottom - margin;
+    const spaceAbove = rect.top - boundTop - margin;
+    const openAbove = spaceBelow < estimatedHeight && spaceAbove > spaceBelow;
+    const right = Math.max(12, window.innerWidth - rect.right);
+    const minWidth = rect.width;
+
+    if (openAbove) {
+      setPlacement({
+        bottom: window.innerHeight - rect.top + gap,
+        right,
+        minWidth,
+        origin: "bottom right",
+      });
+    } else {
+      setPlacement({
+        top: rect.bottom + gap,
+        right,
+        minWidth,
+        origin: "top right",
+      });
+    }
+  }, [options.length]);
+
+  const openMenu = (initialIndex?: number) => {
+    if (disabled || options.length === 0) return;
+    const selectedIndex = options.findIndex(([optVal]) => optVal === value);
+    setActiveIndex(initialIndex ?? (selectedIndex >= 0 ? selectedIndex : 0));
+    updatePlacement();
+    setOpen(true);
+  };
+
+  const commitOption = (nextValue: string) => {
+    setOpen(false);
+    if (nextValue !== value) {
+      onChange(nextValue);
+    }
+    triggerRef.current?.focus({ preventScroll: true });
+  };
+
+  useEffect(() => {
+    if (disabled && open) setOpen(false);
+  }, [disabled, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const isOutside = (target: EventTarget | null): boolean =>
+      target instanceof Node &&
+      !triggerRef.current?.contains(target) &&
+      !menuRef.current?.contains(target);
+
+    const handleOutsideEvent = (event: Event) => {
+      if (isOutside(event.target)) {
+        setOpen(false);
+      }
+    };
+    const handleEscapeCapture = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        triggerRef.current?.focus({ preventScroll: true });
+      }
+    };
+    const handleScroll = (event: Event) => {
+      if (
+        menuRef.current &&
+        event.target instanceof Node &&
+        menuRef.current.contains(event.target)
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    const handleResize = () => {
+      updatePlacement();
+    };
+    document.addEventListener("mousedown", handleOutsideEvent, true);
+    document.addEventListener("click", handleOutsideEvent, true);
+    document.addEventListener("focusin", handleOutsideEvent, true);
+    document.addEventListener("keydown", handleEscapeCapture, true);
+    window.addEventListener("scroll", handleScroll, true);
+    window.addEventListener("resize", handleResize);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideEvent, true);
+      document.removeEventListener("click", handleOutsideEvent, true);
+      document.removeEventListener("focusin", handleOutsideEvent, true);
+      document.removeEventListener("keydown", handleEscapeCapture, true);
+      window.removeEventListener("scroll", handleScroll, true);
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [open, updatePlacement]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (disabled || options.length === 0) return;
+
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+        openMenu();
+      }
+      return;
+    }
+
+    if (e.key === "Tab") {
+      setOpen(false);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      e.stopPropagation();
+      setActiveIndex((prev) => (prev + 1) % options.length);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      e.stopPropagation();
+      setActiveIndex((prev) => (prev - 1 + options.length) % options.length);
+      return;
+    }
+    if (e.key === "Home") {
+      e.preventDefault();
+      e.stopPropagation();
+      setActiveIndex(0);
+      return;
+    }
+    if (e.key === "End") {
+      e.preventDefault();
+      e.stopPropagation();
+      setActiveIndex(options.length - 1);
+      return;
+    }
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      e.stopPropagation();
+      const chosen = options[activeIndex];
+      if (chosen) commitOption(chosen[0]);
+      return;
+    }
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.stopPropagation();
+      const lower = e.key.toLowerCase();
+      const start = (activeIndex + 1) % options.length;
+      for (let offset = 0; offset < options.length; offset += 1) {
+        const idx = (start + offset) % options.length;
+        if (options[idx][1].toLowerCase().startsWith(lower)) {
+          e.preventDefault();
+          setActiveIndex(idx);
+          break;
+        }
+      }
+    }
+  };
+
+  const hasSelectedOption = options.some(([optVal]) => optVal === value);
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        role="combobox"
+        aria-label={ariaLabel}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-controls={open ? listboxId : undefined}
+        aria-activedescendant={
+          open && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined
+        }
+        disabled={disabled}
+        onClick={() => {
+          if (open) setOpen(false);
+          else openMenu();
+        }}
+        onKeyDown={handleKeyDown}
+        className={`${field} relative inline-flex min-w-[136px] items-center pr-8 text-left disabled:opacity-40 ${
+          open ? "bg-white/[0.09] shadow-[0_0_0_2px_rgb(255_255_255/0.3)]" : ""
+        }`}
+      >
+        <span className="grid">
+          {options.map(([optionValue, label]) => (
+            <span
+              key={optionValue}
+              aria-hidden={optionValue !== value || undefined}
+              className={
+                optionValue === value
+                  ? "col-start-1 row-start-1 truncate"
+                  : "pointer-events-none invisible col-start-1 row-start-1 truncate select-none"
+              }
+            >
+              {label}
+            </span>
+          ))}
+          {!hasSelectedOption && (
+            <span className="col-start-1 row-start-1 truncate">{value}</span>
+          )}
+        </span>
+        <ChevronDown
+          className={`pointer-events-none absolute top-1/2 right-2.5 h-3.5 w-3.5 -translate-y-1/2 text-ink-3 transition-transform duration-150 ${
+            open ? "rotate-180 text-ink-2" : ""
+          }`}
+          strokeWidth={1.75}
+        />
+      </button>
+      {typeof document !== "undefined" &&
+        createPortal(
+          <AnimatePresence>
+            {open && placement && (
+              <motion.div
+                ref={menuRef}
+                id={listboxId}
+                role="listbox"
+                aria-label={ariaLabel}
+                initial={{ opacity: 0, y: placement.origin === "top right" ? -4 : 4, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: placement.origin === "top right" ? -3 : 3, scale: 0.98 }}
+                transition={motionTransition.fast}
+                style={{
+                  top: placement.top,
+                  bottom: placement.bottom,
+                  right: placement.right,
+                  minWidth: placement.minWidth,
+                  transformOrigin: placement.origin,
+                }}
+                className="select-popover fixed z-50 max-h-[260px] max-w-[calc(100vw-24px)] overflow-y-auto rounded-xl p-1"
+              >
+                {options.map(([optionValue, label], idx) => {
+                  const isSelected = optionValue === value;
+                  const isActive = idx === activeIndex;
+                  return (
+                    <button
+                      key={optionValue}
+                      id={`${listboxId}-option-${idx}`}
+                      type="button"
+                      role="option"
+                      tabIndex={-1}
+                      aria-selected={isSelected}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onMouseEnter={() => setActiveIndex(idx)}
+                      onClick={() => commitOption(optionValue)}
+                      className={`flex h-8 w-full items-center justify-between gap-3 rounded-lg px-2.5 text-left text-[13px] whitespace-nowrap transition-colors ${
+                        isActive
+                          ? `bg-white/[0.11] text-ink ${isSelected ? "font-medium" : ""}`
+                          : isSelected
+                            ? "font-medium text-ink"
+                            : "text-ink/82 hover:bg-white/[0.08] hover:text-ink"
+                      }`}
+                    >
+                      <span className="truncate">{label}</span>
+                      {isSelected ? (
+                        <Check className="h-3.5 w-3.5 shrink-0 text-ink" strokeWidth={2} />
+                      ) : (
+                        <span className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      )}
+                    </button>
+                  );
+                })}
+              </motion.div>
+            )}
+          </AnimatePresence>,
+          document.body,
+        )}
+    </>
+  );
+};
 
 const RuleList: React.FC<{
   title: string;
@@ -587,6 +866,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   }
                 >
                   <Select
+                    ariaLabel={t("Wallpaper Display Mode")}
                     value={resizeMode}
                     disabled={!config.transition?.resize_available}
                     onChange={(value) => setResizeMode(value as ResizeMode)}
@@ -663,6 +943,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <Section title={t("Application")}>
                 <Row label={t("Language")}>
                   <Select
+                    ariaLabel={t("Language")}
                     value={language}
                     onChange={handleLanguageChange}
                     options={[
@@ -794,6 +1075,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </Row>
                 <Row label={t("Sorting")}>
                   <Select
+                    ariaLabel={t("Sorting")}
                     value={sorting}
                     onChange={setSorting}
                     options={[
