@@ -96,16 +96,29 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
     },
     ref,
   ) => {
+    const purityParam = useMemo(() => [...purities].sort().join(","), [purities]);
     const [allItems, setAllItems] = useState<ImageItem[]>([]);
     const [nextOffset, setNextOffset] = useState<number | null>(null);
     const [initialLoading, setInitialLoading] = useState<boolean>(true);
     // What the grid is laid out for.  It trails the requested context until the
     // new page arrives, so the previous cards stay in place instead of blinking
     // out for a spinner.
-    const [shown, setShown] = useState<{ orientation: Orientation; epoch: number }>({
+    const [shown, setShown] = useState<{
+      mode: "pool" | "favorites";
+      purityParam: string;
+      orientation: Orientation;
+      epoch: number;
+    }>({
+      mode,
+      purityParam,
       orientation,
       epoch: 0,
     });
+    const contextPending =
+      initialLoading ||
+      shown.mode !== mode ||
+      shown.purityParam !== purityParam ||
+      shown.orientation !== orientation;
     const [loadingMore, setLoadingMore] = useState<boolean>(false);
     const [focusedIndex, setFocusedIndex] = useState<number>(-1);
 
@@ -148,8 +161,6 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
 
     useEffect(() => clearPrewarmTimer, [clearPrewarmTimer]);
 
-    const purityParam = useMemo(() => [...purities].sort().join(","), [purities]);
-
     const loadFirstPage = useCallback(async () => {
       const seq = ++contextSeqRef.current;
       loadingMoreRef.current = false;
@@ -157,7 +168,12 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
       setInitialLoading(true);
       setLoadingMore(false);
       const showContext = () => {
-        setShown((prev) => ({ orientation, epoch: prev.epoch + 1 }));
+        setShown((prev) => ({
+          mode,
+          purityParam,
+          orientation,
+          epoch: prev.epoch + 1,
+        }));
         scrollRef.current?.scrollTo({ top: 0 });
       };
       try {
@@ -293,7 +309,7 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
     // When client-side search/filter is active, automatically fetch any remaining pages
     const hasFilter = searchMatches !== null || Boolean(searchQuery.trim());
     useEffect(() => {
-      if (!hasFilter || nextOffset === null || initialLoading) return;
+      if (!hasFilter || nextOffset === null || contextPending) return;
       let cancelled = false;
       const seq = contextSeqRef.current;
 
@@ -337,13 +353,13 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
       return () => {
         cancelled = true;
       };
-    }, [hasFilter, nextOffset, initialLoading, mode, purityParam, orientation]);
+    }, [hasFilter, nextOffset, contextPending, mode, purityParam, orientation]);
 
     // IntersectionObserver for smooth infinite scroll
     useEffect(() => {
       const sentinel = sentinelRef.current;
       const root = scrollRef.current;
-      if (!sentinel || !root || nextOffset === null || initialLoading || hasFilter) return;
+      if (!sentinel || !root || nextOffset === null || contextPending || hasFilter) return;
 
       const observer = new IntersectionObserver(
         (entries) => {
@@ -355,7 +371,7 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
       );
       observer.observe(sentinel);
       return () => observer.disconnect();
-    }, [nextOffset, initialLoading, hasFilter, loadNextPage]);
+    }, [nextOffset, contextPending, hasFilter, loadNextPage]);
 
     const filteredItems = useMemo(() => {
       if (!searchMatches && !searchQuery.trim()) return allItems;
@@ -494,7 +510,7 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
           }
 
           // Fetch remaining pages if not yet loaded
-          if (nextOffset !== null && !hasFilter) {
+          if (nextOffset !== null && !hasFilter && !contextPending) {
             const seq = contextSeqRef.current;
             let cursor: number | null = nextOffset;
             const extra: ImageItem[] = [];
@@ -597,6 +613,7 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
         activeImagePath,
         nextOffset,
         hasFilter,
+        contextPending,
         mode,
         purityParam,
         orientation,
@@ -611,7 +628,7 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
       const res = await onToggleFavorite(item);
       if (!res) return;
       setAllItems((prev) => {
-        if (mode === "favorites" && !res.is_favorite) {
+        if (shown.mode === "favorites" && !res.is_favorite) {
           return prev.filter((x) => x.path !== item.path);
         }
         return prev.map((x) =>
@@ -642,7 +659,7 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
 
     const placeholderHeight = header ? "min-h-[36vh]" : "min-h-[72vh]";
     let placeholder: React.ReactNode = null;
-    if (initialLoading && allItems.length === 0) {
+    if (contextPending && allItems.length === 0) {
       placeholder = (
         <div
           aria-label={t("Loading library...")}
@@ -681,10 +698,10 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
             className={`flex ${placeholderHeight} flex-col items-center justify-center gap-2 px-6 text-center`}
           >
             <h2 className="m-0 text-[17px] font-semibold tracking-[-0.015em] text-ink">
-              {mode === "favorites" ? t("No favorites yet") : t("No wallpapers in Pool yet")}
+              {shown.mode === "favorites" ? t("No favorites yet") : t("No wallpapers in Pool yet")}
             </h2>
             <p className="m-0 max-w-sm text-[13px] leading-relaxed text-ink-2">
-              {mode === "favorites"
+              {shown.mode === "favorites"
                 ? t("Mark wallpapers you love with [F] to build your collection and guide the model.")
                 : t("Press Next [L] or trigger a sync to pull fresh wallpapers from Wallhaven.")}
             </p>
@@ -704,7 +721,7 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
           key={shown.epoch}
           ref={gridRef}
           hidden={placeholder !== null}
-          className={`grid-enter grid ${gridColumnsClass} ${initialLoading ? "grid-pending" : ""}`}
+          className={`grid-enter grid ${gridColumnsClass} ${contextPending ? "grid-pending" : ""}`}
         >
           {filteredItems.map((item, idx) => {
             const isCurrent = activeImagePath === item.path;
@@ -773,7 +790,7 @@ export const WallpaperGrid = memo(forwardRef<WallpaperGridHandle, WallpaperGridP
                     <span />
                   )}
 
-                  {item.is_favorite && mode !== "favorites" && (
+                  {item.is_favorite && shown.mode !== "favorites" && (
                     <span className="flex h-[22px] w-[22px] items-center justify-center rounded-full bg-black/62 text-fav shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] backdrop-blur-md">
                       <Heart className="h-3 w-3 fill-current" />
                     </span>
