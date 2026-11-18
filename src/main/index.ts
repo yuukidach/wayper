@@ -8,6 +8,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  nativeTheme,
   screen,
   shell,
   Tray,
@@ -721,6 +722,7 @@ function main(): void {
   });
 
   void app.whenReady().then(() => {
+    nativeTheme.themeSource = "dark";
     const iconPath = getAppIconPath();
     if (isMac && app.dock && iconPath) app.dock.setIcon(iconPath);
     buildMenu();
