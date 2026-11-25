@@ -1,11 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import path from "node:path";
 import type { MonitorConfig, Orientation } from "../../shared/types";
 import type { TransitionConfig } from "../config";
 import type { WallpaperBackend } from "./base";
 
-const CSHARP_WALLPAPER_TYPES = `
-Add-Type -TypeDefinition @"
+const CSHARP_SOURCE = `
 using System;
 using System.Runtime.InteropServices;
 
@@ -115,7 +115,58 @@ namespace WayperNative {
         }
     }
 }
-"@
+`;
+
+const CSHARP_HASH = crypto.createHash("sha256").update(CSHARP_SOURCE, "utf8").digest("hex").slice(0, 12);
+const CACHED_DLL_NAME = `WayperNative-${CSHARP_HASH}.dll`;
+
+/**
+ * Compiles the Win32/COM interop assembly once into %LOCALAPPDATA%\wayper\native
+ * and loads the cached DLL on subsequent calls so PowerShell never invokes
+ * csc.exe or churns temporary assemblies in %TEMP% on routine operations.
+ */
+const CSHARP_WALLPAPER_TYPES = `
+if (-not ('WayperNative.Win32' -as [type])) {
+    $wayperNativeCode = @'
+${CSHARP_SOURCE}
+'@
+    $loaded = $false
+    $baseDir = [Environment]::GetFolderPath('LocalApplicationData')
+    if ([string]::IsNullOrWhiteSpace($baseDir)) { $baseDir = [System.IO.Path]::GetTempPath() }
+    $dllDir = Join-Path $baseDir 'wayper\\native'
+    $dllPath = Join-Path $dllDir '${CACHED_DLL_NAME}'
+    if (Test-Path -LiteralPath $dllPath) {
+        try {
+            Add-Type -LiteralPath $dllPath -ErrorAction Stop
+            $loaded = $true
+        } catch {
+            $loaded = [bool]('WayperNative.Win32' -as [type])
+        }
+    }
+    if (-not $loaded) {
+        try {
+            [void][System.IO.Directory]::CreateDirectory($dllDir)
+            $tmpDll = Join-Path $dllDir ('${CACHED_DLL_NAME}.' + $PID + '.' + [Guid]::NewGuid().ToString('N') + '.dll')
+            Add-Type -TypeDefinition $wayperNativeCode -OutputAssembly $tmpDll -ErrorAction Stop
+            try {
+                Move-Item -LiteralPath $tmpDll -Destination $dllPath -Force -ErrorAction Stop
+            } catch {
+                if (-not (Test-Path -LiteralPath $dllPath)) { throw }
+            } finally {
+                if (Test-Path -LiteralPath $tmpDll) {
+                    Remove-Item -LiteralPath $tmpDll -Force -ErrorAction SilentlyContinue
+                }
+            }
+            Add-Type -LiteralPath $dllPath -ErrorAction Stop
+            $loaded = $true
+        } catch {
+            $loaded = [bool]('WayperNative.Win32' -as [type])
+        }
+    }
+    if (-not $loaded) {
+        Add-Type -TypeDefinition $wayperNativeCode -ErrorAction Stop
+    }
+}
 `;
 
 const DETECT_MONITORS_PS = `
@@ -277,11 +328,27 @@ function defaultPowerShellRunner(
   return (res.stdout ?? "").trim();
 }
 
+const DEFAULT_CURRENT_CACHE_TTL_MS = 30_000;
+
+export interface WindowsBackendOptions {
+  currentCacheTtlMs?: number;
+}
+
 export class WindowsBackend implements WallpaperBackend {
   private readonly runPs: PowerShellRunner;
+  private readonly currentCacheTtlMs: number;
+  private currentCache: { at: number; current: Record<string, string | null> } | null = null;
 
-  constructor(runPs: PowerShellRunner = defaultPowerShellRunner) {
+  constructor(
+    runPs: PowerShellRunner = defaultPowerShellRunner,
+    options?: WindowsBackendOptions,
+  ) {
     this.runPs = runPs;
+    this.currentCacheTtlMs = options?.currentCacheTtlMs ?? DEFAULT_CURRENT_CACHE_TTL_MS;
+  }
+
+  invalidateCache(): void {
+    this.currentCache = null;
   }
 
   detectMonitors(): MonitorConfig[] {
@@ -314,10 +381,24 @@ export class WindowsBackend implements WallpaperBackend {
 
   setWallpaper(monitor: string, imagePath: string, _transition: TransitionConfig): void {
     const resolved = path.resolve(imagePath);
-    this.runPs(SET_WALLPAPER_PS, { WAYPER_MON: monitor, WAYPER_IMG: resolved }, 12_000);
+    const out = this.runPs(SET_WALLPAPER_PS, { WAYPER_MON: monitor, WAYPER_IMG: resolved }, 12_000);
+    if (out !== null && this.currentCache !== null && /^DISPLAY\d+$/.test(monitor)) {
+      this.currentCache.current[monitor] = resolved;
+      this.currentCache.at = performance.now();
+    } else if (out !== null) {
+      this.currentCache = null;
+    }
   }
 
   queryCurrent(): Record<string, string | null> {
+    const now = performance.now();
+    if (
+      this.currentCacheTtlMs > 0 &&
+      this.currentCache !== null &&
+      now - this.currentCache.at < this.currentCacheTtlMs
+    ) {
+      return { ...this.currentCache.current };
+    }
     const raw = this.runPs(QUERY_CURRENT_PS);
     if (!raw) return {};
     try {
@@ -329,7 +410,10 @@ export class WindowsBackend implements WallpaperBackend {
       for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
         current[key] = typeof val === "string" && val ? val : null;
       }
-      return current;
+      if (this.currentCacheTtlMs > 0) {
+        this.currentCache = { at: performance.now(), current };
+      }
+      return { ...current };
     } catch {
       return {};
     }

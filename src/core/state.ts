@@ -132,20 +132,61 @@ export function togglePurity(current: Iterable<Purity>, purity: Purity): Purity[
 // .last_rotation
 // ---------------------------------------------------------------------------
 
+let lastRotationCacheValue: number | null = null;
+let lastRotationCachePath: string | null = null;
+let lastRotationCacheMtime = -1;
+let lastRotationCacheSize = -1;
+
+function invalidateLastRotationCache(): void {
+  lastRotationCacheValue = null;
+  lastRotationCachePath = null;
+  lastRotationCacheMtime = -1;
+  lastRotationCacheSize = -1;
+}
+
 export function readLastRotation(config: ConfigOrDir): number | null {
+  const filePath = lastRotationFilePath(config);
+  let stat: fs.Stats;
   try {
-    const raw = fs.readFileSync(lastRotationFilePath(config), "utf8").trim();
-    if (!raw) return null;
-    const val = Number.parseFloat(raw);
-    return Number.isFinite(val) ? val : null;
+    stat = fs.statSync(filePath);
   } catch {
+    invalidateLastRotationCache();
+    return null;
+  }
+  if (
+    lastRotationCachePath === filePath &&
+    lastRotationCacheMtime === stat.mtimeMs &&
+    lastRotationCacheSize === stat.size
+  ) {
+    return lastRotationCacheValue;
+  }
+  try {
+    const raw = fs.readFileSync(filePath, "utf8").trim();
+    const val = raw ? Number.parseFloat(raw) : Number.NaN;
+    lastRotationCacheValue = Number.isFinite(val) ? val : null;
+    lastRotationCachePath = filePath;
+    lastRotationCacheMtime = stat.mtimeMs;
+    lastRotationCacheSize = stat.size;
+    return lastRotationCacheValue;
+  } catch {
+    invalidateLastRotationCache();
     return null;
   }
 }
 
 export function writeLastRotation(config: ConfigOrDir, when?: number): void {
   const ts = when !== undefined ? when : Date.now() / 1000;
-  atomicWrite(lastRotationFilePath(config), String(ts));
+  const filePath = lastRotationFilePath(config);
+  atomicWrite(filePath, String(ts));
+  try {
+    const stat = fs.statSync(filePath);
+    lastRotationCacheValue = ts;
+    lastRotationCachePath = filePath;
+    lastRotationCacheMtime = stat.mtimeMs;
+    lastRotationCacheSize = stat.size;
+  } catch {
+    invalidateLastRotationCache();
+  }
 }
 
 export function secondsUntilNextRotation(

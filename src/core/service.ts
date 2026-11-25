@@ -80,6 +80,7 @@ import { isBlacklisted, listBlacklist, readMode, removeFromBlacklist, writeMode 
 import {
   checkTrashAccess,
   findTrashImage,
+  getTrashCacheGeneration,
   listRecoverableTrash,
   restoreFromTrash,
   trashSearchDirs,
@@ -96,7 +97,7 @@ const log = getLogger("service");
 export const MAX_IMAGE_PAGE_LIMIT = 500;
 const PREFERENCE_SUGGESTION_CACHE_LIMIT = 12;
 const RULE_SUGGESTION_CACHE_LIMIT = 24;
-const WATCH_INTERVAL_MS = 300;
+const WATCH_INTERVAL_MS = 2000;
 
 type JsonRecord = Record<string, unknown>;
 type StatToken = string;
@@ -166,11 +167,15 @@ export class WayperService {
   >();
   private blocklistCache: { token: string; payload: Omit<BlocklistResponse, "images"> } | null =
     null;
+  private diskUsageCache: { token: string; usedMb: number } | null = null;
   private readonly suggestionCache = new Map<string, JsonRecord>();
   private readonly suggestionInflight = new Map<string, Promise<JsonRecord>>();
   private readonly ruleSuggestionCache = new Map<string, JsonRecord>();
   private readonly ruleSuggestionInflight = new Map<string, Promise<JsonRecord>>();
   private watchTimer: NodeJS.Timeout | null = null;
+  private watchingRequested = false;
+  private watchingActive = true;
+  private pollWatchOnce: (() => void) | null = null;
 
   constructor(options: WayperServiceOptions = {}) {
     this.rotation = options.rotation ?? null;
@@ -219,6 +224,7 @@ export class WayperService {
     this.cachedMetadata = null;
     this.cachedMetadataToken = "";
     this.blocklistCache = null;
+    this.diskUsageCache = null;
     this.suggestionCache.clear();
     this.ruleSuggestionCache.clear();
   }
@@ -226,6 +232,7 @@ export class WayperService {
   private invalidateMutationCaches(): void {
     this.imageDirCache.clear();
     this.blocklistCache = null;
+    this.diskUsageCache = null;
     this.suggestionCache.clear();
     this.ruleSuggestionCache.clear();
   }
@@ -465,9 +472,30 @@ export class WayperService {
     };
   }
 
+  private diskUsageToken(config: WayperConfig): string {
+    const root = config.download_dir;
+    const tokens = [path.resolve(root)];
+    for (const purity of ALL_PURITIES) {
+      for (const orient of ALL_ORIENTATIONS) {
+        tokens.push(
+          statToken(poolDir(root, purity, orient)),
+          statToken(favoritesDir(root, purity, orient)),
+        );
+      }
+    }
+    return tokens.join("|");
+  }
+
   getDiskUsage(): DiskUsageResponse {
     const config = this.getConfig(false);
-    return { used_mb: Math.round(diskUsageMb(config) * 10) / 10, quota_mb: config.quota_mb };
+    const token = this.diskUsageToken(config);
+    if (this.diskUsageCache === null || this.diskUsageCache.token !== token) {
+      this.diskUsageCache = {
+        token,
+        usedMb: Math.round(diskUsageMb(config) * 10) / 10,
+      };
+    }
+    return { used_mb: this.diskUsageCache.usedMb, quota_mb: config.quota_mb };
   }
 
   getMonitors(): MonitorInfo[] {
@@ -587,6 +615,12 @@ export class WayperService {
         request.monitor || getContext(config).monitor,
         request.open_url === true,
       );
+      if (result.ok) {
+        if (request.action !== "next" && request.action !== "prev") {
+          this.emit({ type: "library" });
+        }
+        this.emit({ type: "wallpaper" });
+      }
       return {
         matched: true,
         ok: result.ok,
@@ -699,11 +733,12 @@ export class WayperService {
   private blocklistToken(config: WayperConfig): string {
     const parts = [
       config.download_dir,
+      String(getTrashCacheGeneration()),
       statToken(path.join(config.download_dir, ".blacklist")),
       statToken(path.join(config.download_dir, ".trash_paths")),
     ];
     if (process.platform === "win32") {
-      parts.push(String(Math.floor(Date.now() / 5000)));
+      parts.push(String(Math.floor(Date.now() / 30_000)));
     } else {
       for (const directory of trashSearchDirs(config)) parts.push(statToken(directory));
     }
@@ -1238,8 +1273,31 @@ export class WayperService {
     return `${statToken(path.join(root, ".last_rotation"))}|${statToken(path.join(root, ".history"))}`;
   }
 
-  startWatching(): void {
+  private scheduleWatchTimer(): void {
+    if (!this.watchingRequested || !this.watchingActive || !this.pollWatchOnce) return;
     if (this.watchTimer !== null) return;
+    this.watchTimer = setInterval(this.pollWatchOnce, WATCH_INTERVAL_MS);
+    this.watchTimer.unref?.();
+  }
+
+  setWatchingActive(active: boolean): void {
+    if (this.watchingActive === active) return;
+    this.watchingActive = active;
+    if (!this.watchingRequested) return;
+    if (!active) {
+      if (this.watchTimer !== null) {
+        clearInterval(this.watchTimer);
+        this.watchTimer = null;
+      }
+      return;
+    }
+    this.pollWatchOnce?.();
+    this.scheduleWatchTimer();
+  }
+
+  startWatching(): void {
+    if (this.watchingRequested) return;
+    this.watchingRequested = true;
     let config = this.getConfig(false);
     void purgeBlacklistedFavorites(config)
       .then((purged) => {
@@ -1258,7 +1316,7 @@ export class WayperService {
     let wallpaper = this.wallpaperToken(config);
     let model = statToken(preferenceModelPath(config));
 
-    this.watchTimer = setInterval(() => {
+    this.pollWatchOnce = () => {
       try {
         config = this.getConfig(false);
         if (this.cachedConfigToken !== configToken) {
@@ -1295,11 +1353,13 @@ export class WayperService {
       } catch (error) {
         log.debug("State watcher tick failed", error);
       }
-    }, WATCH_INTERVAL_MS);
-    this.watchTimer.unref?.();
+    };
+    this.scheduleWatchTimer();
   }
 
   stopWatching(): void {
+    this.watchingRequested = false;
+    this.pollWatchOnce = null;
     if (this.watchTimer !== null) {
       clearInterval(this.watchTimer);
       this.watchTimer = null;

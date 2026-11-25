@@ -5,11 +5,13 @@ import { ImageCatalog, loadSuggestionCatalog } from "./catalog";
 import type { WayperConfig } from "./config";
 import { loadMetadata } from "./pool";
 import {
+  autoFilterBatchPredictions,
   loadPreferenceModel,
   modelReport,
   prefetchModelEmbeddings,
   preferenceLearningStatus,
   preferenceModelPath,
+  runAutoRetrain,
   trainAndSaveLocalPreferenceModel,
 } from "./preference/ledger";
 import { predictionToDict, preferenceCandidate, preferenceDecisionScore } from "./preference/model";
@@ -260,6 +262,21 @@ export const heavyTasks = {
       preferenceLearningStatus(args.config, model, snapshot),
     );
   },
+
+  async autoFilterBatch(args: {
+    modelPath: string;
+    items: Array<{ key: string; metadata: JsonRecord }>;
+  }): Promise<Record<string, { hit: boolean; prediction: JsonRecord; decision_score: number }>> {
+    const model = loadPreferenceModel(args.modelPath);
+    if (model === null) return {};
+    return autoFilterBatchPredictions(model, args.items);
+  },
+
+  async autoRetrain(args: {
+    downloadDir: string;
+  }): Promise<{ outcome: "settled" | "retry" | "failed" }> {
+    return { outcome: await runAutoRetrain(args.downloadDir) };
+  },
 };
 
 export type HeavyTaskName = keyof typeof heavyTasks;
@@ -275,3 +292,13 @@ export type HeavyTaskRunner = <Name extends HeavyTaskName>(
 
 export const runHeavyTaskInProcess: HeavyTaskRunner = (name, args) =>
   (heavyTasks[name] as (input: unknown) => Promise<unknown>)(args) as Promise<never>;
+
+let defaultHeavyTaskRunner: HeavyTaskRunner = runHeavyTaskInProcess;
+
+export function setDefaultHeavyTaskRunner(runner: HeavyTaskRunner | null): void {
+  defaultHeavyTaskRunner = runner ?? runHeavyTaskInProcess;
+}
+
+export function getDefaultHeavyTaskRunner(): HeavyTaskRunner {
+  return defaultHeavyTaskRunner;
+}

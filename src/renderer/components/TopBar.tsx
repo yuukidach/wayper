@@ -369,9 +369,6 @@ export const TopBar = forwardRef<TopBarHandle, TopBarProps>(function TopBar(
     <header className="pointer-events-none absolute inset-x-0 top-0 z-30 h-[60px]">
       <div className="topbar-veil" hidden={immersive} aria-hidden="true">
         <i />
-        <i />
-        <i />
-        <i />
         <b />
       </div>
       <div

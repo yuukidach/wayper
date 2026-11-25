@@ -12,12 +12,21 @@ interface CachedEntry {
   pixels: number;
 }
 
-const MAX_CACHE_ENTRIES = 20;
-const MAX_CACHE_PIXELS = 128_000_000;
+const MAX_CACHE_ENTRIES = 8;
+const MAX_CACHE_PIXELS = 36_000_000;
 
 const decodedCache = new Map<string, CachedEntry>();
 const inflightDecodes = new Map<string, Promise<DecodedImage | null>>();
 let cachedPixels = 0;
+
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      decodedCache.clear();
+      cachedPixels = 0;
+    }
+  });
+}
 
 function touchCachedEntry(source: string, entry: CachedEntry): DecodedImage {
   decodedCache.delete(source);

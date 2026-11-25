@@ -1,7 +1,7 @@
 import { utilityProcess, type UtilityProcess } from "electron";
 import type { HeavyTaskName, HeavyTaskRunner } from "../core/heavy-tasks";
 
-const IDLE_SHUTDOWN_MS = 3 * 60_000;
+const IDLE_SHUTDOWN_MS = 45_000;
 
 interface Pending {
   resolve: (value: unknown) => void;

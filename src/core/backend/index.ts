@@ -17,12 +17,14 @@ export {
   type WallpaperBackend,
 };
 
-const MONITOR_CACHE_TTL_MS = 10_000;
+const DEFAULT_MONITOR_CACHE_TTL_MS = 10_000;
 
 let activeBackend: WallpaperBackend | null = null;
 let monitorsCache: MonitorConfig[] = [];
 let monitorsDirty = true;
 let monitorsCacheAt = 0;
+let monitorCacheTtlMs = DEFAULT_MONITOR_CACHE_TTL_MS;
+let lockStateProvider: (() => boolean) | null = null;
 
 export function createBackend(platform: NodeJS.Platform = process.platform): WallpaperBackend {
   if (platform === "darwin") {
@@ -46,12 +48,24 @@ export function setBackend(backend: WallpaperBackend | null): void {
   invalidateMonitorCache();
 }
 
+export function setMonitorCacheTtl(ttlMs: number | null): void {
+  monitorCacheTtlMs =
+    typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs >= 0
+      ? ttlMs
+      : DEFAULT_MONITOR_CACHE_TTL_MS;
+}
+
+export function setLockStateProvider(provider: (() => boolean) | null): void {
+  lockStateProvider = provider;
+}
+
 export function invalidateMonitorCache(): void {
   monitorsDirty = true;
+  activeBackend?.invalidateCache?.();
 }
 
 export function detectMonitors(nowMs: number = performance.now()): MonitorConfig[] {
-  if (!monitorsDirty && monitorsCache.length > 0 && nowMs - monitorsCacheAt < MONITOR_CACHE_TTL_MS) {
+  if (!monitorsDirty && monitorsCache.length > 0 && nowMs - monitorsCacheAt < monitorCacheTtlMs) {
     return monitorsCache;
   }
   monitorsDirty = false;
@@ -77,6 +91,9 @@ export function queryCurrent(): Record<string, string | null> {
 }
 
 export function isLocked(): boolean {
+  if (lockStateProvider) {
+    return lockStateProvider();
+  }
   return getBackend().isLocked();
 }
 
