@@ -20,8 +20,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { CommandPalette } from "./components/CommandPalette";
 import { NowDock } from "./components/NowDock";
 import { NowStage } from "./components/NowStage";
-import { preloadAmbient, useAmbient } from "./lib/ambient";
-import { decodeImage } from "./lib/decoded-image";
+import { useAmbient } from "./lib/ambient";
 import {
   loadGalleryPreferences,
   saveGalleryPreferences,
@@ -32,7 +31,7 @@ import {
   getReadyLightboxPreview,
   prepareLightboxPreview,
 } from "./lib/lightbox-preview";
-import { basenameFromPath, previewUrl, thumbUrl } from "./lib/media";
+import { basenameFromPath, thumbUrl } from "./lib/media";
 import { motionCssVariables, motionTransition } from "./lib/motion";
 import { TopBar, type TopBarHandle } from "./components/TopBar";
 import { WallpaperGrid, type WallpaperGridHandle } from "./components/WallpaperGrid";
@@ -226,13 +225,14 @@ export const App: React.FC = () => {
         const [st, du] = await Promise.all([
           window.wayper.getStatus({
             orient,
-            include_recoverable: true,
+            include_recoverable: false,
             monitor: mon ?? undefined,
           }),
           window.wayper.getDiskUsage(),
         ]);
         setStatus(st);
         setDiskUsage(du);
+        setHeldCount(st.model_review_count ?? 0);
         if (st.mode?.length) {
           setPurities(st.mode);
         }
@@ -240,21 +240,13 @@ export const App: React.FC = () => {
         console.error("Failed refreshing status:", err);
       }
     },
-    [activeOrientation, activeMonitor?.name],
+    [activeOrientation, activeMonitor?.name, setPurities],
   );
 
   const refreshReviewCountsBackground = useCallback(
     async (puritiesArg: Purity[], orientArg: Orientation) => {
       const seq = ++reviewPrefetchSeqRef.current;
       const scopeKey = reviewScopeKey(puritiesArg, orientArg);
-      const prewarmTopCandidate = (item: ReviewCandidateItem | undefined) => {
-        if (!item || modeRef.current === "model-review") return;
-        window.setTimeout(() => {
-          if (reviewPrefetchSeqRef.current !== seq) return;
-          void decodeImage(previewUrl(item.path));
-          void preloadAmbient(thumbUrl(item.path));
-        }, 60);
-      };
 
       const heldPromise = window.wayper
         .getModelReview({ purities: puritiesArg, orient: orientArg, limit: 80 })
@@ -266,9 +258,6 @@ export const App: React.FC = () => {
             held: heldRes,
             recommended: prev?.scopeKey === scopeKey ? prev.recommended : null,
           }));
-          if (heldRes.items?.[0]) {
-            prewarmTopCandidate(heldRes.items[0]);
-          }
           return heldRes;
         })
         .catch(() => null);
@@ -279,7 +268,7 @@ export const App: React.FC = () => {
           orient: orientArg,
           limit: 60,
         })
-        .then(async (recRes) => {
+        .then((recRes) => {
           if (reviewPrefetchSeqRef.current !== seq) return;
           setRecommendedCount(recRes.items?.length ?? 0);
           setReviewSnapshot((prev) => ({
@@ -287,11 +276,6 @@ export const App: React.FC = () => {
             held: prev?.scopeKey === scopeKey ? prev.held : null,
             recommended: recRes,
           }));
-          const heldRes = await heldPromise;
-          if (reviewPrefetchSeqRef.current !== seq) return;
-          if ((heldRes?.items?.length ?? 0) === 0 && recRes.items?.[0]) {
-            prewarmTopCandidate(recRes.items[0]);
-          }
         })
         .catch(() => undefined);
 
@@ -373,7 +357,7 @@ export const App: React.FC = () => {
         case "library":
           void refreshStatusAndCounts();
           if (modeRef.current !== "model-review") {
-            void refreshReviewCountsBackground(purities, activeOrientation);
+            setReviewSnapshot(null);
           }
           setRefreshToken((n) => n + 1);
           break;

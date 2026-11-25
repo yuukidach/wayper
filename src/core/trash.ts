@@ -10,8 +10,9 @@ export type TrashHandler = (filePath: string) => Promise<void>;
 
 let customTrashHandler: TrashHandler | null = null;
 
-const WINDOWS_RECYCLE_CACHE_TTL_MS = 1_000;
-let windowsRecycleCache: { completedAt: number; items: Map<string, string> } | null = null;
+const WINDOWS_RECYCLE_CACHE_TTL_MS = 30_000;
+let windowsRecycleCache: { completedAt: number; rootsKey: string; items: Map<string, string> } | null = null;
+let trashCacheGeneration = 0;
 
 export function setTrashHandler(fn: TrashHandler | null): void {
   customTrashHandler = fn;
@@ -21,8 +22,13 @@ export function getTrashHandler(): TrashHandler | null {
   return customTrashHandler;
 }
 
+export function getTrashCacheGeneration(): number {
+  return trashCacheGeneration;
+}
+
 export function invalidateWindowsRecycleCache(): void {
   windowsRecycleCache = null;
+  trashCacheGeneration += 1;
 }
 
 function resolveDownloadDir(target: ConfigOrDir): string {
@@ -368,7 +374,124 @@ Add-Type -AssemblyName Microsoft.VisualBasic
   }
 }
 
-function scanWindowsRecycleBin(): Map<string, string> {
+const MAX_RECYCLE_INFO_BYTES = 65_536;
+
+/**
+ * Parses a Windows $Recycle.Bin $Ixxxxxx metadata header (version 1: Vista/7
+ * fixed 520-byte UTF-16LE path; version 2: Windows 8/10/11 length-prefixed
+ * UTF-16LE path) without spawning PowerShell or COM Shell.Application.
+ */
+export function parseWindowsRecycleInfoBuffer(
+  buf: Buffer,
+): { originalPath: string; deletedAt: bigint } | null {
+  if (buf.byteLength < 28) return null;
+  const version = buf.readBigInt64LE(0);
+  const deletedAt = buf.readBigInt64LE(16);
+  let rawUtf16: Buffer;
+  if (version === 1n) {
+    if (buf.byteLength < 544) return null;
+    rawUtf16 = buf.subarray(24, 544);
+  } else if (version === 2n) {
+    const charCount = buf.readUInt32LE(24);
+    const byteLength = charCount * 2;
+    if (charCount === 0 || charCount > 32_768 || buf.byteLength < 28 + byteLength) return null;
+    rawUtf16 = buf.subarray(28, 28 + byteLength);
+  } else {
+    return null;
+  }
+  const decoded = rawUtf16.toString("utf16le");
+  const nulIndex = decoded.indexOf("\u0000");
+  const originalPath = (nulIndex >= 0 ? decoded.slice(0, nulIndex) : decoded).trim();
+  if (!originalPath) return null;
+  return { originalPath, deletedAt };
+}
+
+/**
+ * Scans accessible <drive>:\$Recycle.Bin\<SID> directories directly via fs.
+ * Returns null only when no readable user Recycle Bin directory was found,
+ * allowing callers to fall back to Shell.Application when needed.
+ */
+export function scanWindowsRecycleBinDirs(
+  recycleBinRoots: Iterable<string>,
+): Map<string, string> | null {
+  let readableSidDirs = 0;
+  const bestByName = new Map<string, { fullPath: string; deletedAt: bigint }>();
+
+  for (const binRoot of recycleBinRoots) {
+    let sidEntries: fs.Dirent[];
+    try {
+      sidEntries = fs.readdirSync(binRoot, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const sidEntry of sidEntries) {
+      if (!sidEntry.isDirectory()) continue;
+      const sidDir = path.join(binRoot, sidEntry.name);
+      let files: fs.Dirent[];
+      try {
+        files = fs.readdirSync(sidDir, { withFileTypes: true });
+        readableSidDirs += 1;
+      } catch {
+        // Other users' SID folders throw EPERM/EACCES; skip them silently.
+        continue;
+      }
+      const namesInSid = new Set<string>();
+      for (const fileEntry of files) {
+        if (fileEntry.isFile()) namesInSid.add(fileEntry.name);
+      }
+      for (const fileName of namesInSid) {
+        if (!fileName.startsWith("$I") || fileName.length <= 2) continue;
+        const dataFileName = `$R${fileName.slice(2)}`;
+        if (!namesInSid.has(dataFileName)) continue;
+        const infoPath = path.join(sidDir, fileName);
+        let parsed: { originalPath: string; deletedAt: bigint } | null = null;
+        try {
+          const stat = fs.statSync(infoPath);
+          if (stat.size < 28 || stat.size > MAX_RECYCLE_INFO_BYTES) continue;
+          parsed = parseWindowsRecycleInfoBuffer(fs.readFileSync(infoPath));
+        } catch {
+          continue;
+        }
+        if (!parsed) continue;
+        const originalName = path.win32.basename(parsed.originalPath);
+        if (!originalName || originalName === "." || originalName === "..") continue;
+        const existing = bestByName.get(originalName);
+        if (!existing || parsed.deletedAt >= existing.deletedAt) {
+          bestByName.set(originalName, {
+            fullPath: path.join(sidDir, dataFileName),
+            deletedAt: parsed.deletedAt,
+          });
+        }
+      }
+    }
+  }
+
+  if (readableSidDirs === 0) return null;
+  const found = new Map<string, string>();
+  for (const [name, entry] of bestByName) {
+    found.set(name, entry.fullPath);
+  }
+  return found;
+}
+
+function windowsRecycleBinRoots(config?: ConfigOrDir): string[] {
+  const candidates = [
+    config !== undefined ? resolveDownloadDir(config) : "",
+    os.homedir(),
+    process.env.SystemDrive ? `${process.env.SystemDrive}\\` : "C:\\",
+  ];
+  const roots = new Set<string>();
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const parsed = path.win32.parse(path.win32.resolve(raw));
+    if (parsed.root && /^[A-Za-z]:\\$/.test(parsed.root)) {
+      roots.add(path.win32.join(parsed.root.toUpperCase(), "$Recycle.Bin"));
+    }
+  }
+  return [...roots].sort();
+}
+
+function scanWindowsRecycleBinPowerShell(): Map<string, string> {
   const script = `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -415,15 +538,21 @@ ConvertTo-Json -Compress -InputObject @($items)
   return found;
 }
 
-function getWindowsRecycleBinItems(nowMs: number = performance.now()): Map<string, string> {
+function getWindowsRecycleBinItems(
+  config?: ConfigOrDir,
+  nowMs: number = performance.now(),
+): Map<string, string> {
+  const roots = windowsRecycleBinRoots(config);
+  const rootsKey = roots.join("|");
   if (
     windowsRecycleCache !== null &&
+    windowsRecycleCache.rootsKey === rootsKey &&
     nowMs - windowsRecycleCache.completedAt < WINDOWS_RECYCLE_CACHE_TTL_MS
   ) {
     return windowsRecycleCache.items;
   }
-  const items = scanWindowsRecycleBin();
-  windowsRecycleCache = { completedAt: performance.now(), items };
+  const items = scanWindowsRecycleBinDirs(roots) ?? scanWindowsRecycleBinPowerShell();
+  windowsRecycleCache = { completedAt: performance.now(), rootsKey, items };
   return items;
 }
 
@@ -449,6 +578,7 @@ export async function moveToSystemTrash(
     if (platform === "win32") {
       invalidateWindowsRecycleCache();
     } else {
+      trashCacheGeneration += 1;
       for (const dir of trashSearchDirs(config, platform)) {
         const candidate = path.join(dir, filename);
         if (fs.existsSync(candidate)) {
@@ -461,8 +591,10 @@ export async function moveToSystemTrash(
     trashFileWindows(resolvedSrc);
   } else if (platform === "darwin") {
     recordedTrashPath = trashFileMacOS(resolvedSrc);
+    trashCacheGeneration += 1;
   } else {
     recordedTrashPath = trashFileLinux(resolvedSrc);
+    trashCacheGeneration += 1;
   }
 
   if (recordedTrashPath) {
@@ -496,7 +628,7 @@ export function findTrashImage(
   if (!cleanName) return null;
 
   if (platform === "win32") {
-    return getWindowsRecycleBinItems().get(cleanName) ?? null;
+    return getWindowsRecycleBinItems(config).get(cleanName) ?? null;
   }
 
   const stored = trashMapForLookup(config)[cleanName];
@@ -569,7 +701,7 @@ export function listRecoverableTrash(
   }
 
   if (platform === "win32") {
-    const recycleItems = getWindowsRecycleBinItems();
+    const recycleItems = getWindowsRecycleBinItems(config);
     const out = new Map<string, string>();
     for (const name of orderedNames) {
       const hit = recycleItems.get(name);
@@ -758,6 +890,7 @@ export function restoreFromTrash(
   const destPath = path.join(destDir, cleanName);
   moveFileAcrossDevices(trashed, destPath);
   cleanupTrashinfo(cleanName, trashed, platform);
+  trashCacheGeneration += 1;
 
   const mapping = readTrashMap(config);
   if (cleanName in mapping) {

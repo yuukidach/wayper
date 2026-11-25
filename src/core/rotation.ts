@@ -13,8 +13,8 @@ import { pushLocalFavorites, removeBlacklistedRemoteFavorites } from "./wallhave
 const log = getLogger("rotation");
 
 export const FAVORITES_SYNC_INTERVAL = 12;
-const ROTATION_POLL_INTERVAL_MS = process.platform === "win32" ? 100 : 1000;
-const LOCK_POLL_INTERVAL_MS = process.platform === "win32" ? 500 : 5000;
+const ROTATION_POLL_INTERVAL_MS = 5000;
+const LOCK_POLL_INTERVAL_MS = 5000;
 
 export type RotationEvent = "rotated" | "library" | "reloaded" | "state";
 

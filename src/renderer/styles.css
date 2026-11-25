@@ -385,24 +385,15 @@ kbd.keycap-on-accent {
   animation-range: 0px 32px;
 }
 
-.topbar-veil > i:nth-child(1) {
-  backdrop-filter: blur(1.5px);
-  mask-image: linear-gradient(to bottom, #000 64%, transparent 100%);
-}
-
-.topbar-veil > i:nth-child(2) {
-  backdrop-filter: blur(3px);
-  mask-image: linear-gradient(to bottom, #000 50%, transparent 86%);
-}
-
-.topbar-veil > i:nth-child(3) {
-  backdrop-filter: blur(6px);
-  mask-image: linear-gradient(to bottom, #000 38%, transparent 70%);
-}
-
-.topbar-veil > i:nth-child(4) {
-  backdrop-filter: blur(14px);
-  mask-image: linear-gradient(to bottom, #000 26%, transparent 54%);
+.topbar-veil > i {
+  backdrop-filter: blur(12px);
+  mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    rgb(0 0 0 / 0.85) 36%,
+    rgb(0 0 0 / 0.45) 68%,
+    transparent 100%
+  );
 }
 
 .topbar-veil > b {

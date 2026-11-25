@@ -3,24 +3,22 @@ import path from "node:path";
 import type { Orientation, Purity } from "../shared/types";
 import { normalizeTag } from "../shared/tags";
 import { normalizeFilterStrategy, type WayperConfig } from "./config";
+import { getDefaultHeavyTaskRunner, runHeavyTaskInProcess } from "./heavy-tasks";
 import { HttpStatusError, httpGetBytes, httpGetJson, USER_AGENT } from "./http";
 import { validateImageFile } from "./image-probe";
 import { LockBusyError, withFileLock } from "./lock";
 import { getLogger } from "./logging";
 import { favoritesDir, isOrientation, isPurity, poolDir } from "./paths";
-import { extractTagNames, favoriteFilenames, saveMetadataRecord, shouldDownload } from "./pool";
+import { extractTagNames, favoriteFilenames, saveMetadataBatch, shouldDownload } from "./pool";
 import {
-  autoFilterPrediction,
+  autoFilterBatchPredictions,
   autoFilterStatus,
   loadPreferenceModel,
   modelReviewDirPath,
   preferenceModelPath,
+  type AutoFilterBatchItemResult,
 } from "./preference/ledger";
-import {
-  predictionToDict,
-  preferenceDecisionScore,
-  type PreferenceModel,
-} from "./preference/model";
+import { type PreferenceModel } from "./preference/model";
 import { queueModelReviewItem } from "./preference/review";
 import { isBlacklisted, readMode } from "./state";
 import { fetchCloudTags, mergeCloudBlacklistsIntoConfig } from "./wallhaven-web";
@@ -403,6 +401,14 @@ export class WallhavenClient {
         const excludedUploaders = new Set(
           config.wallhaven.exclude_uploaders.map((uploader) => uploader.toLowerCase()),
         );
+        const eligible: Array<{
+          filename: string;
+          url: string;
+          purity: Purity;
+          orientation: Orientation;
+          dest: string;
+          item: JsonRecord;
+        }> = [];
         for (let index = 0; index < candidates.length; index += 1) {
           if (this.signal?.aborted) break;
           const { filename, url, purity, orientation, dest } = candidates[index];
@@ -431,66 +437,85 @@ export class WallhavenClient {
               continue;
             }
           }
+          eligible.push({ filename, url, purity, orientation, dest, item });
+        }
 
-          if (context.ready && context.model !== null) {
-            const model = context.model;
-            let hit = false;
-            let prediction: Awaited<ReturnType<typeof autoFilterPrediction>>[1] | null = null;
-            try {
-              [hit, prediction] = await autoFilterPrediction(model, item);
-            } catch (error) {
-              log.warn(
-                `Model filter scoring failed for ${filename}; keeping download eligible`,
-                error,
-              );
-            }
-            if (hit && prediction !== null) {
-              const reviewDest = path.join(
-                modelReviewDirPath(config),
-                purity,
-                orientation,
-                filename,
-              );
-              if (fs.existsSync(reviewDest)) {
-                skipped.dup += 1;
-                continue;
-              }
-              if (!(await this.downloadImage(url, reviewDest))) {
-                skipped.fail += 1;
-                continue;
-              }
-              saveMetadataRecord(config, filename, item, { complete: true });
-              try {
-                await queueModelReviewItem(config, reviewDest, {
+        let scoredByFilename: Record<string, AutoFilterBatchItemResult> = {};
+        if (context.ready && context.model !== null && eligible.length > 0 && !this.signal?.aborted) {
+          const batchInput = eligible.map((entry) => ({
+            key: entry.filename,
+            metadata: entry.item,
+          }));
+          const modelPath = preferenceModelPath(config);
+          const runner = getDefaultHeavyTaskRunner();
+          try {
+            scoredByFilename =
+              runner !== runHeavyTaskInProcess && fs.existsSync(modelPath)
+                ? await runner("autoFilterBatch", { modelPath, items: batchInput })
+                : await autoFilterBatchPredictions(context.model, batchInput);
+          } catch (error) {
+            log.warn("Model filter scoring failed; keeping downloads eligible", error);
+            scoredByFilename = {};
+          }
+        }
+
+        const pendingMetadata: Record<string, JsonRecord> = {};
+        try {
+          for (const { filename, url, purity, orientation, dest, item } of eligible) {
+            if (this.signal?.aborted) break;
+            if (context.ready && context.model !== null) {
+              const model = context.model;
+              const scored = scoredByFilename[filename];
+              if (scored?.hit) {
+                const reviewDest = path.join(
+                  modelReviewDirPath(config),
                   purity,
                   orientation,
-                  prediction: {
-                    ...predictionToDict(prediction),
-                    decision_score: preferenceDecisionScore(model, prediction),
-                    threshold: context.status.threshold ?? null,
-                    threshold_kind: context.status.threshold_kind ?? null,
-                    schema_version: model.schema_version,
-                    trained_at: model.trained_at,
-                  },
-                  strategy: this.filterStrategy,
-                });
-              } catch (error) {
-                fs.rmSync(reviewDest, { force: true });
-                skipped.fail += 1;
-                log.warn(`Could not register model review item ${filename}`, error);
+                  filename,
+                );
+                if (fs.existsSync(reviewDest)) {
+                  skipped.dup += 1;
+                  continue;
+                }
+                if (!(await this.downloadImage(url, reviewDest))) {
+                  skipped.fail += 1;
+                  continue;
+                }
+                try {
+                  await queueModelReviewItem(config, reviewDest, {
+                    purity,
+                    orientation,
+                    prediction: {
+                      ...scored.prediction,
+                      decision_score: scored.decision_score,
+                      threshold: context.status.threshold ?? null,
+                      threshold_kind: context.status.threshold_kind ?? null,
+                      schema_version: model.schema_version,
+                      trained_at: model.trained_at,
+                    },
+                    strategy: this.filterStrategy,
+                  });
+                } catch (error) {
+                  fs.rmSync(reviewDest, { force: true });
+                  skipped.fail += 1;
+                  log.warn(`Could not register model review item ${filename}`, error);
+                  continue;
+                }
+                pendingMetadata[filename] = item;
+                skipped.model += 1;
                 continue;
               }
-              skipped.model += 1;
+            }
+
+            if (!(await this.downloadImage(url, dest))) {
+              skipped.fail += 1;
               continue;
             }
+            pendingMetadata[filename] = item;
+            summary.downloaded += 1;
           }
-
-          if (!(await this.downloadImage(url, dest))) {
-            skipped.fail += 1;
-            continue;
-          }
-          saveMetadataRecord(config, filename, item, { complete: true });
-          summary.downloaded += 1;
+        } finally {
+          saveMetadataBatch(config, pendingMetadata, { complete: true });
         }
       }
     }
@@ -541,55 +566,60 @@ export class WallhavenClient {
         if (items.length === 0) break;
 
         let pageNew = 0;
-        for (const listed of items) {
-          let url = typeof listed.path === "string" ? listed.path : "";
-          if (!url) continue;
-          const filename = filenameFromUrl(url);
-          remoteFiles.add(filename);
-          if (isBlacklisted(config, filename) || existingFavorites.has(filename)) continue;
-          const purity: Purity = isPurity(listed.purity) ? listed.purity : "sfw";
-          let width = 1920;
-          let height = 1080;
-          const match = /^(\d+)x(\d+)$/.exec(String(listed.resolution ?? ""));
-          if (match) {
-            width = Number.parseInt(match[1], 10);
-            height = Number.parseInt(match[2], 10);
-          }
-          const orientation: Orientation = height > width ? "portrait" : "landscape";
-          const favDir = favoritesDir(config.download_dir, purity, orientation);
-          const favDest = path.join(favDir, filename);
-          const poolPath = path.join(poolDir(config.download_dir, purity, orientation), filename);
-          if (fs.existsSync(favDest)) {
-            existingFavorites.add(filename);
-            continue;
-          }
+        const pageMetadata: Record<string, JsonRecord> = {};
+        try {
+          for (const listed of items) {
+            let url = typeof listed.path === "string" ? listed.path : "";
+            if (!url) continue;
+            const filename = filenameFromUrl(url);
+            remoteFiles.add(filename);
+            if (isBlacklisted(config, filename) || existingFavorites.has(filename)) continue;
+            const purity: Purity = isPurity(listed.purity) ? listed.purity : "sfw";
+            let width = 1920;
+            let height = 1080;
+            const match = /^(\d+)x(\d+)$/.exec(String(listed.resolution ?? ""));
+            if (match) {
+              width = Number.parseInt(match[1], 10);
+              height = Number.parseInt(match[2], 10);
+            }
+            const orientation: Orientation = height > width ? "portrait" : "landscape";
+            const favDir = favoritesDir(config.download_dir, purity, orientation);
+            const favDest = path.join(favDir, filename);
+            const poolPath = path.join(poolDir(config.download_dir, purity, orientation), filename);
+            if (fs.existsSync(favDest)) {
+              existingFavorites.add(filename);
+              continue;
+            }
 
-          if (fs.existsSync(poolPath)) {
+            if (fs.existsSync(poolPath)) {
+              fs.mkdirSync(favDir, { recursive: true });
+              fs.renameSync(poolPath, favDest);
+              existingFavorites.add(filename);
+              pageNew += 1;
+              log.info(`sync: moved ${filename} from pool to favorites`);
+              continue;
+            }
+
+            const detail = await this.wallpaperInfo(String(listed.id ?? ""));
+            if (Object.keys(detail).length === 0) {
+              log.warn(`Skipping favorite ${filename} without complete metadata`);
+              continue;
+            }
+            if (isBlacklisted(config, filename)) continue;
+            const item: JsonRecord = { ...listed, ...detail };
+            url = typeof item.path === "string" && item.path ? item.path : url;
             fs.mkdirSync(favDir, { recursive: true });
-            fs.renameSync(poolPath, favDest);
+            if (!(await this.downloadImage(url, favDest))) continue;
+            if (isBlacklisted(config, filename)) {
+              fs.rmSync(favDest, { force: true });
+              continue;
+            }
+            pageMetadata[filename] = item;
             existingFavorites.add(filename);
             pageNew += 1;
-            log.info(`sync: moved ${filename} from pool to favorites`);
-            continue;
           }
-
-          const detail = await this.wallpaperInfo(String(listed.id ?? ""));
-          if (Object.keys(detail).length === 0) {
-            log.warn(`Skipping favorite ${filename} without complete metadata`);
-            continue;
-          }
-          if (isBlacklisted(config, filename)) continue;
-          const item: JsonRecord = { ...listed, ...detail };
-          url = typeof item.path === "string" && item.path ? item.path : url;
-          fs.mkdirSync(favDir, { recursive: true });
-          if (!(await this.downloadImage(url, favDest))) continue;
-          if (isBlacklisted(config, filename)) {
-            fs.rmSync(favDest, { force: true });
-            continue;
-          }
-          saveMetadataRecord(config, filename, item, { complete: true });
-          existingFavorites.add(filename);
-          pageNew += 1;
+        } finally {
+          saveMetadataBatch(config, pageMetadata, { complete: true });
         }
         synced += pageNew;
 

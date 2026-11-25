@@ -9,6 +9,7 @@ import {
   Menu,
   nativeImage,
   nativeTheme,
+  powerMonitor,
   screen,
   shell,
   Tray,
@@ -17,14 +18,31 @@ import {
   type WebContents,
 } from "electron";
 import { ensureDefaultAutostart, type AutostartCommand } from "../core/autostart";
-import { invalidateMonitorCache } from "../core/backend";
+import {
+  invalidateMonitorCache,
+  isLocked as queryBackendLocked,
+  setLockStateProvider,
+  setMonitorCacheTtl,
+} from "../core/backend";
 import { loadConfig } from "../core/config";
 import { resolveControlEndpoint, startControlServer } from "../core/control-ipc";
 import { setUrlOpener } from "../core/core";
+import { setDefaultHeavyTaskRunner } from "../core/heavy-tasks";
 import { applyGlobalProxy } from "../core/http";
 import { getLogger, setupLogging } from "../core/logging";
 import { getConfigDir } from "../core/paths";
-import { setCliEntryPath } from "../core/preference/ledger";
+import { AUTO_RETRAIN_DELAY_SECONDS } from "../core/preference/constants";
+import {
+  collectPreferenceTrainingSnapshot,
+  loadPreferenceModel,
+  preferenceLearningStatus,
+  preferenceModelPath,
+  releaseRetrainWorker,
+  schedulePreferenceModelRetrain,
+  setCliEntryPath,
+  setRetrainSpawner,
+  waitForRetrainQuiet,
+} from "../core/preference/ledger";
 import { AutoRotationService } from "../core/rotation";
 import { ServiceError, WayperService } from "../core/service";
 import { setTrashHandler } from "../core/trash";
@@ -71,7 +89,6 @@ const workerEntry = unpacked("../worker/ml-worker.cjs");
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
-let trayRefreshTimer: NodeJS.Timeout | null = null;
 let captureInProgress = false;
 let isQuitting = false;
 let shutdownComplete = false;
@@ -82,6 +99,8 @@ let heavyHost: HeavyTaskHost | null = null;
 let service: WayperService | null = null;
 let rotation: AutoRotationService | null = null;
 let controlServer: { close: () => Promise<void> } | null = null;
+let retrainAbort: AbortController | null = null;
+const deferredEvents = new Map<WayperPushEvent["type"], WayperPushEvent>();
 
 process.title = "wayper";
 
@@ -165,11 +184,42 @@ function autostartCommand(): AutostartCommand {
   return [process.execPath, app.getAppPath(), HIDDEN_SWITCH];
 }
 
-function broadcast(event: WayperPushEvent): void {
+function hasVisibleWindow(): boolean {
+  return BrowserWindow.getAllWindows().some(
+    (window) => !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
+  );
+}
+
+function sendToVisibleWindows(event: WayperPushEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+    if (
+      !window.isDestroyed() &&
+      !window.webContents.isDestroyed() &&
+      window.isVisible() &&
+      !window.isMinimized()
+    ) {
       window.webContents.send("wayper:event", event);
     }
+  }
+}
+
+function syncWindowActivity(): void {
+  const visible = hasVisibleWindow();
+  service?.setWatchingActive(visible);
+  if (visible && deferredEvents.size > 0) {
+    const queued = [...deferredEvents.values()];
+    deferredEvents.clear();
+    for (const event of queued) {
+      sendToVisibleWindows(event);
+    }
+  }
+}
+
+function broadcast(event: WayperPushEvent): void {
+  if (hasVisibleWindow()) {
+    sendToVisibleWindows(event);
+  } else if (mainWindow && !mainWindow.isDestroyed()) {
+    deferredEvents.set(event.type, event);
   }
   if (event.type === "rotation" || event.type === "config") refreshTrayMenu();
 }
@@ -221,19 +271,29 @@ function createWindow(show: boolean): void {
 
   window.once("ready-to-show", () => {
     if (show && !window.isDestroyed()) window.show();
+    syncWindowActivity();
   });
 
+  window.on("show", syncWindowActivity);
+  window.on("hide", syncWindowActivity);
+  window.on("minimize", syncWindowActivity);
+  window.on("restore", syncWindowActivity);
+
   window.on("close", (event) => {
-    // On macOS the window is destroyed while the tray process stays alive, so
-    // reopening creates a fresh window on the current workspace.
-    if (!isQuitting && !isMac) {
+    // On macOS and Windows the window is destroyed while the tray process stays
+    // alive, releasing the renderer, GPU surfaces and decoded bitmaps when idle.
+    if (!isQuitting && !isMac && !isWin) {
       event.preventDefault();
       window.hide();
     }
   });
 
   window.on("closed", () => {
-    if (mainWindow === window) mainWindow = null;
+    if (mainWindow === window) {
+      mainWindow = null;
+      deferredEvents.clear();
+    }
+    syncWindowActivity();
   });
 
   const devUrl = process.env.WAYPER_RENDERER_URL;
@@ -364,8 +424,6 @@ function refreshTrayMenu(): void {
 }
 
 function releaseTray(): void {
-  if (trayRefreshTimer) clearInterval(trayRefreshTimer);
-  trayRefreshTimer = null;
   if (tray && !tray.isDestroyed()) tray.destroy();
   tray = null;
 }
@@ -381,8 +439,8 @@ function createTray(): void {
     tray = new Tray(icon);
     tray.setToolTip("Wayper");
     tray.on("click", showMainWindow);
+    tray.on("right-click", refreshTrayMenu);
     refreshTrayMenu();
-    trayRefreshTimer = setInterval(refreshTrayMenu, 30_000);
   } catch (error) {
     tray = null;
     log.error("Could not create system tray", error);
@@ -618,7 +676,49 @@ function startServices(): WayperService {
     }),
   );
 
-  heavyHost = createHeavyTaskHost(workerEntry);
+  const host = createHeavyTaskHost(workerEntry);
+  heavyHost = host;
+  setDefaultHeavyTaskRunner(host.run);
+  const abort = new AbortController();
+  retrainAbort = abort;
+  setRetrainSpawner((downloadDir, token) => {
+    void (async () => {
+      let outcome: "settled" | "retry" | "failed" | null = null;
+      try {
+        const quiet = await waitForRetrainQuiet(
+          downloadDir,
+          token,
+          AUTO_RETRAIN_DELAY_SECONDS,
+          abort.signal,
+        );
+        if (quiet && !abort.signal.aborted) {
+          const res = await host.run("autoRetrain", { downloadDir });
+          outcome = res.outcome;
+        }
+      } catch {
+        outcome = "failed";
+      } finally {
+        await releaseRetrainWorker(downloadDir, token).catch(() => undefined);
+      }
+      if (abort.signal.aborted) return;
+      if (outcome === "settled") {
+        broadcast({ type: "model-updated" });
+      }
+      if (outcome === "settled" || outcome === "retry") {
+        try {
+          const model = loadPreferenceModel(preferenceModelPath(downloadDir));
+          const snapshot = collectPreferenceTrainingSnapshot(downloadDir);
+          if (preferenceLearningStatus(downloadDir, model, snapshot).due) {
+            await schedulePreferenceModelRetrain(downloadDir, { force: true });
+          }
+        } catch {
+          // A later user action can request a fresh refresh.
+        }
+      }
+    })();
+    return process.pid;
+  });
+
   const autoRotation = new AutoRotationService({
     onEvent: (event) => {
       if (event === "rotated") broadcast({ type: "wallpaper" });
@@ -627,10 +727,29 @@ function startServices(): WayperService {
     },
   });
   rotation = autoRotation;
+
+  setMonitorCacheTtl(5 * 60_000);
+  if (process.platform === "win32" || process.platform === "darwin") {
+    let sessionLocked = false;
+    try {
+      sessionLocked = queryBackendLocked();
+    } catch {
+      sessionLocked = false;
+    }
+    setLockStateProvider(() => sessionLocked);
+    powerMonitor.on("lock-screen", () => {
+      sessionLocked = true;
+    });
+    powerMonitor.on("unlock-screen", () => {
+      sessionLocked = false;
+      autoRotation.wake();
+    });
+  }
+
   const api = new WayperService({
     rotation: autoRotation,
     emit: broadcast,
-    runHeavy: heavyHost.run,
+    runHeavy: host.run,
     autostartCommand,
   });
   service = api;
@@ -649,6 +768,7 @@ function startServices(): WayperService {
   installWayperMediaProtocol(() => api.getConfig(false));
   registerIpcHandlers(api);
   autoRotation.start();
+  api.setWatchingActive(false);
   api.startWatching();
 
   void startControlServer(resolveControlEndpoint(getConfigDir()), (request) =>
@@ -671,6 +791,12 @@ function startServices(): WayperService {
 }
 
 async function shutdownServices(): Promise<void> {
+  retrainAbort?.abort();
+  retrainAbort = null;
+  setRetrainSpawner(null);
+  setDefaultHeavyTaskRunner(null);
+  setLockStateProvider(null);
+  setMonitorCacheTtl(null);
   service?.stopWatching();
   const closing: Array<Promise<unknown>> = [];
   if (rotation) closing.push(rotation.stop());
@@ -740,10 +866,15 @@ function main(): void {
     }
     createTray();
     startupFinished = true;
-    // A hidden launch still loads the renderer so capture and the first
-    // reveal are instant.
-    createWindow(!initiallyHidden || pendingShow);
+    // Defer creating the renderer on --hidden launches so background autostart
+    // stays resident with no Chromium renderer or GPU surface until opened.
+    const shouldShowAtStartup = !initiallyHidden || pendingShow;
     pendingShow = false;
+    if (shouldShowAtStartup) {
+      createWindow(true);
+    } else {
+      syncWindowActivity();
+    }
 
     app.on("activate", showMainWindow);
   });

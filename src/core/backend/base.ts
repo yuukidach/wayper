@@ -9,6 +9,7 @@ export interface WallpaperBackend {
   isLocked(): boolean;
   notify(title: string, message: string, timeoutMs?: number): void;
   ensureReady?(): void;
+  invalidateCache?(): void;
 }
 
 export function findMonitor(

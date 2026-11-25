@@ -36,7 +36,9 @@ import {
   makeExample,
   modelContextFeatures,
   modelTags,
+  predictionToDict,
   preferenceCandidate,
+  preferenceDecisionScore,
   preferenceDecisionThreshold,
   PreferenceModel,
   preferenceNeighborVoteWeight,
@@ -1100,6 +1102,42 @@ export async function prefetchModelEmbeddings(
   }
 }
 
+export interface AutoFilterBatchItemResult {
+  hit: boolean;
+  prediction: Record<string, unknown>;
+  decision_score: number;
+}
+
+export async function autoFilterBatchPredictions(
+  model: PreferenceModel,
+  items: ReadonlyArray<{ key: string; metadata: Record<string, unknown> }>,
+): Promise<Record<string, AutoFilterBatchItemResult>> {
+  if (items.length === 0) return {};
+  const prepared = items.map((entry) => ({
+    key: entry.key,
+    ...autoFilterMetadata(entry.metadata),
+  }));
+  await prefetchModelEmbeddings(
+    model,
+    prepared.map((entry): [unknown[], Record<string, unknown>, null] => [
+      entry.tags,
+      entry.metadata,
+      null,
+    ]),
+  );
+  const current = modelRuntimeCurrent(model);
+  const out: Record<string, AutoFilterBatchItemResult> = {};
+  for (const entry of prepared) {
+    const prediction = model.predict(entry.tags, { metadata: entry.metadata, topN: 12 });
+    out[entry.key] = {
+      hit: current && preferenceCandidate(model, prediction),
+      prediction: predictionToDict(prediction),
+      decision_score: preferenceDecisionScore(model, prediction),
+    };
+  }
+  return out;
+}
+
 export async function autoFilterPrediction(
   model: PreferenceModel,
   metadata: Record<string, unknown>,
@@ -1274,7 +1312,7 @@ async function setRetrainWorkerPid(config: ConfigOrDir, token: string, pid: numb
   });
 }
 
-async function releaseRetrainWorker(config: ConfigOrDir, token: string): Promise<void> {
+export async function releaseRetrainWorker(config: ConfigOrDir, token: string): Promise<void> {
   await withFileLock(retrainLeaseLockPath(config), () => {
     const lease = readRetrainLease(config);
     if (lease === null || lease.token !== token) return;
@@ -1350,19 +1388,33 @@ export async function schedulePreferenceModelRetrain(
   }
 }
 
-async function waitForRetrainQuiet(
+export async function waitForRetrainQuiet(
   config: ConfigOrDir,
   token: string,
   delaySeconds: number,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   for (;;) {
+    if (signal?.aborted) return false;
     const lease = readRetrainLease(config);
     if (lease === null || lease.token !== token) return false;
     const requestedAt = lease.requested_at ?? lease.created_at;
     if (typeof requestedAt !== "number") return false;
     const remaining = delaySeconds - (Date.now() / 1000 - requestedAt);
     if (remaining <= 0) return true;
-    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(remaining, 1.0) * 1000));
+    await new Promise<void>((resolve) => {
+      if (signal?.aborted) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(done, Math.min(remaining, 1.0) * 1000);
+      function done(): void {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", done);
+        resolve();
+      }
+      signal?.addEventListener("abort", done, { once: true });
+    });
   }
 }
 
