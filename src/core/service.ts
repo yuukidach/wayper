@@ -17,7 +17,13 @@ import type {
   WayperPushEvent,
 } from "../shared/types";
 import { AutostartError, setAutostart, type AutostartCommand } from "./autostart";
-import { detectMonitors, getContext, queryCurrent } from "./backend";
+import {
+  detectMonitors,
+  detectMonitorsAsync,
+  getContextAsync,
+  queryCurrent,
+  queryCurrentAsync,
+} from "./backend";
 import {
   applyConfigUpdates,
   configPayload,
@@ -204,6 +210,18 @@ export class WayperService {
     return this.cachedConfig;
   }
 
+  async getConfigAsync(detectDisplays = true): Promise<WayperConfig> {
+    const config = this.getConfig(false);
+    if (detectDisplays) {
+      try {
+        config.monitors = await detectMonitorsAsync();
+      } catch {
+        // Keep the monitors from config.toml when the display backend is unavailable.
+      }
+    }
+    return config;
+  }
+
   private adoptConfig(config: WayperConfig): void {
     this.cachedConfig = config;
     this.cachedConfigToken = statToken(getConfigFile());
@@ -337,7 +355,7 @@ export class WayperService {
     if (updates === null || typeof updates !== "object") {
       throw new ServiceError(400, "Config update must be an object");
     }
-    const config = this.getConfig();
+    const config = await this.getConfigAsync();
     const original = structuredClone(config);
     const restore = (): void => {
       Object.assign(config, original);
@@ -394,7 +412,7 @@ export class WayperService {
   }
 
   async setMode(requested: Iterable<string>): Promise<{ status: "ok"; purities: Purity[] }> {
-    const config = this.getConfig();
+    const config = await this.getConfigAsync();
     const wanted = new Set([...(requested ?? [])].filter(isPurity));
     if (wanted.size === 0) throw new ServiceError(400, "At least one valid purity required");
     const purities: Purity[] = config.safe_mode
@@ -402,7 +420,7 @@ export class WayperService {
       : ALL_PURITIES.filter((purity) => wanted.has(purity));
     writeMode(config, purities);
 
-    for (const [monitor, image] of Object.entries(queryCurrent())) {
+    for (const [monitor, image] of Object.entries(await queryCurrentAsync())) {
       if (image && !purities.includes(purityFromPath(config.download_dir, image))) {
         await doNext(config, monitor);
       }
@@ -420,12 +438,14 @@ export class WayperService {
     return this.rotation?.snapshot(config) ?? { auto_rotation: false, rotation_paused: false };
   }
 
-  getStatus(params?: {
-    orient?: string;
-    include_recoverable?: boolean;
-    monitor?: string;
-  }): StatusResponse {
-    const config = this.getConfig();
+  private buildStatusResponse(
+    config: WayperConfig,
+    params?: {
+      orient?: string;
+      include_recoverable?: boolean;
+      monitor?: string;
+    },
+  ): StatusResponse {
     const rotation = this.rotationSnapshot();
     const purities = readMode(config);
     const selected = config.monitors.find((monitor) => monitor.name === params?.monitor) ?? null;
@@ -472,6 +492,22 @@ export class WayperService {
     };
   }
 
+  getStatus(params?: {
+    orient?: string;
+    include_recoverable?: boolean;
+    monitor?: string;
+  }): StatusResponse {
+    return this.buildStatusResponse(this.getConfig(), params);
+  }
+
+  async getStatusAsync(params?: {
+    orient?: string;
+    include_recoverable?: boolean;
+    monitor?: string;
+  }): Promise<StatusResponse> {
+    return this.buildStatusResponse(await this.getConfigAsync(), params);
+  }
+
   private diskUsageToken(config: WayperConfig): string {
     const root = config.download_dir;
     const tokens = [path.resolve(root)];
@@ -498,9 +534,10 @@ export class WayperService {
     return { used_mb: this.diskUsageCache.usedMb, quota_mb: config.quota_mb };
   }
 
-  getMonitors(): MonitorInfo[] {
-    const config = this.getConfig();
-    const current = queryCurrent();
+  private formatMonitors(
+    config: WayperConfig,
+    current: Record<string, string | null>,
+  ): MonitorInfo[] {
     const root = path.resolve(config.download_dir);
     return config.monitors.map((monitor) => {
       const image = current[monitor.name];
@@ -519,6 +556,15 @@ export class WayperService {
         current_image: relative,
       };
     });
+  }
+
+  getMonitors(): MonitorInfo[] {
+    return this.formatMonitors(this.getConfig(), queryCurrent());
+  }
+
+  async getMonitorsAsync(): Promise<MonitorInfo[]> {
+    const [config, current] = await Promise.all([this.getConfigAsync(), queryCurrentAsync()]);
+    return this.formatMonitors(config, current);
   }
 
   setRotation(action: string): { status: "ok"; auto_rotation: boolean; rotation_paused: boolean } {
@@ -575,8 +621,8 @@ export class WayperService {
     action: string,
     options?: { monitor_name?: string | null; open_url?: boolean },
   ): Promise<JsonRecord> {
-    const config = this.getConfig();
-    const monitor = options?.monitor_name || getContext(config).monitor;
+    const config = await this.getConfigAsync();
+    const monitor = options?.monitor_name || (await getContextAsync(config)).monitor;
     const result = this.requireOk(
       await this.runControl(config, action, monitor, options?.open_url === true),
     );
@@ -604,7 +650,7 @@ export class WayperService {
   }
 
   async handleControlRequest(request: ControlActionPayload): Promise<ControlActionResponse> {
-    const config = this.getConfig();
+    const config = await this.getConfigAsync();
     if (path.resolve(String(request.download_dir ?? "")) !== path.resolve(config.download_dir)) {
       return { matched: false, ok: false, action: request.action };
     }
@@ -612,7 +658,7 @@ export class WayperService {
       const result = await this.runControl(
         config,
         request.action,
-        request.monitor || getContext(config).monitor,
+        request.monitor || (await getContextAsync(config)).monitor,
         request.open_url === true,
       );
       if (result.ok) {
@@ -640,7 +686,7 @@ export class WayperService {
     monitor: string,
     imagePath: string,
   ): Promise<{ status: "ok"; monitor: string; current_image: string }> {
-    const config = this.getConfig();
+    const config = await this.getConfigAsync();
     const image = this.resolveImage(config, imagePath);
     if (!config.monitors.some((item) => item.name === monitor)) {
       throw new ServiceError(404, "Monitor not found");
@@ -652,7 +698,7 @@ export class WayperService {
   async setGreeter(
     imagePath: string,
   ): Promise<{ status: "ok"; greeter: ConfigPayload["greeter"] }> {
-    const config = this.getConfig();
+    const config = await this.getConfigAsync(false);
     const image = this.resolveImage(config, imagePath);
     this.requireOk(await doSetGreeter(config, image));
     this.adoptConfig(config);
@@ -667,7 +713,7 @@ export class WayperService {
     is_favorite: boolean;
     remote_sync: unknown;
   }> {
-    const config = this.getConfig();
+    const config = await this.getConfigAsync(false);
     const image = this.resolveImage(config, imagePath);
     const wasFavorite = isFavoritePath(config, image);
     const result = this.requireOk(
@@ -689,7 +735,7 @@ export class WayperService {
     imagePath: string,
     options?: { monitor?: string; preference_context?: string },
   ): Promise<JsonRecord> {
-    const config = this.getConfig();
+    const config = await this.getConfigAsync();
     const image = this.resolveImage(config, imagePath);
     const isModelReview = options?.preference_context === "model_review";
     let reviewModel: JsonRecord | null = null;
@@ -715,7 +761,7 @@ export class WayperService {
   }
 
   async dislikeImage(imagePath: string): Promise<JsonRecord> {
-    const config = this.getConfig();
+    const config = await this.getConfigAsync();
     const image = this.resolveImage(config, imagePath);
     const result = this.requireOk(await doDislike(config, { image, waitRemote: false }));
     this.invalidateMutationCaches();
@@ -766,7 +812,7 @@ export class WayperService {
   }
 
   getBlocklist(): BlocklistResponse {
-    return { ...this.blocklistPayload(this.getConfig()), images: [] };
+    return { ...this.blocklistPayload(this.getConfig(false)), images: [] };
   }
 
   getImagesPage(params: {
@@ -843,7 +889,7 @@ export class WayperService {
   }
 
   async restoreImage(imagePath: string): Promise<{ status: "ok"; new_path: string }> {
-    const config = this.getConfig();
+    const config = await this.getConfigAsync(false);
     const filename = path.basename(String(imagePath ?? "").replace(/\\/g, "/"));
     const restored = await withFileLock(getDefaultLockPath(), () => {
       const trashed = findTrashImage(config, filename);
@@ -868,7 +914,7 @@ export class WayperService {
   }
 
   async removeBlocklistEntry(filename: string): Promise<{ status: "ok"; removed: boolean }> {
-    const config = this.getConfig();
+    const config = await this.getConfigAsync(false);
     const name = String(filename ?? "");
     if (
       !name ||
@@ -988,7 +1034,7 @@ export class WayperService {
   }
 
   getTagSuggestions(contextTags?: string[]): Promise<JsonRecord> {
-    const config = this.getConfig();
+    const config = this.getConfig(false);
     const purities = readMode(config);
     const context = (contextTags ?? []).map((tag) => String(tag).trim()).filter(Boolean);
     const { exclude_tags: excludeTags, exclude_combos: excludeCombos } = config.wallhaven;
@@ -1007,7 +1053,7 @@ export class WayperService {
   }
 
   getUploaderSuggestions(): Promise<JsonRecord> {
-    const config = this.getConfig();
+    const config = this.getConfig(false);
     const purities = readMode(config);
     const excludeUploaders = config.wallhaven.exclude_uploaders;
     const stateKey = this.ruleSuggestionStateKey(config, purities);
@@ -1065,7 +1111,7 @@ export class WayperService {
     orient?: string;
     limit?: number;
   }): Promise<JsonRecord> {
-    const config = this.getConfig();
+    const config = this.getConfig(false);
     const purities = params?.purities?.length
       ? parsePurities(params.purities)
       : parsePurities(readMode(config));
@@ -1089,7 +1135,9 @@ export class WayperService {
       const learning = this.learningPayload(config, result.status === "ready");
       result.learning = learning;
       if (learning?.due) {
-        void schedulePreferenceModelRetrain(config, { force: true }).catch(() => undefined);
+        void schedulePreferenceModelRetrain(config, { force: true, verifiedDue: true }).catch(
+          () => undefined,
+        );
       }
       this.suggestionCache.set(key, result);
       while (this.suggestionCache.size > PREFERENCE_SUGGESTION_CACHE_LIMIT) {
@@ -1114,7 +1162,7 @@ export class WayperService {
         "Only the keep feedback action is supported for ranked candidates",
       );
     }
-    const config = this.getConfig();
+    const config = this.getConfig(false);
     const pending = listModelReviewItems(config, { includeResolved: false, limit: 500 });
     if (pending.some((item) => item.path === rawPath)) {
       return {
@@ -1146,7 +1194,7 @@ export class WayperService {
   }
 
   getModelReview(params?: { purities?: string[]; orient?: string; limit?: number }): JsonRecord {
-    const config = this.getConfig();
+    const config = this.getConfig(false);
     const purities = params?.purities?.length
       ? parsePurities(params.purities)
       : parsePurities(readMode(config));
@@ -1186,7 +1234,7 @@ export class WayperService {
     if (action !== "keep" && action !== "ban") {
       throw new ServiceError(400, "Model review action must be keep or ban");
     }
-    const config = this.getConfig();
+    const config = this.getConfig(false);
     const review = await this.resolveReview(config, rawPath, action, 409);
     this.invalidateMutationCaches();
     return { status: "ok", action, review, learning: this.learningPayload(config, true) };
@@ -1205,7 +1253,7 @@ export class WayperService {
     if (orientation !== null && !isOrientation(orientation)) {
       throw new ServiceError(400, "Model review clear has an invalid orientation");
     }
-    const result = await clearModelReviewItems(this.getConfig(), {
+    const result = await clearModelReviewItems(this.getConfig(false), {
       purities: purities.length > 0 ? [...purities].sort() : null,
       orientation,
     });

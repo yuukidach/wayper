@@ -3,7 +3,7 @@ import path from "node:path";
 import { PREVIEW_DIMENSIONS, previewCacheDirectory } from "../../shared/media";
 import type { FilterStrategy } from "../../shared/types";
 import { normalizeFilterStrategy } from "../config";
-import { atomicWrite, probeImageDimensions } from "../image-probe";
+import { atomicWriteAsync, probeImageDimensions } from "../image-probe";
 import { getDefaultLockPath, withFileLock } from "../lock";
 import { ALL_ORIENTATIONS, ALL_PURITIES, isOrientation, isPurity, poolDir } from "../paths";
 import { clearImageDerivatives, favoriteFilenames, listImagesInDir, loadMetadata } from "../pool";
@@ -224,10 +224,10 @@ export function loadModelReviewState(config: ConfigOrDir): ReviewState {
   return parseModelReviewState(config);
 }
 
-function saveModelReviewState(config: ConfigOrDir, state: ReviewState): void {
+async function saveModelReviewStateAsync(config: ConfigOrDir, state: ReviewState): Promise<void> {
   const filePath = path.resolve(modelReviewFilePath(config));
   stateCache = null;
-  atomicWrite(modelReviewFilePath(config), `${JSON.stringify(state, null, 2)}\n`);
+  await atomicWriteAsync(modelReviewFilePath(config), `${JSON.stringify(state, null, 2)}\n`);
   const token = fileToken(filePath);
   if (token !== null) rememberState(filePath, token, state);
 }
@@ -530,13 +530,13 @@ export async function queueModelReviewItem(
     record.width = dims.width;
     record.height = dims.height;
   }
-  await withFileLock(getDefaultLockPath(), () => {
+  await withFileLock(getDefaultLockPath(), async () => {
     const state = loadModelReviewState(config);
     for (const [key, value] of Object.entries(state.items)) {
       if (value.path === relativePath && key !== relativePath) delete state.items[key];
     }
     state.items[relativePath] = record;
-    saveModelReviewState(config, state);
+    await saveModelReviewStateAsync(config, state);
   });
   return { ...record, review_only: true, auto_filtered: true };
 }
@@ -551,6 +551,91 @@ export class ModelReviewError extends Error {
   }
 }
 
+async function applyModelReviewResolutionLocked(
+  config: ConfigOrDir,
+  state: ReviewState,
+  rawPath: string,
+  action: "keep" | "ban" | "filter",
+): Promise<{ record: ReviewRecord; nextPoolRel: string }> {
+  const downloadDir = downloadDirOf(config);
+  let image: string;
+  try {
+    image = reviewPath(config, rawPath);
+  } catch (error) {
+    throw new ModelReviewError("invalid", (error as Error).message);
+  }
+  const canonicalPath = relativeLibraryPath(config, image);
+  let key: string | null = null;
+  let record: ReviewRecord | null = null;
+  for (const [candidateKey, candidate] of Object.entries(state.items)) {
+    if (candidate.path === canonicalPath) {
+      key = candidateKey;
+      record = candidate;
+      break;
+    }
+  }
+  if (key === null || record === null || record.status !== "pending") {
+    throw new ModelReviewError("not_found", "Model review item is no longer pending");
+  }
+  if (!isFile(image)) {
+    throw new ModelReviewError("not_found", "Model review image is no longer available");
+  }
+
+  const purity = String(record.purity ?? "sfw");
+  const orientation = String(record.orientation ?? "landscape");
+  if (!isPurity(purity) || !isOrientation(orientation)) {
+    throw new ModelReviewError("invalid", "Model review item has an invalid library location");
+  }
+  const destinationDir = poolDir(downloadDir, purity, orientation);
+  fs.mkdirSync(destinationDir, { recursive: true });
+  const name = path.basename(image);
+  const destination = path.join(destinationDir, name);
+  if (fs.existsSync(destination)) {
+    throw new ModelReviewError("conflict", `A library image named ${name} already exists`);
+  }
+  try {
+    fs.renameSync(image, destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+    fs.copyFileSync(image, destination);
+    fs.unlinkSync(image);
+  }
+
+  const model: Record<string, unknown> = isRecord(record.model) ? { ...record.model } : {};
+  model.filter_strategy = String(record.strategy ?? "model");
+  const nextPoolRel = path.relative(path.resolve(downloadDir), destination).split(path.sep).join("/");
+  if (action === "ban" || action === "filter") {
+    addToBlacklist(config, name);
+    await trashAndRecordUndo(config, destination);
+    clearImageDerivatives(config, canonicalPath);
+  } else if (action === "keep") {
+    relocateImageDerivatives(downloadDir, canonicalPath, nextPoolRel);
+  }
+  let feedbackRecorded = false;
+  if (action !== "filter") {
+    try {
+      appendPreferenceFeedback(config, action === "ban" ? "dislike" : action, name, {
+        source: "model_filter",
+        context: "model_review",
+        model,
+      });
+      feedbackRecorded = true;
+    } catch {
+      feedbackRecorded = false;
+    }
+  }
+
+  const updated: ReviewRecord = {
+    ...record,
+    status: action,
+    resolved_at: nowSeconds(),
+    feedback_recorded: feedbackRecorded,
+    path: canonicalPath,
+  };
+  state.items[key] = updated;
+  return { record: updated, nextPoolRel };
+}
+
 export async function resolveModelReviewItem(
   config: ConfigOrDir,
   rawPath: string,
@@ -559,83 +644,16 @@ export async function resolveModelReviewItem(
   if (action !== "keep" && action !== "ban" && action !== "filter") {
     throw new ModelReviewError("invalid", "Model review action must be keep, ban, or filter");
   }
-  const downloadDir = downloadDirOf(config);
 
   const result = await withFileLock(getDefaultLockPath(), async () => {
-    let image: string;
-    try {
-      image = reviewPath(config, rawPath);
-    } catch (error) {
-      throw new ModelReviewError("invalid", (error as Error).message);
-    }
     const state = loadModelReviewState(config);
-    const canonicalPath = relativeLibraryPath(config, image);
-    let key: string | null = null;
-    let record: ReviewRecord | null = null;
-    for (const [candidateKey, candidate] of Object.entries(state.items)) {
-      if (candidate.path === canonicalPath) {
-        key = candidateKey;
-        record = candidate;
-        break;
-      }
-    }
-    if (key === null || record === null || record.status !== "pending") {
-      throw new ModelReviewError("not_found", "Model review item is no longer pending");
-    }
-    if (!isFile(image)) {
-      throw new ModelReviewError("not_found", "Model review image is no longer available");
-    }
-
-    const purity = String(record.purity ?? "sfw");
-    const orientation = String(record.orientation ?? "landscape");
-    if (!isPurity(purity) || !isOrientation(orientation)) {
-      throw new ModelReviewError("invalid", "Model review item has an invalid library location");
-    }
-    const destinationDir = poolDir(downloadDir, purity, orientation);
-    fs.mkdirSync(destinationDir, { recursive: true });
-    const name = path.basename(image);
-    const destination = path.join(destinationDir, name);
-    if (fs.existsSync(destination)) {
-      throw new ModelReviewError("conflict", `A library image named ${name} already exists`);
-    }
-    try {
-      fs.renameSync(image, destination);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
-      fs.copyFileSync(image, destination);
-      fs.unlinkSync(image);
-    }
-
-    const model: Record<string, unknown> = isRecord(record.model) ? { ...record.model } : {};
-    model.filter_strategy = String(record.strategy ?? "model");
-    const nextPoolRel = path.relative(path.resolve(downloadDir), destination).split(path.sep).join("/");
-    if (action === "ban" || action === "filter") {
-      addToBlacklist(config, name);
-      await trashAndRecordUndo(config, destination);
-      clearImageDerivatives(config, canonicalPath);
-    } else if (action === "keep") {
-      relocateImageDerivatives(downloadDir, canonicalPath, nextPoolRel);
-    }
-    let feedbackRecorded = false;
-    if (action !== "filter") {
-      try {
-        appendPreferenceFeedback(config, action === "ban" ? "dislike" : action, name, {
-          source: "model_filter",
-          context: "model_review",
-          model,
-        });
-        feedbackRecorded = true;
-      } catch {
-        feedbackRecorded = false;
-      }
-    }
-
-    record.status = action;
-    record.resolved_at = nowSeconds();
-    record.feedback_recorded = feedbackRecorded;
-    record.path = canonicalPath;
-    state.items[key] = record;
-    saveModelReviewState(config, state);
+    const { record, nextPoolRel } = await applyModelReviewResolutionLocked(
+      config,
+      state,
+      rawPath,
+      action,
+    );
+    await saveModelReviewStateAsync(config, state);
     return {
       ...record,
       new_path: action === "keep" ? nextPoolRel : null,
@@ -651,6 +669,8 @@ export async function resolveModelReviewItem(
   }
   return result;
 }
+
+const CLEAR_REVIEW_BATCH_SIZE = 25;
 
 export async function clearModelReviewItems(
   config: ConfigOrDir,
@@ -672,15 +692,29 @@ export async function clearModelReviewItems(
 
   const cleared: string[] = [];
   const failures: Array<{ path: string; error: string }> = [];
-  for (const item of pending) {
-    const rawPath = String(item.path ?? "");
-    if (!rawPath) continue;
-    try {
-      await resolveModelReviewItem(config, rawPath, "filter");
-      cleared.push(rawPath);
-    } catch (error) {
-      failures.push({ path: rawPath, error: error instanceof Error ? error.message : String(error) });
-    }
+  for (let offset = 0; offset < pending.length; offset += CLEAR_REVIEW_BATCH_SIZE) {
+    const batch = pending.slice(offset, offset + CLEAR_REVIEW_BATCH_SIZE);
+    await withFileLock(getDefaultLockPath(), async () => {
+      const state = loadModelReviewState(config);
+      let mutated = false;
+      for (const item of batch) {
+        const rawPath = String(item.path ?? "");
+        if (!rawPath) continue;
+        try {
+          await applyModelReviewResolutionLocked(config, state, rawPath, "filter");
+          cleared.push(rawPath);
+          mutated = true;
+        } catch (error) {
+          failures.push({
+            path: rawPath,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (mutated) {
+        await saveModelReviewStateAsync(config, state);
+      }
+    });
   }
   return {
     cleared_count: cleared.length,

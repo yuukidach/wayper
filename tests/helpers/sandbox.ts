@@ -5,7 +5,8 @@ import type { WallpaperBackend } from "../../src/core/backend/base";
 import { setBackend } from "../../src/core/backend";
 import { loadConfig, type WayperConfig } from "../../src/core/config";
 import { setUrlOpener } from "../../src/core/core";
-import { setRetrainSpawner } from "../../src/core/preference/ledger";
+import { setMetadataPersistHandler } from "../../src/core/pool";
+import { setInitialRetrainChecker, setRetrainSpawner } from "../../src/core/preference/ledger";
 import { setTrashHandler } from "../../src/core/trash";
 import type { MonitorConfig, Orientation, Purity } from "../../src/shared/types";
 
@@ -130,6 +131,8 @@ export function createSandbox(options?: { monitors?: MonitorConfig[]; extraToml?
     cleanup() {
       setBackend(null);
       setRetrainSpawner(null);
+      setInitialRetrainChecker(null);
+      setMetadataPersistHandler(null);
       setUrlOpener(null);
       setTrashHandler(null);
       for (const [key, value] of Object.entries(previousEnv)) {

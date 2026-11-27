@@ -3,9 +3,11 @@ import path from "node:path";
 import type { ImageMetadata } from "../shared/types";
 import { ImageCatalog, loadSuggestionCatalog } from "./catalog";
 import type { WayperConfig } from "./config";
-import { loadMetadata } from "./pool";
+import { loadMetadata, saveMetadataBatchAsync } from "./pool";
+import { MIN_TRAINING_PER_CLASS } from "./preference/constants";
 import {
   autoFilterBatchPredictions,
+  collectPreferenceTrainingSnapshot,
   loadPreferenceModel,
   modelReport,
   prefetchModelEmbeddings,
@@ -16,6 +18,7 @@ import {
 } from "./preference/ledger";
 import { predictionToDict, preferenceCandidate, preferenceDecisionScore } from "./preference/model";
 import { preferenceDeletionSuggestions } from "./preference/review";
+import { hasBothClasses } from "./preference/training";
 import {
   suggestComboPatterns,
   suggestComboRefinements,
@@ -274,8 +277,37 @@ export const heavyTasks = {
 
   async autoRetrain(args: {
     downloadDir: string;
-  }): Promise<{ outcome: "settled" | "retry" | "failed" }> {
-    return { outcome: await runAutoRetrain(args.downloadDir) };
+  }): Promise<{ outcome: "settled" | "retry" | "failed"; due: boolean }> {
+    const outcome = await runAutoRetrain(args.downloadDir);
+    let due = false;
+    if (outcome === "settled" || outcome === "retry") {
+      try {
+        const model = loadPreferenceModel(preferenceModelPath(args.downloadDir));
+        const snapshot = collectPreferenceTrainingSnapshot(args.downloadDir);
+        due = Boolean(preferenceLearningStatus(args.downloadDir, model, snapshot).due);
+      } catch {
+        due = false;
+      }
+    }
+    return { outcome, due };
+  },
+
+  async canScheduleInitialRetrain(args: { downloadDir: string }): Promise<boolean> {
+    const snapshot = collectPreferenceTrainingSnapshot(args.downloadDir);
+    return hasBothClasses(snapshot.examples, MIN_TRAINING_PER_CLASS);
+  },
+
+  async saveMetadataBatch(args: {
+    downloadDir: string;
+    items: Record<string, JsonRecord>;
+    complete?: boolean;
+    fetchedAt?: number;
+  }): Promise<number> {
+    return saveMetadataBatchAsync(args.downloadDir, args.items, {
+      complete: args.complete,
+      fetchedAt: args.fetchedAt,
+      bypassCustomHandler: true,
+    });
   },
 };
 

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { ensureReady, GreeterError, installGreeterImage, isLocked } from "./backend";
+import { ensureReadyAsync, GreeterError, installGreeterImage, isLockedAsync } from "./backend";
 import { loadConfig, type WayperConfig } from "./config";
 import { purgeBlacklistedFavorites, setAllWallpapers } from "./core";
 import { getDefaultLockPath, withFileLock } from "./lock";
@@ -224,7 +224,7 @@ export class AutoRotationService {
     try {
       this.config = this.configLoader();
       ensureDirectories(this.config);
-      ensureReady();
+      await ensureReadyAsync();
       const purgedAtStart = await purgeBlacklistedFavorites(this.config);
       if (purgedAtStart > 0) this.onEvent("library");
       this.configMtime = fileMtime(getConfigFile());
@@ -237,9 +237,9 @@ export class AutoRotationService {
         if (reloaded) favoritesSyncCount = FAVORITES_SYNC_INTERVAL;
         let config = this.config as WayperConfig;
 
-        if (config.pause_on_lock && isLocked()) {
+        if (config.pause_on_lock && (await isLockedAsync())) {
           log.info("Session locked; automatic rotation is waiting");
-          while (!this.stopping && config.pause_on_lock && isLocked()) {
+          while (!this.stopping && config.pause_on_lock && (await isLockedAsync())) {
             await this.reloadIfNeeded();
             config = this.config as WayperConfig;
             await this.sleepOrWake(LOCK_POLL_INTERVAL_MS);
