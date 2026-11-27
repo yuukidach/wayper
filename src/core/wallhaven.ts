@@ -9,7 +9,12 @@ import { validateImageFile } from "./image-probe";
 import { LockBusyError, withFileLock } from "./lock";
 import { getLogger } from "./logging";
 import { favoritesDir, isOrientation, isPurity, poolDir } from "./paths";
-import { extractTagNames, favoriteFilenames, saveMetadataBatch, shouldDownload } from "./pool";
+import {
+  extractTagNames,
+  favoriteFilenames,
+  saveMetadataBatchAsync,
+  shouldDownload,
+} from "./pool";
 import {
   autoFilterBatchPredictions,
   autoFilterStatus,
@@ -515,7 +520,7 @@ export class WallhavenClient {
             summary.downloaded += 1;
           }
         } finally {
-          saveMetadataBatch(config, pendingMetadata, { complete: true });
+          await saveMetadataBatchAsync(config, pendingMetadata, { complete: true });
         }
       }
     }
@@ -619,7 +624,7 @@ export class WallhavenClient {
             pageNew += 1;
           }
         } finally {
-          saveMetadataBatch(config, pageMetadata, { complete: true });
+          await saveMetadataBatchAsync(config, pageMetadata, { complete: true });
         }
         synced += pageNew;
 

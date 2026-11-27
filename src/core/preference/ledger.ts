@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { WayperConfig } from "../config";
-import { atomicWrite } from "../image-probe";
+import { atomicWrite, stageAtomicWriteAsync } from "../image-probe";
 import { getDefaultLockPath, isPidAlive, withFileLock } from "../lock";
 import { ALL_ORIENTATIONS, ALL_PURITIES, favoritesDir, poolDir } from "../paths";
 import { listImagesInDir, loadMetadata } from "../pool";
@@ -929,13 +929,20 @@ async function commitPreferenceModel(
       }
       const preserveExisting = automatic && automaticFitIsCurrent(currentModel, model, current);
       const payload = preserveExisting ? null : `${JSON.stringify(model.toDict())}\n`;
-      return withFileLock(metadataLockPath(config), () =>
-        withFileLock(getDefaultLockPath(), () => {
-          if (trainingStateToken(config) !== token) return false;
-          if (payload !== null) atomicWrite(modelPath, payload);
-          return true;
-        }),
-      );
+      // Write and sync the multi-megabyte temp file before acquiring metadata and state locks
+      // so user wallpaper/ban/favorite actions never stall waiting on disk flush.
+      const staged = payload !== null ? await stageAtomicWriteAsync(modelPath, payload) : null;
+      try {
+        return await withFileLock(metadataLockPath(config), () =>
+          withFileLock(getDefaultLockPath(), async () => {
+            if (trainingStateToken(config) !== token) return false;
+            if (staged !== null) await staged.commit();
+            return true;
+          }),
+        );
+      } finally {
+        if (staged !== null) await staged.abort();
+      }
     },
     { timeoutMs: 60_000 },
   );
@@ -1352,13 +1359,23 @@ function defaultRetrainSpawner(downloadDir: string, token: string): number | nul
 }
 
 let retrainSpawner: RetrainSpawner = defaultRetrainSpawner;
+let initialRetrainChecker: ((downloadDir: string) => Promise<boolean>) | null = null;
 
 export function setRetrainSpawner(spawner: RetrainSpawner | null): void {
   retrainSpawner = spawner ?? defaultRetrainSpawner;
 }
 
-function hasPendingFeedbackRefresh(config: ConfigOrDir): boolean {
-  const model = loadPreferenceModel(preferenceModelPath(config));
+export function setInitialRetrainChecker(
+  checker: ((downloadDir: string) => Promise<boolean>) | null,
+): void {
+  initialRetrainChecker = checker;
+}
+
+function hasPendingFeedbackRefresh(config: ConfigOrDir, resolvedModel?: PreferenceModel | null): boolean {
+  const model =
+    resolvedModel !== undefined
+      ? resolvedModel
+      : loadPreferenceModel(preferenceModelPath(config));
   if (model === null) return false;
   const previous = model.training_summary.feedback_revision;
   const previousRevision = isInteger(previous) ? previous : 0;
@@ -1367,16 +1384,22 @@ function hasPendingFeedbackRefresh(config: ConfigOrDir): boolean {
 
 export async function schedulePreferenceModelRetrain(
   config: ConfigOrDir,
-  options?: { force?: boolean },
+  options?: { force?: boolean; verifiedDue?: boolean },
 ): Promise<void> {
   const force = options?.force ?? false;
-  const model = loadPreferenceModel(preferenceModelPath(config));
-  if (model === null) {
-    if (!force && currentFeedbackRevision(config) < AUTO_RETRAIN_MIN_FEEDBACK) return;
-    const snapshot = collectPreferenceTrainingSnapshot(config);
-    if (!hasBothClasses(snapshot.examples, MIN_TRAINING_PER_CLASS)) return;
-  } else if (!force && !hasPendingFeedbackRefresh(config)) {
-    return;
+  if (!options?.verifiedDue) {
+    const model = loadPreferenceModel(preferenceModelPath(config));
+    if (model === null) {
+      if (!force && currentFeedbackRevision(config) < AUTO_RETRAIN_MIN_FEEDBACK) return;
+      if (initialRetrainChecker !== null) {
+        if (!(await initialRetrainChecker(downloadDirOf(config)))) return;
+      } else {
+        const snapshot = collectPreferenceTrainingSnapshot(config);
+        if (!hasBothClasses(snapshot.examples, MIN_TRAINING_PER_CLASS)) return;
+      }
+    } else if (!force && !hasPendingFeedbackRefresh(config, model)) {
+      return;
+    }
   }
   const token = await claimOrTouchRetrainWorker(config);
   if (token === null) return;
@@ -1471,7 +1494,7 @@ export async function runScheduledPreferenceModelRetrain(
       const model = loadPreferenceModel(preferenceModelPath(config));
       const snapshot = collectPreferenceTrainingSnapshot(config);
       if (preferenceLearningStatus(config, model, snapshot).due) {
-        await schedulePreferenceModelRetrain(config, { force: true });
+        await schedulePreferenceModelRetrain(config, { force: true, verifiedDue: true });
       }
     } catch {
       // A later user action can request a fresh refresh.

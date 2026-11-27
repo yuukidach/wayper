@@ -31,15 +31,13 @@ import { setDefaultHeavyTaskRunner } from "../core/heavy-tasks";
 import { applyGlobalProxy } from "../core/http";
 import { getLogger, setupLogging } from "../core/logging";
 import { getConfigDir } from "../core/paths";
+import { setMetadataPersistHandler } from "../core/pool";
 import { AUTO_RETRAIN_DELAY_SECONDS } from "../core/preference/constants";
 import {
-  collectPreferenceTrainingSnapshot,
-  loadPreferenceModel,
-  preferenceLearningStatus,
-  preferenceModelPath,
   releaseRetrainWorker,
   schedulePreferenceModelRetrain,
   setCliEntryPath,
+  setInitialRetrainChecker,
   setRetrainSpawner,
   waitForRetrainQuiet,
 } from "../core/preference/ledger";
@@ -633,9 +631,9 @@ function registerIpcHandlers(api: WayperService): void {
     return result;
   });
   handle("setMode", (purities) => api.setMode(purities));
-  handle("getStatus", (params) => api.getStatus(params));
+  handle("getStatus", (params) => api.getStatusAsync(params));
   handle("getDiskUsage", () => api.getDiskUsage());
-  handle("getMonitors", () => api.getMonitors());
+  handle("getMonitors", () => api.getMonitorsAsync());
   handle("setRotation", (action) => api.setRotation(action));
   handle("controlAction", (action, options) => api.controlAction(action, options));
   handle("getImagesPage", (params) => api.getImagesPage(params));
@@ -679,11 +677,23 @@ function startServices(): WayperService {
   const host = createHeavyTaskHost(workerEntry);
   heavyHost = host;
   setDefaultHeavyTaskRunner(host.run);
+  setMetadataPersistHandler((downloadDir, items, options) =>
+    host.run("saveMetadataBatch", {
+      downloadDir,
+      items,
+      complete: options?.complete,
+      fetchedAt: options?.fetchedAt,
+    }),
+  );
+  setInitialRetrainChecker((downloadDir) =>
+    host.run("canScheduleInitialRetrain", { downloadDir }),
+  );
   const abort = new AbortController();
   retrainAbort = abort;
   setRetrainSpawner((downloadDir, token) => {
     void (async () => {
       let outcome: "settled" | "retry" | "failed" | null = null;
+      let due = false;
       try {
         const quiet = await waitForRetrainQuiet(
           downloadDir,
@@ -694,6 +704,7 @@ function startServices(): WayperService {
         if (quiet && !abort.signal.aborted) {
           const res = await host.run("autoRetrain", { downloadDir });
           outcome = res.outcome;
+          due = Boolean(res.due);
         }
       } catch {
         outcome = "failed";
@@ -704,13 +715,9 @@ function startServices(): WayperService {
       if (outcome === "settled") {
         broadcast({ type: "model-updated" });
       }
-      if (outcome === "settled" || outcome === "retry") {
+      if (due) {
         try {
-          const model = loadPreferenceModel(preferenceModelPath(downloadDir));
-          const snapshot = collectPreferenceTrainingSnapshot(downloadDir);
-          if (preferenceLearningStatus(downloadDir, model, snapshot).due) {
-            await schedulePreferenceModelRetrain(downloadDir, { force: true });
-          }
+          await schedulePreferenceModelRetrain(downloadDir, { force: true, verifiedDue: true });
         } catch {
           // A later user action can request a fresh refresh.
         }
@@ -794,6 +801,8 @@ async function shutdownServices(): Promise<void> {
   retrainAbort?.abort();
   retrainAbort = null;
   setRetrainSpawner(null);
+  setInitialRetrainChecker(null);
+  setMetadataPersistHandler(null);
   setDefaultHeavyTaskRunner(null);
   setLockStateProvider(null);
   setMonitorCacheTtl(null);

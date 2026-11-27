@@ -4,8 +4,8 @@ import { PREVIEW_DIMENSIONS, previewCacheDirectory } from "../shared/media";
 import { normalizeTag } from "../shared/tags";
 import type { ImageItem, ImageMetadata, Orientation, Purity, TagDetail } from "../shared/types";
 import type { WayperConfig } from "./config";
-import { atomicWrite } from "./image-probe";
-import { withFileLockSync } from "./lock";
+import { atomicWrite, atomicWriteAsync } from "./image-probe";
+import { withFileLock, withFileLockSync } from "./lock";
 import {
   ALL_ORIENTATIONS,
   ALL_PURITIES,
@@ -204,17 +204,89 @@ function filterMetadataRecords(raw: Record<string, unknown>): Record<string, Ima
   return out;
 }
 
+const METADATA_CACHE_LIMIT = 4;
+const metadataCache = new Map<string, { token: string; data: Record<string, ImageMetadata> }>();
+
+export type MetadataPersistHandler = (
+  downloadDir: string,
+  items: Record<string, Record<string, unknown>>,
+  options?: { complete?: boolean; fetchedAt?: number },
+) => Promise<number>;
+
+let customMetadataPersistHandler: MetadataPersistHandler | null = null;
+
+export function setMetadataPersistHandler(handler: MetadataPersistHandler | null): void {
+  customMetadataPersistHandler = handler;
+}
+
+function metadataFileToken(filePath: string): string | null {
+  try {
+    const stat = fs.statSync(filePath, { bigint: true });
+    return `${stat.mtimeNs}:${stat.size}:${stat.ino}`;
+  } catch {
+    return null;
+  }
+}
+
+function rememberMetadata(filePath: string, token: string, data: Record<string, ImageMetadata>): void {
+  const resolved = path.resolve(filePath);
+  metadataCache.delete(resolved);
+  metadataCache.set(resolved, { token, data });
+  while (metadataCache.size > METADATA_CACHE_LIMIT) {
+    const oldest = metadataCache.keys().next().value;
+    if (oldest === undefined) break;
+    metadataCache.delete(oldest);
+  }
+}
+
 export function loadMetadata(config: ConfigOrDir): Record<string, ImageMetadata> {
   const mf = metadataFilePath(config);
-  if (!fs.existsSync(mf)) {
-    return {};
+  const resolved = path.resolve(mf);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const token = metadataFileToken(mf);
+    if (token === null) {
+      metadataCache.delete(resolved);
+      return {};
+    }
+    const cached = metadataCache.get(resolved);
+    if (cached && cached.token === token) {
+      return cached.data;
+    }
+    let parsed: Record<string, ImageMetadata>;
+    try {
+      const text = fs.readFileSync(mf, "utf8");
+      parsed = parseFirstJsonObject(text);
+    } catch {
+      return {};
+    }
+    if (metadataFileToken(mf) !== token) continue;
+    rememberMetadata(mf, token, parsed);
+    return parsed;
   }
   try {
-    const text = fs.readFileSync(mf, "utf8");
-    return parseFirstJsonObject(text);
+    return parseFirstJsonObject(fs.readFileSync(mf, "utf8"));
   } catch {
     return {};
   }
+}
+
+function mergeMetadataBatchEntries(
+  existing: Record<string, ImageMetadata>,
+  entries: ReadonlyArray<readonly [string, Record<string, unknown>]>,
+  options?: { complete?: boolean; fetchedAt?: number },
+): Record<string, ImageMetadata> {
+  const timestamp =
+    options?.fetchedAt !== undefined ? Math.trunc(options.fetchedAt) : Math.floor(Date.now() / 1000);
+  const data: Record<string, ImageMetadata> = { ...existing };
+  for (const [rawFilename, item] of entries) {
+    const filename = path.basename(rawFilename);
+    if (!filename || !isRecord(item)) continue;
+    data[filename] = normalizeImageMetadata(item, data[filename], {
+      complete: options?.complete,
+      fetchedAt: timestamp,
+    });
+  }
+  return data;
 }
 
 export function saveMetadataBatch(
@@ -226,22 +298,41 @@ export function saveMetadataBatch(
   if (entries.length === 0) {
     return 0;
   }
-  const timestamp =
-    options?.fetchedAt !== undefined ? Math.trunc(options.fetchedAt) : Math.floor(Date.now() / 1000);
   const mf = metadataFilePath(config);
   const lockFile = metadataLockPath(config);
 
   withFileLockSync(lockFile, () => {
-    const data = loadMetadata(config);
-    for (const [rawFilename, item] of entries) {
-      const filename = path.basename(rawFilename);
-      if (!filename || !isRecord(item)) continue;
-      data[filename] = normalizeImageMetadata(item, data[filename], {
-        complete: options?.complete,
-        fetchedAt: timestamp,
-      });
-    }
+    const data = mergeMetadataBatchEntries(loadMetadata(config), entries, options);
     atomicWrite(mf, `${JSON.stringify(data)}\n`);
+    const token = metadataFileToken(mf);
+    if (token !== null) rememberMetadata(mf, token, data);
+  });
+  return entries.length;
+}
+
+export async function saveMetadataBatchAsync(
+  config: ConfigOrDir,
+  items: Record<string, Record<string, unknown>>,
+  options?: { complete?: boolean; fetchedAt?: number; bypassCustomHandler?: boolean },
+): Promise<number> {
+  const entries = Object.entries(items);
+  if (entries.length === 0) {
+    return 0;
+  }
+  if (!options?.bypassCustomHandler && customMetadataPersistHandler !== null) {
+    return customMetadataPersistHandler(resolveDownloadDir(config), items, {
+      complete: options?.complete,
+      fetchedAt: options?.fetchedAt,
+    });
+  }
+  const mf = metadataFilePath(config);
+  const lockFile = metadataLockPath(config);
+
+  await withFileLock(lockFile, async () => {
+    const data = mergeMetadataBatchEntries(loadMetadata(config), entries, options);
+    await atomicWriteAsync(mf, `${JSON.stringify(data)}\n`);
+    const token = metadataFileToken(mf);
+    if (token !== null) rememberMetadata(mf, token, data);
   });
   return entries.length;
 }
@@ -269,7 +360,7 @@ export function hydrateTagDetails(config: ConfigOrDir): {
   const lockFile = metadataLockPath(config);
 
   return withFileLockSync(lockFile, () => {
-    const data = loadMetadata(config);
+    const data: Record<string, ImageMetadata> = { ...loadMetadata(config) };
     const catalog = new Map<string, TagDetail>();
 
     for (const record of Object.values(data)) {
@@ -286,7 +377,7 @@ export function hydrateTagDetails(config: ConfigOrDir): {
     let changedRecords = 0;
     let completeRecords = 0;
 
-    for (const record of Object.values(data)) {
+    for (const [filename, record] of Object.entries(data)) {
       const tags = extractTagNames(record.tags);
       if (tags.length === 0) continue;
 
@@ -309,24 +400,29 @@ export function hydrateTagDetails(config: ConfigOrDir): {
       }
 
       const isComplete = available.length === tags.length;
-      let recordChanged = false;
+      const detailsChanged =
+        available.length > 0 && !tagDetailsEqual(record.tag_details, available);
+      const completeChanged = record.tag_details_complete !== isComplete;
 
-      if (available.length > 0 && !tagDetailsEqual(record.tag_details, available)) {
-        record.tag_details = available;
-        record.metadata_schema_version = METADATA_SCHEMA_VERSION;
-        recordChanged = true;
+      if (detailsChanged || completeChanged) {
+        const nextRecord: ImageMetadata = { ...record };
+        if (detailsChanged) {
+          nextRecord.tag_details = available;
+          nextRecord.metadata_schema_version = METADATA_SCHEMA_VERSION;
+        }
+        if (completeChanged) {
+          nextRecord.tag_details_complete = isComplete;
+        }
+        data[filename] = nextRecord;
+        changedRecords += 1;
       }
-      if (record.tag_details_complete !== isComplete) {
-        record.tag_details_complete = isComplete;
-        recordChanged = true;
-      }
-
-      if (recordChanged) changedRecords += 1;
       if (isComplete) completeRecords += 1;
     }
 
     if (changedRecords > 0) {
       atomicWrite(mf, `${JSON.stringify(data)}\n`);
+      const token = metadataFileToken(mf);
+      if (token !== null) rememberMetadata(mf, token, data);
     }
 
     return {

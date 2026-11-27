@@ -307,6 +307,12 @@ export type PowerShellRunner = (
   timeoutMs?: number,
 ) => string | null;
 
+export type AsyncPowerShellRunner = (
+  script: string,
+  extraEnv?: Record<string, string>,
+  timeoutMs?: number,
+) => Promise<string | null>;
+
 function defaultPowerShellRunner(
   script: string,
   extraEnv: Record<string, string> = {},
@@ -328,6 +334,98 @@ function defaultPowerShellRunner(
   return (res.stdout ?? "").trim();
 }
 
+function defaultPowerShellRunnerAsync(
+  script: string,
+  extraEnv: Record<string, string> = {},
+  timeoutMs = 12_000,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    let stdout = "";
+    let settled = false;
+    let timedOut = false;
+
+    const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(
+        "powershell",
+        ["-NoProfile", "-NonInteractive", "-Sta", "-ExecutionPolicy", "Bypass", "-Command", script],
+        {
+          stdio: ["ignore", "pipe", "ignore"],
+          windowsHide: true,
+          env: { ...process.env, ...extraEnv },
+        },
+      );
+    } catch {
+      finish(null);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs);
+
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.on("error", () => finish(null));
+    child.on("close", (code) => {
+      if (timedOut || code !== 0) {
+        finish(null);
+        return;
+      }
+      finish(stdout.trim());
+    });
+  });
+}
+
+function parseWindowsMonitorsJson(raw: string | null): MonitorConfig[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const monitors: MonitorConfig[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "object" || item === null) continue;
+      const rec = item as Record<string, unknown>;
+      const name = String(rec.name ?? "");
+      const width = Math.trunc(Number(rec.width));
+      const height = Math.trunc(Number(rec.height));
+      if (!name || !(width > 0 && height > 0)) continue;
+      const orientation: Orientation = height > width ? "portrait" : "landscape";
+      monitors.push({ name, width, height, orientation });
+    }
+    return monitors;
+  } catch {
+    return [];
+  }
+}
+
+function parseWindowsCurrentJson(raw: string | null): Record<string, string | null> | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    const current: Record<string, string | null> = {};
+    for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
+      current[key] = typeof val === "string" && val ? val : null;
+    }
+    return current;
+  } catch {
+    return null;
+  }
+}
+
 const DEFAULT_CURRENT_CACHE_TTL_MS = 30_000;
 
 export interface WindowsBackendOptions {
@@ -336,42 +434,34 @@ export interface WindowsBackendOptions {
 
 export class WindowsBackend implements WallpaperBackend {
   private readonly runPs: PowerShellRunner;
+  private readonly runPsAsync: AsyncPowerShellRunner;
   private readonly currentCacheTtlMs: number;
   private currentCache: { at: number; current: Record<string, string | null> } | null = null;
+  private queryInflight: Promise<Record<string, string | null>> | null = null;
 
   constructor(
     runPs: PowerShellRunner = defaultPowerShellRunner,
     options?: WindowsBackendOptions,
   ) {
     this.runPs = runPs;
+    this.runPsAsync =
+      runPs === defaultPowerShellRunner
+        ? defaultPowerShellRunnerAsync
+        : async (script, extraEnv, timeoutMs) => this.runPs(script, extraEnv, timeoutMs);
     this.currentCacheTtlMs = options?.currentCacheTtlMs ?? DEFAULT_CURRENT_CACHE_TTL_MS;
   }
 
   invalidateCache(): void {
     this.currentCache = null;
+    this.queryInflight = null;
   }
 
   detectMonitors(): MonitorConfig[] {
-    const raw = this.runPs(DETECT_MONITORS_PS);
-    if (!raw) return [];
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) return [];
-      const monitors: MonitorConfig[] = [];
-      for (const item of parsed) {
-        if (typeof item !== "object" || item === null) continue;
-        const rec = item as Record<string, unknown>;
-        const name = String(rec.name ?? "");
-        const width = Math.trunc(Number(rec.width));
-        const height = Math.trunc(Number(rec.height));
-        if (!name || !(width > 0 && height > 0)) continue;
-        const orientation: Orientation = height > width ? "portrait" : "landscape";
-        monitors.push({ name, width, height, orientation });
-      }
-      return monitors;
-    } catch {
-      return [];
-    }
+    return parseWindowsMonitorsJson(this.runPs(DETECT_MONITORS_PS));
+  }
+
+  async detectMonitorsAsync(): Promise<MonitorConfig[]> {
+    return parseWindowsMonitorsJson(await this.runPsAsync(DETECT_MONITORS_PS));
   }
 
   getFocusedMonitor(): string | null {
@@ -379,15 +469,38 @@ export class WindowsBackend implements WallpaperBackend {
     return out || null;
   }
 
-  setWallpaper(monitor: string, imagePath: string, _transition: TransitionConfig): void {
-    const resolved = path.resolve(imagePath);
-    const out = this.runPs(SET_WALLPAPER_PS, { WAYPER_MON: monitor, WAYPER_IMG: resolved }, 12_000);
+  async getFocusedMonitorAsync(): Promise<string | null> {
+    const out = await this.runPsAsync(FOCUSED_MONITOR_PS);
+    return out || null;
+  }
+
+  private applyWallpaperCacheUpdate(monitor: string, resolved: string, out: string | null): void {
     if (out !== null && this.currentCache !== null && /^DISPLAY\d+$/.test(monitor)) {
       this.currentCache.current[monitor] = resolved;
       this.currentCache.at = performance.now();
     } else if (out !== null) {
       this.currentCache = null;
     }
+  }
+
+  setWallpaper(monitor: string, imagePath: string, _transition: TransitionConfig): void {
+    const resolved = path.resolve(imagePath);
+    const out = this.runPs(SET_WALLPAPER_PS, { WAYPER_MON: monitor, WAYPER_IMG: resolved }, 12_000);
+    this.applyWallpaperCacheUpdate(monitor, resolved, out);
+  }
+
+  async setWallpaperAsync(
+    monitor: string,
+    imagePath: string,
+    _transition: TransitionConfig,
+  ): Promise<void> {
+    const resolved = path.resolve(imagePath);
+    const out = await this.runPsAsync(
+      SET_WALLPAPER_PS,
+      { WAYPER_MON: monitor, WAYPER_IMG: resolved },
+      12_000,
+    );
+    this.applyWallpaperCacheUpdate(monitor, resolved, out);
   }
 
   queryCurrent(): Record<string, string | null> {
@@ -399,28 +512,50 @@ export class WindowsBackend implements WallpaperBackend {
     ) {
       return { ...this.currentCache.current };
     }
-    const raw = this.runPs(QUERY_CURRENT_PS);
-    if (!raw) return {};
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        return {};
-      }
-      const current: Record<string, string | null> = {};
-      for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
-        current[key] = typeof val === "string" && val ? val : null;
-      }
-      if (this.currentCacheTtlMs > 0) {
+    const current = parseWindowsCurrentJson(this.runPs(QUERY_CURRENT_PS));
+    if (!current) return {};
+    if (this.currentCacheTtlMs > 0) {
+      this.currentCache = { at: performance.now(), current };
+    }
+    return { ...current };
+  }
+
+  async queryCurrentAsync(): Promise<Record<string, string | null>> {
+    const now = performance.now();
+    if (
+      this.currentCacheTtlMs > 0 &&
+      this.currentCache !== null &&
+      now - this.currentCache.at < this.currentCacheTtlMs
+    ) {
+      return { ...this.currentCache.current };
+    }
+    if (this.queryInflight !== null) {
+      return { ...(await this.queryInflight) };
+    }
+    const task = this.runPsAsync(QUERY_CURRENT_PS).then((raw) => {
+      const current = parseWindowsCurrentJson(raw);
+      if (!current) return {};
+      if (this.currentCacheTtlMs > 0 && this.queryInflight === task) {
         this.currentCache = { at: performance.now(), current };
       }
-      return { ...current };
-    } catch {
-      return {};
+      return current;
+    });
+    this.queryInflight = task;
+    try {
+      return { ...(await task) };
+    } finally {
+      if (this.queryInflight === task) {
+        this.queryInflight = null;
+      }
     }
   }
 
   isLocked(): boolean {
     return this.runPs(IS_LOCKED_PS, {}, 6_000) === "true";
+  }
+
+  async isLockedAsync(): Promise<boolean> {
+    return (await this.runPsAsync(IS_LOCKED_PS, {}, 6_000)) === "true";
   }
 
   notify(title: string, message: string, _timeoutMs = 2000): void {

@@ -110,6 +110,12 @@ if (!dict || dict.isNil()) {
 
 export type JxaRunner = (script: string, argv?: string[], timeoutMs?: number) => string | null;
 
+export type AsyncJxaRunner = (
+  script: string,
+  argv?: string[],
+  timeoutMs?: number,
+) => Promise<string | null>;
+
 function defaultJxaRunner(script: string, argv: string[] = [], timeoutMs = 8_000): string | null {
   const args = ["-l", "JavaScript", "-e", script];
   if (argv.length > 0) {
@@ -125,38 +131,124 @@ function defaultJxaRunner(script: string, argv: string[] = [], timeoutMs = 8_000
   return (res.stdout ?? "").trim();
 }
 
+function defaultJxaRunnerAsync(
+  script: string,
+  argv: string[] = [],
+  timeoutMs = 8_000,
+): Promise<string | null> {
+  const args = ["-l", "JavaScript", "-e", script];
+  if (argv.length > 0) {
+    args.push("--", ...argv);
+  }
+  return new Promise((resolve) => {
+    let stdout = "";
+    let settled = false;
+    let timedOut = false;
+
+    const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn("osascript", args, {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      finish(null);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs);
+
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.on("error", () => finish(null));
+    child.on("close", (code) => {
+      if (timedOut || code !== 0) {
+        finish(null);
+        return;
+      }
+      finish(stdout.trim());
+    });
+  });
+}
+
+function parseMacMonitorsJson(raw: string | null): MonitorConfig[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const monitors: MonitorConfig[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "object" || item === null) continue;
+      const rec = item as Record<string, unknown>;
+      const name = String(rec.name ?? "");
+      const width = Math.round(Number(rec.width));
+      const height = Math.round(Number(rec.height));
+      if (!name || !(width > 0 && height > 0)) continue;
+      const orientation: Orientation = height > width ? "portrait" : "landscape";
+      monitors.push({ name, width, height, orientation });
+    }
+    return monitors;
+  } catch {
+    return [];
+  }
+}
+
+function parseMacCurrentJson(raw: string | null): Record<string, string | null> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return {};
+    }
+    const current: Record<string, string | null> = {};
+    for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
+      current[key] = typeof val === "string" && val ? val : null;
+    }
+    return current;
+  } catch {
+    return {};
+  }
+}
+
 export class MacOSBackend implements WallpaperBackend {
   private readonly runJxa: JxaRunner;
+  private readonly runJxaAsync: AsyncJxaRunner;
+  private queryInflight: Promise<Record<string, string | null>> | null = null;
 
   constructor(runJxa: JxaRunner = defaultJxaRunner) {
     this.runJxa = runJxa;
+    this.runJxaAsync =
+      runJxa === defaultJxaRunner
+        ? defaultJxaRunnerAsync
+        : async (script, argv, timeoutMs) => this.runJxa(script, argv, timeoutMs);
   }
 
   detectMonitors(): MonitorConfig[] {
-    const raw = this.runJxa(DETECT_MONITORS_JXA);
-    if (!raw) return [];
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) return [];
-      const monitors: MonitorConfig[] = [];
-      for (const item of parsed) {
-        if (typeof item !== "object" || item === null) continue;
-        const rec = item as Record<string, unknown>;
-        const name = String(rec.name ?? "");
-        const width = Math.round(Number(rec.width));
-        const height = Math.round(Number(rec.height));
-        if (!name || !(width > 0 && height > 0)) continue;
-        const orientation: Orientation = height > width ? "portrait" : "landscape";
-        monitors.push({ name, width, height, orientation });
-      }
-      return monitors;
-    } catch {
-      return [];
-    }
+    return parseMacMonitorsJson(this.runJxa(DETECT_MONITORS_JXA));
+  }
+
+  async detectMonitorsAsync(): Promise<MonitorConfig[]> {
+    return parseMacMonitorsJson(await this.runJxaAsync(DETECT_MONITORS_JXA));
   }
 
   getFocusedMonitor(): string | null {
     const out = this.runJxa(FOCUSED_MONITOR_JXA);
+    return out || null;
+  }
+
+  async getFocusedMonitorAsync(): Promise<string | null> {
+    const out = await this.runJxaAsync(FOCUSED_MONITOR_JXA);
     return out || null;
   }
 
@@ -165,26 +257,40 @@ export class MacOSBackend implements WallpaperBackend {
     this.runJxa(SET_WALLPAPER_JXA, [monitor, resolved], 10_000);
   }
 
+  async setWallpaperAsync(
+    monitor: string,
+    imagePath: string,
+    _transition: TransitionConfig,
+  ): Promise<void> {
+    const resolved = path.resolve(expandPath(imagePath));
+    await this.runJxaAsync(SET_WALLPAPER_JXA, [monitor, resolved], 10_000);
+  }
+
   queryCurrent(): Record<string, string | null> {
-    const raw = this.runJxa(QUERY_CURRENT_JXA);
-    if (!raw) return {};
+    return parseMacCurrentJson(this.runJxa(QUERY_CURRENT_JXA));
+  }
+
+  async queryCurrentAsync(): Promise<Record<string, string | null>> {
+    if (this.queryInflight !== null) {
+      return { ...(await this.queryInflight) };
+    }
+    const task = this.runJxaAsync(QUERY_CURRENT_JXA).then(parseMacCurrentJson);
+    this.queryInflight = task;
     try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        return {};
+      return { ...(await task) };
+    } finally {
+      if (this.queryInflight === task) {
+        this.queryInflight = null;
       }
-      const current: Record<string, string | null> = {};
-      for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
-        current[key] = typeof val === "string" && val ? val : null;
-      }
-      return current;
-    } catch {
-      return {};
     }
   }
 
   isLocked(): boolean {
     return this.runJxa(IS_LOCKED_JXA, [], 4_000) === "true";
+  }
+
+  async isLockedAsync(): Promise<boolean> {
+    return (await this.runJxaAsync(IS_LOCKED_JXA, [], 4_000)) === "true";
   }
 
   notify(title: string, message: string, _timeoutMs = 2000): void {

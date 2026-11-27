@@ -19,9 +19,95 @@ function sleepSync(ms: number): void {
   Atomics.wait(SLEEP_ARRAY, 0, 0, ms);
 }
 
+function sleepAsync(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function isTransientRenameError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return code === "EPERM" || code === "EACCES" || code === "EBUSY";
+}
+
+export interface StagedAtomicWrite {
+  commit: () => Promise<void>;
+  abort: () => Promise<void>;
+}
+
+/**
+ * Writes and syncs a temporary sibling file on the libuv threadpool without
+ * touching the destination path yet, allowing callers to perform the final
+ * atomic rename inside a short critical section.
+ */
+export async function stageAtomicWriteAsync(
+  filePath: string,
+  data: string | Uint8Array,
+): Promise<StagedAtomicWrite> {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  await fs.promises.mkdir(dir, { recursive: true });
+
+  const rand = crypto.randomBytes(6).toString("hex");
+  const tmpPath = path.join(dir, `.${base}.${rand}.tmp`);
+  let handle: fs.promises.FileHandle | null = null;
+  let cleaned = false;
+
+  const cleanupTmp = async (): Promise<void> => {
+    if (cleaned) return;
+    cleaned = true;
+    await fs.promises.rm(tmpPath, { force: true }).catch(() => undefined);
+  };
+
+  try {
+    handle = await fs.promises.open(tmpPath, "wx");
+    const bytes = typeof data === "string" ? Buffer.from(data, "utf8") : data;
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const { bytesWritten } = await handle.write(bytes, offset, bytes.byteLength - offset);
+      offset += bytesWritten;
+    }
+    await handle.datasync();
+    await handle.close();
+    handle = null;
+  } catch (error) {
+    if (handle !== null) {
+      await handle.close().catch(() => undefined);
+    }
+    await cleanupTmp();
+    throw error;
+  }
+
+  return {
+    commit: async () => {
+      try {
+        const attempts = process.platform === "win32" ? WINDOWS_REPLACE_ATTEMPTS : 1;
+        for (let attempt = 0; attempt < attempts; attempt += 1) {
+          try {
+            await fs.promises.rename(tmpPath, filePath);
+            cleaned = true;
+            return;
+          } catch (error) {
+            if (attempt + 1 >= attempts || !isTransientRenameError(error)) {
+              throw error;
+            }
+            await sleepAsync(WINDOWS_REPLACE_RETRY_MS * (attempt + 1));
+          }
+        }
+      } finally {
+        await cleanupTmp();
+      }
+    },
+    abort: cleanupTmp,
+  };
+}
+
+export async function atomicWriteAsync(filePath: string, data: string | Uint8Array): Promise<void> {
+  const staged = await stageAtomicWriteAsync(filePath, data);
+  try {
+    await staged.commit();
+  } finally {
+    await staged.abort();
+  }
 }
 
 export function atomicWrite(filePath: string, data: string | Uint8Array): void {

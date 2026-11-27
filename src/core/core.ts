@@ -5,12 +5,13 @@ import type { MonitorConfig, Purity } from "../shared/types";
 import { wallhavenId, wallhavenUrl } from "../shared/tags";
 import {
   findMonitor,
-  getContext,
-  getFocusedMonitor,
+  getContextAsync,
+  getFocusedMonitorAsync,
   GreeterError,
   installGreeterImage,
   queryCurrent,
-  setWallpaper,
+  queryCurrentAsync,
+  setWallpaperAsync,
 } from "./backend";
 import { NO_TRANSITION, saveConfig, type TransitionConfig, type WayperConfig } from "./config";
 import { getDefaultLockPath, withFileLock } from "./lock";
@@ -30,7 +31,7 @@ import {
   listImagesInDir,
   loadMetadata,
   pickRandomWallpaper,
-  saveMetadataBatch,
+  saveMetadataBatchAsync,
 } from "./pool";
 import {
   appendPreferenceFeedback,
@@ -152,15 +153,26 @@ export async function scheduleRetrain(config: WayperConfig): Promise<void> {
   }
 }
 
-function resolveMonitor(
+async function resolveMonitorAsync(
   config: WayperConfig,
   monitor: string | null | undefined,
   includeCurrent = true,
-): { monitor: string | null; monitorConfig: MonitorConfig | null; currentImage: string | null } {
-  if (!monitor) return getContext(config);
+): Promise<{
+  monitor: string | null;
+  monitorConfig: MonitorConfig | null;
+  currentImage: string | null;
+}> {
+  if (!monitor) {
+    if (!includeCurrent) {
+      const focused = await getFocusedMonitorAsync();
+      return { monitor: focused, monitorConfig: findMonitor(config, focused), currentImage: null };
+    }
+    return getContextAsync(config);
+  }
   const monitorConfig = findMonitor(config, monitor);
   if (!includeCurrent) return { monitor, monitorConfig, currentImage: null };
-  return { monitor, monitorConfig, currentImage: queryCurrent()[monitor] ?? null };
+  const current = await queryCurrentAsync();
+  return { monitor, monitorConfig, currentImage: current[monitor] ?? null };
 }
 
 const UNMANAGED_WALLPAPER = "Current wallpaper is not in the Wayper library";
@@ -180,30 +192,34 @@ function samePath(left: string, right: string): boolean {
   return path.resolve(left) === path.resolve(right);
 }
 
-function updateMonitorsForMovedImage(config: WayperConfig, oldPath: string, newPath: string): void {
+async function updateMonitorsForMovedImage(
+  config: WayperConfig,
+  oldPath: string,
+  newPath: string,
+): Promise<void> {
   let current: Record<string, string | null>;
   try {
-    current = queryCurrent();
+    current = await queryCurrentAsync();
   } catch {
     return;
   }
   for (const [monitor, image] of Object.entries(current)) {
     if (image && samePath(image, oldPath)) {
-      setWallpaper(monitor, newPath, instantTransition(config));
+      await setWallpaperAsync(monitor, newPath, instantTransition(config));
     }
   }
 }
 
-function replaceOnAllMonitors(
+async function replaceOnAllMonitors(
   config: WayperConfig,
   bannedImages: string | readonly string[],
   purities: Iterable<Purity>,
   exclude: string,
-): Record<string, string> {
+): Promise<Record<string, string>> {
   const replacements: Record<string, string> = {};
   let current: Record<string, string | null>;
   try {
-    current = queryCurrent();
+    current = await queryCurrentAsync();
   } catch {
     return replacements;
   }
@@ -214,7 +230,7 @@ function replaceOnAllMonitors(
     if (!shown || !targets.some((target) => samePath(shown, target))) continue;
     const next = pickRandomWallpaper(config, active, monitor.orientation, exclude);
     if (!next) continue;
-    setWallpaper(monitor.name, next, config.transition);
+    await setWallpaperAsync(monitor.name, next, config.transition);
     pushHistory(config, monitor.name, next);
     replacements[monitor.name] = next;
   }
@@ -265,8 +281,8 @@ export async function doSetWallpaper(
   image: string,
 ): Promise<CoreResult> {
   if (!findMonitor(config, monitor)) return failure("set", "Monitor not found");
-  await withStateLock(() => {
-    setWallpaper(monitor, image, config.transition);
+  await withStateLock(async () => {
+    await setWallpaperAsync(monitor, image, config.transition);
     writeLastRotation(config);
   });
   return result("set", { monitor, image });
@@ -302,8 +318,8 @@ function pickNext(config: WayperConfig, monitor: string, orientation: string): s
 
 export async function doNext(config: WayperConfig, monitor?: string | null): Promise<CoreResult> {
   const started = performance.now();
-  const outcome = await withStateLock(() => {
-    const resolved = resolveMonitor(config, monitor, false);
+  const outcome = await withStateLock(async () => {
+    const resolved = await resolveMonitorAsync(config, monitor, false);
     if (!resolved.monitor || !resolved.monitorConfig) {
       log.warn("next: no monitor config found");
       return failure("next", "No monitor config found");
@@ -313,7 +329,7 @@ export async function doNext(config: WayperConfig, monitor?: string | null): Pro
       log.warn(`next: no images available for ${resolved.monitor}`);
       return failure("next", "No images available");
     }
-    setWallpaper(resolved.monitor, image, config.transition);
+    await setWallpaperAsync(resolved.monitor, image, config.transition);
     writeLastRotation(config);
     return result("next", { monitor: resolved.monitor, image });
   });
@@ -327,15 +343,15 @@ export async function doNext(config: WayperConfig, monitor?: string | null): Pro
 }
 
 export async function doPrev(config: WayperConfig, monitor?: string | null): Promise<CoreResult> {
-  const outcome = await withStateLock(() => {
-    const resolved = resolveMonitor(config, monitor, false);
+  const outcome = await withStateLock(async () => {
+    const resolved = await resolveMonitorAsync(config, monitor, false);
     if (!resolved.monitor || !resolved.monitorConfig) {
       log.warn("prev: no monitor config found");
       return failure("prev", "No monitor config found");
     }
     const image = goPrev(config, resolved.monitor);
     if (!image) return result("prev", { status: "at_oldest" });
-    setWallpaper(resolved.monitor, image, config.transition);
+    await setWallpaperAsync(resolved.monitor, image, config.transition);
     writeLastRotation(config);
     return result("prev", { monitor: resolved.monitor, image });
   });
@@ -355,13 +371,13 @@ async function moveBetweenLibraries(
   options: ImageActionOptions,
 ): Promise<CoreResult> {
   const toFavorites = action === "fav";
-  const moved = await withStateLock(() => {
+  const moved = await withStateLock(async () => {
     let monitor = options.monitor ?? null;
     let image: string;
     if (options.image) {
       image = options.image;
     } else {
-      const resolved = resolveMonitor(config, monitor);
+      const resolved = await resolveMonitorAsync(config, monitor);
       monitor = resolved.monitor;
       if (!resolved.currentImage || !resolved.monitorConfig) {
         return failure(action, "No current wallpaper");
@@ -390,9 +406,9 @@ async function moveBetweenLibraries(
     }
 
     if (options.image) {
-      updateMonitorsForMovedImage(config, image, dest);
+      await updateMonitorsForMovedImage(config, image, dest);
     } else if (monitor) {
-      setWallpaper(monitor, dest, instantTransition(config));
+      await setWallpaperAsync(monitor, dest, instantTransition(config));
     }
     recordFeedbackLocked(config, toFavorites ? "favorite" : "unfavorite", path.basename(dest));
     return result(action, { monitor, image: dest, extra: { source_image: image } });
@@ -444,7 +460,7 @@ async function doBlock(
     if (options.image) {
       image = options.image;
     } else {
-      const resolved = resolveMonitor(config, monitor);
+      const resolved = await resolveMonitorAsync(config, monitor);
       monitor = resolved.monitor;
       monitorConfig = resolved.monitorConfig;
       if (!resolved.currentImage || !monitorConfig) return failure(action, "No current wallpaper");
@@ -491,7 +507,7 @@ async function doBlock(
     const extra: Record<string, unknown> = {};
     const purities = readMode(config);
     if (options.image) {
-      const replacements = replaceOnAllMonitors(config, removedPaths, purities, image);
+      const replacements = await replaceOnAllMonitors(config, removedPaths, purities, image);
       if (Object.keys(replacements).length > 0) {
         writeLastRotation(config);
         extra.replacement_images = replacements;
@@ -499,7 +515,7 @@ async function doBlock(
     } else if (monitor && monitorConfig) {
       const next = pickRandomWallpaper(config, purities, monitorConfig.orientation, image);
       if (next) {
-        setWallpaper(monitor, next, config.transition);
+        await setWallpaperAsync(monitor, next, config.transition);
         pushHistory(config, monitor, next);
         writeLastRotation(config);
         extra.replacement_image = next;
@@ -550,7 +566,7 @@ export function doDislike(
 }
 
 export async function doUnban(config: WayperConfig, monitor?: string | null): Promise<CoreResult> {
-  const outcome = await withStateLock(() => {
+  const outcome = await withStateLock(async () => {
     const entry = popUndo(config);
     if (!entry) return result("unban", { status: "nothing_to_undo" });
     const restored = restoreFromTrash(config, entry.filename, entry.originalDir);
@@ -558,9 +574,9 @@ export async function doUnban(config: WayperConfig, monitor?: string | null): Pr
 
     let unbanned: CoreResult;
     if (restored) {
-      const target = monitor || getFocusedMonitor();
+      const target = monitor || (await getFocusedMonitorAsync());
       if (target) {
-        setWallpaper(target, restored, config.transition);
+        await setWallpaperAsync(target, restored, config.transition);
         writeLastRotation(config);
       }
       unbanned = result("unban", { monitor: target ?? null, image: restored });
@@ -579,12 +595,12 @@ export async function doUnban(config: WayperConfig, monitor?: string | null): Pr
 
 export function setAllWallpapers(config: WayperConfig, purities: Iterable<Purity>): Promise<void> {
   const active = [...purities];
-  return withStateLock(() => {
+  return withStateLock(async () => {
     const historyItems: Array<readonly [string, string]> = [];
     for (const monitor of config.monitors) {
       const image = pickRandomWallpaper(config, active, monitor.orientation);
       if (!image) continue;
-      setWallpaper(monitor.name, image, config.transition);
+      await setWallpaperAsync(monitor.name, image, config.transition);
       historyItems.push([monitor.name, image]);
     }
     pushManyHistory(config, historyItems);
@@ -641,7 +657,7 @@ export async function purgeBlacklistedFavorites(config: WayperConfig): Promise<n
     for (const favPath of staleFiles) {
       if (!fs.existsSync(favPath)) continue;
       const filename = path.basename(favPath);
-      const replacements = replaceOnAllMonitors(config, favPath, purities, favPath);
+      const replacements = await replaceOnAllMonitors(config, favPath, purities, favPath);
       if (Object.keys(replacements).length > 0) {
         rotated = true;
       }
@@ -846,17 +862,17 @@ export async function doBackfillMetadata(
   let updated = 0;
   let failed = 0;
 
-  const commit = (): void => {
+  const commit = async (): Promise<void> => {
     const batch = pending;
     pending = {};
     if (Object.keys(batch).length > 0) {
-      saveMetadataBatch(config, batch, { complete: true });
+      await saveMetadataBatchAsync(config, batch, { complete: true });
       updated += Object.keys(batch).length;
     }
     const missing = unavailable;
     unavailable = {};
     if (Object.keys(missing).length > 0) {
-      saveMetadataBatch(config, missing, { complete: false });
+      await saveMetadataBatchAsync(config, missing, { complete: false });
     }
   };
 
@@ -876,7 +892,7 @@ export async function doBackfillMetadata(
           metadata_checked_at: Math.floor(Date.now() / 1000),
         };
       }
-      if (Object.keys(pending).length + Object.keys(unavailable).length >= batchSize) commit();
+      if (Object.keys(pending).length + Object.keys(unavailable).length >= batchSize) await commit();
       if (options.progress && (attempted === total || attempted % 10 === 0)) {
         options.progress({
           targeted: total,
@@ -890,7 +906,7 @@ export async function doBackfillMetadata(
       }
     }
   } finally {
-    commit();
+    await commit();
   }
 
   const remaining = Math.max(0, eligible.length - updated);
